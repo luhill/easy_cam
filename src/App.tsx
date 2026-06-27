@@ -1,18 +1,21 @@
 import { useEffect } from 'react';
 import { useAppStore } from './store/useAppStore';
+import { useSettingsStore } from './store/useSettingsStore';
 import { StlViewer } from './components/Viewer/StlViewer';
 import { FileUpload, OperationPalette } from './components/FileUpload';
 import { OperationList } from './components/Operations/OperationList';
+import { GcodeSettings } from './components/GcodeSettings';
 import { generateGcode, downloadGcode } from './lib/gcode';
 import './App.css';
 
 function GcodePanel() {
   const operations = useAppStore((s) => s.operations);
   const toolpaths = useAppStore((s) => s.toolpaths);
+  const gcodeTemplates = useSettingsStore((s) => s.gcodeTemplates);
   const enabledCount = operations.filter((o) => o.enabled).length;
 
   const handleExport = () => {
-    const gcode = generateGcode(operations, toolpaths);
+    const gcode = generateGcode(operations, toolpaths, gcodeTemplates);
     downloadGcode(gcode);
   };
 
@@ -51,6 +54,7 @@ export default function App() {
         <aside className="sidebar">
           <OperationPalette />
           <OperationList />
+          <GcodeSettings />
         </aside>
         <section className="viewer-panel">
           <StlViewer />

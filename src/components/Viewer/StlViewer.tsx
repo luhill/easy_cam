@@ -1,9 +1,16 @@
-import { useRef, useEffect, useMemo, useCallback, Suspense } from 'react';
+import { useRef, useEffect, useMemo, useCallback, useState, Suspense } from 'react';
 import { Canvas, useThree, useLoader } from '@react-three/fiber';
 import { OrbitControls, Grid, GizmoHelper, GizmoViewport, Center } from '@react-three/drei';
 import { STLLoader } from 'three-stdlib';
 import * as THREE from 'three';
 import { useAppStore } from '../../store/useAppStore';
+import { OPERATION_COLORS } from '../../types/operations';
+import {
+  createFaceColorAttribute,
+  getFaceCount,
+  hexToThreeColor,
+  repaintFaceColors,
+} from '../../lib/faceColors';
 import { ToolpathLines } from './ToolpathLines';
 
 interface StlMeshProps {
@@ -13,7 +20,20 @@ interface StlMeshProps {
 function StlMesh({ url }: StlMeshProps) {
   const geometry = useLoader(STLLoader, url);
   const meshRef = useRef<THREE.Mesh>(null);
-  const { activeOperationId, selectionMode, setOperationGeometry } = useAppStore();
+  const colorAttrRef = useRef<THREE.BufferAttribute | null>(null);
+  const [hoveredFace, setHoveredFace] = useState<number | null>(null);
+
+  const activeOperationId = useAppStore((s) => s.activeOperationId);
+  const selectionMode = useAppStore((s) => s.selectionMode);
+  const activeGeometry = useAppStore((s) => {
+    if (!s.activeOperationId) return null;
+    return s.operations.find((o) => o.id === s.activeOperationId)?.geometry ?? null;
+  });
+  const activeOperationType = useAppStore((s) => {
+    if (!s.activeOperationId) return null;
+    return s.operations.find((o) => o.id === s.activeOperationId)?.type ?? null;
+  });
+  const setOperationGeometry = useAppStore((s) => s.setOperationGeometry);
 
   const processedGeometry = useMemo(() => {
     const geo = geometry.clone();
@@ -27,31 +47,87 @@ function StlMesh({ url }: StlMeshProps) {
     const scale = 50 / maxDim;
     geo.scale(scale, scale, scale);
     geo.computeBoundingBox();
+    createFaceColorAttribute(geo);
     return geo;
   }, [geometry]);
 
+  const faceCount = useMemo(() => getFaceCount(processedGeometry), [processedGeometry]);
+
+  const selectedFaces = useMemo(
+    () => new Set(activeGeometry?.faceIndices ?? []),
+    [activeGeometry]
+  );
+
+  const selectedColor = useMemo(
+    () =>
+      activeOperationType
+        ? hexToThreeColor(OPERATION_COLORS[activeOperationType])
+        : undefined,
+    [activeOperationType]
+  );
+
+  useEffect(() => {
+    const colorAttr = processedGeometry.getAttribute('color') as THREE.BufferAttribute;
+    colorAttrRef.current = colorAttr;
+
+    if (selectedFaces.size === 0 && hoveredFace === null) {
+      repaintFaceColors(colorAttr.array as Float32Array, faceCount, new Set(), null);
+    } else {
+      repaintFaceColors(
+        colorAttr.array as Float32Array,
+        faceCount,
+        selectedFaces,
+        selectionMode ? hoveredFace : null,
+        selectedColor
+      );
+    }
+    colorAttr.needsUpdate = true;
+  }, [processedGeometry, faceCount, selectedFaces, hoveredFace, selectionMode, selectedColor]);
+
+  const handlePointerMove = useCallback(
+    (event: { stopPropagation: () => void; faceIndex?: number }) => {
+      if (!selectionMode) return;
+      event.stopPropagation();
+      const faceIndex = event.faceIndex ?? null;
+      setHoveredFace((prev) => (prev === faceIndex ? prev : faceIndex));
+    },
+    [selectionMode]
+  );
+
+  const handlePointerOut = useCallback(() => {
+    setHoveredFace(null);
+  }, []);
+
   const handleClick = useCallback(
-    (event: { stopPropagation: () => void; faceIndex?: number; face?: { a: number; b: number; c: number } }) => {
+    (event: {
+      stopPropagation: () => void;
+      faceIndex?: number;
+      face?: { a: number; b: number; c: number };
+    }) => {
       if (!selectionMode || !activeOperationId) return;
       event.stopPropagation();
 
       const faceIndex = event.faceIndex ?? 0;
       const face = event.face;
-      const newVertices = face ? [face.a, face.b, face.c] : [faceIndex * 3, faceIndex * 3 + 1, faceIndex * 3 + 2];
+      const newVertices = face
+        ? [face.a, face.b, face.c]
+        : [faceIndex * 3, faceIndex * 3 + 1, faceIndex * 3 + 2];
 
       const op = useAppStore.getState().operations.find((o) => o.id === activeOperationId);
       const existing = op?.geometry;
-      const faceIndices = existing?.faceIndices.includes(faceIndex)
-        ? existing.faceIndices.filter((i) => i !== faceIndex)
+      const isSelected = existing?.faceIndices.includes(faceIndex) ?? false;
+
+      const faceIndices = isSelected
+        ? existing!.faceIndices.filter((i) => i !== faceIndex)
         : [...(existing?.faceIndices ?? []), faceIndex];
-      const vertexIndices = existing?.faceIndices.includes(faceIndex)
+      const vertexIndices = isSelected
         ? (existing?.vertexIndices ?? []).filter((v) => !newVertices.includes(v))
         : [...(existing?.vertexIndices ?? []), ...newVertices];
 
-      setOperationGeometry(activeOperationId, {
-        faceIndices,
-        vertexIndices,
-      });
+      setOperationGeometry(
+        activeOperationId,
+        faceIndices.length > 0 ? { faceIndices, vertexIndices } : null
+      );
     },
     [selectionMode, activeOperationId, setOperationGeometry]
   );
@@ -61,13 +137,15 @@ function StlMesh({ url }: StlMeshProps) {
       <mesh
         ref={meshRef}
         geometry={processedGeometry}
+        onPointerMove={handlePointerMove}
+        onPointerOut={handlePointerOut}
         onClick={handleClick}
         rotation={[-Math.PI / 2, 0, 0]}
       >
         <meshStandardMaterial
-          color="#6b7a8d"
-          metalness={0.3}
-          roughness={0.6}
+          vertexColors
+          metalness={0.25}
+          roughness={0.55}
           side={THREE.DoubleSide}
         />
       </mesh>
@@ -79,6 +157,7 @@ function SceneContent() {
   const stlUrl = useAppStore((s) => s.stlUrl);
   const toolpaths = useAppStore((s) => s.toolpaths);
   const operations = useAppStore((s) => s.operations);
+  const selectionMode = useAppStore((s) => s.selectionMode);
   const { camera } = useThree();
 
   useEffect(() => {
@@ -115,7 +194,16 @@ function SceneContent() {
         </Suspense>
       )}
       <ToolpathLines segments={visiblePaths} />
-      <OrbitControls makeDefault enableDamping dampingFactor={0.1} />
+      <OrbitControls
+        makeDefault
+        enableDamping
+        dampingFactor={0.1}
+        mouseButtons={{
+          LEFT: selectionMode ? undefined : THREE.MOUSE.ROTATE,
+          MIDDLE: THREE.MOUSE.DOLLY,
+          RIGHT: selectionMode ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN,
+        }}
+      />
       <GizmoHelper alignment="bottom-right" margin={[60, 60]}>
         <GizmoViewport axisColors={['#ef4444', '#22c55e', '#3b82f6']} labelColor="white" />
       </GizmoHelper>
@@ -136,12 +224,14 @@ export function StlViewer() {
       )}
       <Canvas
         camera={{ fov: 45, near: 0.1, far: 1000, position: [60, 60, 60] }}
-        style={{ background: '#0f1115' }}
+        style={{ background: '#0f1115', cursor: selectionMode ? 'crosshair' : 'default' }}
       >
         <SceneContent />
       </Canvas>
       {selectionMode && (
-        <div className="selection-hint">Click faces to select/deselect geometry — click Done when finished</div>
+        <div className="selection-hint">
+          Hover to preview faces — click to select/deselect — right-drag to orbit
+        </div>
       )}
     </div>
   );

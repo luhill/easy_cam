@@ -55,7 +55,13 @@ export function OperationCard({ operation }: OperationCardProps) {
       style={style}
       className={`operation-card ${!operation.enabled ? 'disabled' : ''} ${isActive ? 'active' : ''}`}
     >
-      <div className="operation-header" onClick={() => toggleOperationCollapsed(operation.id)}>
+      <div
+        className="operation-header"
+        onClick={() => {
+          setActiveOperation(operation.id);
+          toggleOperationCollapsed(operation.id);
+        }}
+      >
         <button
           className="drag-handle"
           {...attributes}
