@@ -433,6 +433,21 @@ body {
   outline-offset: -2px;
 }
 
+.viewer-processing {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  padding: 6px 14px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  z-index: 2;
+  pointer-events: none;
+}
+
 .viewer-placeholder {
   position: absolute;
   inset: 0;

@@ -7,6 +7,11 @@ export const FACE_COLORS = {
   selected: new THREE.Color('#3b82f6'),
 };
 
+const STATE_BASE = 0;
+const STATE_HOVER = 1;
+const STATE_SELECTED = 2;
+const STATE_HOVER_SELECTED = 3;
+
 export function getFaceCount(geometry: THREE.BufferGeometry): number {
   const position = geometry.getAttribute('position');
   return position.count / 3;
@@ -42,25 +47,97 @@ export function paintFace(
   }
 }
 
-export function repaintFaceColors(
-  colors: Float32Array,
-  faceCount: number,
-  selectedFaces: ReadonlySet<number>,
-  hoveredFaces: ReadonlySet<number>,
-  selectedColor: THREE.Color = FACE_COLORS.selected
-): void {
-  for (let faceIndex = 0; faceIndex < faceCount; faceIndex++) {
-    if (selectedFaces.has(faceIndex)) {
-      paintFace(
-        colors,
-        faceIndex,
-        hoveredFaces.has(faceIndex) ? FACE_COLORS.hoverSelected : selectedColor
-      );
-    } else if (hoveredFaces.has(faceIndex)) {
-      paintFace(colors, faceIndex, FACE_COLORS.hover);
-    } else {
-      paintFace(colors, faceIndex, FACE_COLORS.base);
+function colorForState(state: number, selectedColor: THREE.Color): THREE.Color {
+  switch (state) {
+    case STATE_HOVER:
+      return FACE_COLORS.hover;
+    case STATE_SELECTED:
+      return selectedColor;
+    case STATE_HOVER_SELECTED:
+      return FACE_COLORS.hoverSelected;
+    default:
+      return FACE_COLORS.base;
+  }
+}
+
+function resolveState(faceIndex: number, selected: ReadonlySet<number>, hovered: ReadonlySet<number>): number {
+  const isSelected = selected.has(faceIndex);
+  const isHovered = hovered.has(faceIndex);
+  if (isSelected && isHovered) return STATE_HOVER_SELECTED;
+  if (isSelected) return STATE_SELECTED;
+  if (isHovered) return STATE_HOVER;
+  return STATE_BASE;
+}
+
+/** Incrementally updates vertex colors — only repaints faces whose state changed. */
+export class FaceColorManager {
+  private readonly colors: Float32Array;
+  private readonly faceCount: number;
+  private readonly displayState: Uint8Array;
+
+  constructor(colors: Float32Array, faceCount: number) {
+    this.colors = colors;
+    this.faceCount = faceCount;
+    this.displayState = new Uint8Array(faceCount);
+  }
+
+  syncAll(
+    selected: ReadonlySet<number>,
+    hovered: ReadonlySet<number>,
+    selectedColor: THREE.Color = FACE_COLORS.selected
+  ): void {
+    for (let faceIndex = 0; faceIndex < this.faceCount; faceIndex++) {
+      this.applyState(faceIndex, resolveState(faceIndex, selected, hovered), selectedColor);
     }
+  }
+
+  /** Update only faces in the symmetric diff of two regions (hover change). */
+  updateHoverRegion(
+    prevFaces: readonly number[],
+    nextFaces: readonly number[],
+    selected: ReadonlySet<number>,
+    selectedColor: THREE.Color = FACE_COLORS.selected
+  ): void {
+    const nextSet = new Set(nextFaces);
+
+    for (const face of prevFaces) {
+      if (!nextSet.has(face)) {
+        this.applyState(face, selected.has(face) ? STATE_SELECTED : STATE_BASE, selectedColor);
+      }
+    }
+
+    for (const face of nextFaces) {
+      this.applyState(
+        face,
+        selected.has(face) ? STATE_HOVER_SELECTED : STATE_HOVER,
+        selectedColor
+      );
+    }
+  }
+
+  /** Update only faces added or removed from selection. */
+  updateSelectionDiff(
+    prevSelected: ReadonlySet<number>,
+    nextSelected: ReadonlySet<number>,
+    hovered: ReadonlySet<number>,
+    selectedColor: THREE.Color = FACE_COLORS.selected
+  ): void {
+    for (const face of prevSelected) {
+      if (!nextSelected.has(face)) {
+        this.applyState(face, hovered.has(face) ? STATE_HOVER : STATE_BASE, selectedColor);
+      }
+    }
+    for (const face of nextSelected) {
+      if (!prevSelected.has(face)) {
+        this.applyState(face, resolveState(face, nextSelected, hovered), selectedColor);
+      }
+    }
+  }
+
+  private applyState(faceIndex: number, state: number, selectedColor: THREE.Color): void {
+    if (this.displayState[faceIndex] === state) return;
+    this.displayState[faceIndex] = state;
+    paintFace(this.colors, faceIndex, colorForState(state, selectedColor));
   }
 }
 

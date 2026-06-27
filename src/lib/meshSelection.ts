@@ -9,6 +9,12 @@ export interface SelectionGroup {
   loops: LoopPoint[][];
 }
 
+export interface SelectionRegion {
+  id: number;
+  faceIndices: number[];
+  loops: LoopPoint[][];
+}
+
 function quantize(value: number): string {
   return value.toFixed(POSITION_PRECISION);
 }
@@ -26,133 +32,15 @@ function edgeKey(a: THREE.Vector3, b: THREE.Vector3): string {
 function getFaceVertex(
   positions: THREE.BufferAttribute,
   faceIndex: number,
-  corner: number
+  corner: number,
+  target: THREE.Vector3
 ): THREE.Vector3 {
   const i = faceIndex * 9 + corner * 3;
-  return new THREE.Vector3(positions.array[i], positions.array[i + 1], positions.array[i + 2]);
+  return target.set(positions.array[i], positions.array[i + 1], positions.array[i + 2]);
 }
 
-export class MeshIndex {
-  readonly faceCount: number;
-  readonly faceNormals: THREE.Vector3[];
-  private readonly positions: THREE.BufferAttribute;
-  private readonly adjacency: number[][];
-
-  constructor(geometry: THREE.BufferGeometry) {
-    this.positions = geometry.getAttribute('position') as THREE.BufferAttribute;
-    this.faceCount = this.positions.count / 3;
-    this.faceNormals = [];
-    this.adjacency = Array.from({ length: this.faceCount }, () => []);
-
-    const edgeToFaces = new Map<string, number[]>();
-
-    for (let faceIndex = 0; faceIndex < this.faceCount; faceIndex++) {
-      const v0 = getFaceVertex(this.positions, faceIndex, 0);
-      const v1 = getFaceVertex(this.positions, faceIndex, 1);
-      const v2 = getFaceVertex(this.positions, faceIndex, 2);
-
-      const normal = new THREE.Vector3()
-        .crossVectors(v1.clone().sub(v0), v2.clone().sub(v0))
-        .normalize();
-      this.faceNormals.push(normal);
-
-      const verts = [v0, v1, v2];
-      for (let i = 0; i < 3; i++) {
-        const key = edgeKey(verts[i], verts[(i + 1) % 3]);
-        const faces = edgeToFaces.get(key) ?? [];
-        faces.push(faceIndex);
-        edgeToFaces.set(key, faces);
-      }
-    }
-
-    for (const faces of edgeToFaces.values()) {
-      for (let i = 0; i < faces.length; i++) {
-        for (let j = i + 1; j < faces.length; j++) {
-          const a = faces[i];
-          const b = faces[j];
-          this.adjacency[a].push(b);
-          this.adjacency[b].push(a);
-        }
-      }
-    }
-  }
-
-  getCoplanarGroup(startFace: number): number[] {
-    if (startFace < 0 || startFace >= this.faceCount) return [];
-
-    const reference = this.faceNormals[startFace];
-    const visited = new Set<number>();
-    const queue = [startFace];
-    visited.add(startFace);
-
-    while (queue.length > 0) {
-      const face = queue.pop()!;
-      for (const neighbor of this.adjacency[face]) {
-        if (visited.has(neighbor)) continue;
-        if (this.faceNormals[neighbor].dot(reference) >= COPLANAR_DOT_THRESHOLD) {
-          visited.add(neighbor);
-          queue.push(neighbor);
-        }
-      }
-    }
-
-    return [...visited];
-  }
-
-  getBoundaryLoops(faceIndices: number[]): LoopPoint[][] {
-    const faceSet = new Set(faceIndices);
-    if (faceSet.size === 0) return [];
-
-    const boundaryEdges: Array<[THREE.Vector3, THREE.Vector3]> = [];
-
-    for (const faceIndex of faceSet) {
-      const verts = [
-        getFaceVertex(this.positions, faceIndex, 0),
-        getFaceVertex(this.positions, faceIndex, 1),
-        getFaceVertex(this.positions, faceIndex, 2),
-      ];
-
-      for (let i = 0; i < 3; i++) {
-        const a = verts[i];
-        const b = verts[(i + 1) % 3];
-        const key = edgeKey(a, b);
-        let sharedInGroup = 0;
-
-        for (const other of faceSet) {
-          if (other === faceIndex) continue;
-          const oVerts = [
-            getFaceVertex(this.positions, other, 0),
-            getFaceVertex(this.positions, other, 1),
-            getFaceVertex(this.positions, other, 2),
-          ];
-          for (let j = 0; j < 3; j++) {
-            if (edgeKey(oVerts[j], oVerts[(j + 1) % 3]) === key) {
-              sharedInGroup++;
-              break;
-            }
-          }
-        }
-
-        if (sharedInGroup === 0) {
-          boundaryEdges.push([a.clone(), b.clone()]);
-        }
-      }
-    }
-
-    return traceLoops(boundaryEdges);
-  }
-
-  getSelectionGroup(faceIndex: number, strategy: SelectionStrategy): SelectionGroup {
-    const faceIndices = this.getCoplanarGroup(faceIndex);
-    const loops =
-      strategy === 'outline-loop' ? this.getBoundaryLoops(faceIndices) : [];
-
-    return { faceIndices, loops };
-  }
-
-  getFaceVertexIndices(faceIndex: number): number[] {
-    return [faceIndex * 3, faceIndex * 3 + 1, faceIndex * 3 + 2];
-  }
+function toLoopPoint(v: THREE.Vector3): LoopPoint {
+  return { x: v.x, y: v.y, z: v.z };
 }
 
 function traceLoops(edges: Array<[THREE.Vector3, THREE.Vector3]>): LoopPoint[][] {
@@ -160,7 +48,6 @@ function traceLoops(edges: Array<[THREE.Vector3, THREE.Vector3]>): LoopPoint[][]
 
   const unused = new Set(edges.map((_, i) => i));
   const loops: LoopPoint[][] = [];
-
   const adjacency = new Map<string, Array<{ key: string; point: THREE.Vector3 }>>();
 
   for (const [a, b] of edges) {
@@ -220,8 +107,161 @@ function traceLoops(edges: Array<[THREE.Vector3, THREE.Vector3]>): LoopPoint[][]
   return loops.sort((a, b) => b.length - a.length);
 }
 
-function toLoopPoint(v: THREE.Vector3): LoopPoint {
-  return { x: v.x, y: v.y, z: v.z };
+export class MeshIndex {
+  readonly faceCount: number;
+  readonly regions: SelectionRegion[];
+  readonly faceToRegion: Int32Array;
+  private readonly edgeToFaces: Map<string, number[]>;
+  private readonly positions: THREE.BufferAttribute;
+  private readonly vTemp0 = new THREE.Vector3();
+  private readonly vTemp1 = new THREE.Vector3();
+  private readonly vTemp2 = new THREE.Vector3();
+
+  constructor(geometry: THREE.BufferGeometry) {
+    this.positions = geometry.getAttribute('position') as THREE.BufferAttribute;
+    this.faceCount = this.positions.count / 3;
+    this.edgeToFaces = new Map();
+
+    const faceNormals: THREE.Vector3[] = [];
+    const adjacency: number[][] = Array.from({ length: this.faceCount }, () => []);
+
+    for (let faceIndex = 0; faceIndex < this.faceCount; faceIndex++) {
+      const v0 = getFaceVertex(this.positions, faceIndex, 0, this.vTemp0.clone());
+      const v1 = getFaceVertex(this.positions, faceIndex, 1, this.vTemp1.clone());
+      const v2 = getFaceVertex(this.positions, faceIndex, 2, this.vTemp2.clone());
+
+      const normal = new THREE.Vector3()
+        .crossVectors(v1.sub(v0), v2.clone().sub(v0))
+        .normalize();
+      faceNormals.push(normal);
+
+      const verts = [
+        getFaceVertex(this.positions, faceIndex, 0, new THREE.Vector3()),
+        getFaceVertex(this.positions, faceIndex, 1, new THREE.Vector3()),
+        getFaceVertex(this.positions, faceIndex, 2, new THREE.Vector3()),
+      ];
+      for (let i = 0; i < 3; i++) {
+        const key = edgeKey(verts[i], verts[(i + 1) % 3]);
+        const faces = this.edgeToFaces.get(key) ?? [];
+        faces.push(faceIndex);
+        this.edgeToFaces.set(key, faces);
+      }
+    }
+
+    for (const faces of this.edgeToFaces.values()) {
+      for (let i = 0; i < faces.length; i++) {
+        for (let j = i + 1; j < faces.length; j++) {
+          adjacency[faces[i]].push(faces[j]);
+          adjacency[faces[j]].push(faces[i]);
+        }
+      }
+    }
+
+    this.faceToRegion = new Int32Array(this.faceCount).fill(-1);
+    this.regions = [];
+    const visited = new Uint8Array(this.faceCount);
+
+    for (let startFace = 0; startFace < this.faceCount; startFace++) {
+      if (visited[startFace]) continue;
+
+      const faceIndices = this.floodCoplanar(startFace, faceNormals, adjacency, visited);
+      const regionId = this.regions.length;
+      const loops = this.computeBoundaryLoops(faceIndices);
+
+      for (const face of faceIndices) {
+        this.faceToRegion[face] = regionId;
+      }
+
+      this.regions.push({ id: regionId, faceIndices, loops });
+    }
+  }
+
+  private floodCoplanar(
+    startFace: number,
+    faceNormals: THREE.Vector3[],
+    adjacency: number[][],
+    visited: Uint8Array
+  ): number[] {
+    const reference = faceNormals[startFace];
+    const group: number[] = [];
+    const queue = [startFace];
+    visited[startFace] = 1;
+
+    while (queue.length > 0) {
+      const face = queue.pop()!;
+      group.push(face);
+
+      for (const neighbor of adjacency[face]) {
+        if (visited[neighbor]) continue;
+        if (faceNormals[neighbor].dot(reference) >= COPLANAR_DOT_THRESHOLD) {
+          visited[neighbor] = 1;
+          queue.push(neighbor);
+        }
+      }
+    }
+
+    return group;
+  }
+
+  private computeBoundaryLoops(faceIndices: number[]): LoopPoint[][] {
+    if (faceIndices.length === 0) return [];
+
+    const faceSet = new Set(faceIndices);
+    const boundaryEdges: Array<[THREE.Vector3, THREE.Vector3]> = [];
+    const va = new THREE.Vector3();
+    const vb = new THREE.Vector3();
+    const vc = new THREE.Vector3();
+
+    for (const faceIndex of faceIndices) {
+      const verts = [
+        getFaceVertex(this.positions, faceIndex, 0, va.clone()),
+        getFaceVertex(this.positions, faceIndex, 1, vb.clone()),
+        getFaceVertex(this.positions, faceIndex, 2, vc.clone()),
+      ];
+
+      for (let i = 0; i < 3; i++) {
+        const a = verts[i];
+        const b = verts[(i + 1) % 3];
+        const key = edgeKey(a, b);
+        const facesOnEdge = this.edgeToFaces.get(key) ?? [];
+
+        let countInGroup = 0;
+        for (const f of facesOnEdge) {
+          if (faceSet.has(f)) countInGroup++;
+        }
+
+        if (countInGroup === 1) {
+          boundaryEdges.push([a, b]);
+        }
+      }
+    }
+
+    return traceLoops(boundaryEdges);
+  }
+
+  getRegion(faceIndex: number): SelectionRegion | null {
+    if (faceIndex < 0 || faceIndex >= this.faceCount) return null;
+    const regionId = this.faceToRegion[faceIndex];
+    return regionId >= 0 ? this.regions[regionId] : null;
+  }
+
+  getRegionId(faceIndex: number): number {
+    if (faceIndex < 0 || faceIndex >= this.faceCount) return -1;
+    return this.faceToRegion[faceIndex];
+  }
+
+  getSelectionGroup(faceIndex: number, strategy: SelectionStrategy): SelectionGroup {
+    const region = this.getRegion(faceIndex);
+    if (!region) return { faceIndices: [], loops: [] };
+    return {
+      faceIndices: region.faceIndices,
+      loops: strategy === 'outline-loop' ? region.loops : [],
+    };
+  }
+
+  getFaceVertexIndices(faceIndex: number): number[] {
+    return [faceIndex * 3, faceIndex * 3 + 1, faceIndex * 3 + 2];
+  }
 }
 
 const meshIndexCache = new WeakMap<THREE.BufferGeometry, MeshIndex>();
