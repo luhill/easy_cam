@@ -15,8 +15,10 @@ export interface OperationDefaults {
   spindleSpeed: number;
   clearance: number;
   depth: number;
-  /** Adaptive outline: clearance from part to channel wall (mm) */
-  channelClearance: number;
+  /** Additional radial stock offset beyond tool radius (mm) */
+  radialOffset: number;
+  /** Adaptive outline: channel width as multiple of tool diameter (min 1.25) */
+  channelWidthMultiple: number;
   /** Adaptive outline: trochoidal arc radius (mm), 0 = auto */
   trochoidRadius: number;
   /** Adaptive outline: helix bore radius (mm), 0 = tool radius */
@@ -123,7 +125,8 @@ export const DEFAULT_SETTINGS: OperationDefaults = {
   spindleSpeed: 12000,
   clearance: 5,
   depth: 10,
-  channelClearance: 3,
+  radialOffset: 0,
+  channelWidthMultiple: 1.5,
   trochoidRadius: 0,
   helixRadius: 0,
   helixPitch: 2,

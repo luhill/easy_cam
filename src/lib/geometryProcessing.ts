@@ -147,3 +147,84 @@ export function pointInPolygon2D(x: number, y: number, loop: LoopPoint[]): boole
   }
   return inside;
 }
+
+export function signedLoopArea2D(loop: LoopPoint[]): number {
+  let area = 0;
+  for (let i = 0; i < loop.length; i++) {
+    const a = loop[i];
+    const b = loop[(i + 1) % loop.length];
+    area += a.x * b.y - b.x * a.y;
+  }
+  return area / 2;
+}
+
+/** Offset a closed XY loop outward (positive offset) using vertex bisectors. */
+export function offsetLoop2D(loop: LoopPoint[], offset: number): LoopPoint[] {
+  const n = loop.length;
+  if (n < 3 || Math.abs(offset) < 1e-9) return loop.map((p) => ({ ...p }));
+
+  const ccw = signedLoopArea2D(loop) >= 0;
+  const side = ccw ? 1 : -1;
+  const result: LoopPoint[] = [];
+
+  for (let i = 0; i < n; i++) {
+    const prev = loop[(i - 1 + n) % n];
+    const curr = loop[i];
+    const next = loop[(i + 1) % n];
+
+    const e1x = curr.x - prev.x;
+    const e1y = curr.y - prev.y;
+    const e2x = next.x - curr.x;
+    const e2y = next.y - curr.y;
+    const len1 = Math.hypot(e1x, e1y) || 1;
+    const len2 = Math.hypot(e2x, e2y) || 1;
+
+    const n1x = side * (e1y / len1);
+    const n1y = side * (-e1x / len1);
+    const n2x = side * (e2y / len2);
+    const n2y = side * (-e2x / len2);
+
+    let bx = n1x + n2x;
+    let by = n1y + n2y;
+    const blen = Math.hypot(bx, by);
+    if (blen < 1e-8) {
+      bx = n1x;
+      by = n1y;
+    } else {
+      bx /= blen;
+      by /= blen;
+    }
+
+    const dot = bx * n1x + by * n1y;
+    const miter = dot > 0.05 ? offset / dot : offset;
+    const clamped = Math.sign(miter) * Math.min(Math.abs(miter), Math.abs(offset) * 6);
+
+    result.push({
+      x: curr.x + bx * clamped,
+      y: curr.y + by * clamped,
+      z: curr.z,
+    });
+  }
+
+  return result;
+}
+
+export function distanceToLoop2D(x: number, y: number, loop: LoopPoint[]): number {
+  if (loop.length === 0) return Infinity;
+  if (pointInPolygon2D(x, y, loop)) return 0;
+
+  let minDist = Infinity;
+  for (let i = 0; i < loop.length; i++) {
+    const a = loop[i];
+    const b = loop[(i + 1) % loop.length];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const lenSq = dx * dx + dy * dy;
+    const t =
+      lenSq > 0 ? Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / lenSq)) : 0;
+    const px = a.x + t * dx;
+    const py = a.y + t * dy;
+    minDist = Math.min(minDist, Math.hypot(x - px, y - py));
+  }
+  return minDist;
+}

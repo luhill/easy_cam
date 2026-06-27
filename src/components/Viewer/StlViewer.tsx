@@ -18,6 +18,7 @@ import {
   finalizePartPlacement,
   orientFaceToBottom,
   processStlGeometry,
+  loopCentroid,
   type ProcessedMesh,
 } from '../../lib/geometryProcessing';
 import { getSelectionHint, isHoleSelectableForOperation, isRegionSelectableForOperation } from '../../lib/selectionRules';
@@ -338,12 +339,24 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
           ? meshIndexRef.current.holes.find((h) => h.id === group.holeId)
           : null;
 
+      let holeCenter = hole?.center;
+      let holeRadius = hole?.radius;
+      if ((!holeCenter || !holeRadius) && group.loops?.[0]?.length) {
+        const loop = group.loops[0];
+        holeCenter = loopCentroid(loop);
+        let rSum = 0;
+        for (const p of loop) {
+          rSum += Math.hypot(p.x - holeCenter.x, p.y - holeCenter.y);
+        }
+        holeRadius = rSum / loop.length;
+      }
+
       setOperationGeometry(activeOperationId, {
         faceIndices,
         vertexIndices,
         loops: loops && loops.length > 0 ? loops : group.loops,
-        holeCenter: hole?.center,
-        holeRadius: hole?.radius,
+        holeCenter,
+        holeRadius,
         holeId: hole?.id,
         entryPoint: existing?.entryPoint,
       });

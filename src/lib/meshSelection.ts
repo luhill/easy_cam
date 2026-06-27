@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { LoopPoint, OperationType, SelectionStrategy } from '../types/operations';
-import { loopArea2D, pointInPolygon2D, boundsFromGeometry, type PartBounds } from './geometryProcessing';
+import { loopArea2D, pointInPolygon2D, boundsFromGeometry, loopCentroid, distanceToLoop2D, type PartBounds } from './geometryProcessing';
 import {
   classifyRegionKind,
   effectiveOutlineLoop,
@@ -11,8 +11,9 @@ import {
 } from './selectionRules';
 
 const COPLANAR_DOT_THRESHOLD = Math.cos((2 * Math.PI) / 180);
-const CIRCLE_TOLERANCE = 0.18;
-const MIN_HOLE_POINTS = 6;
+const CIRCLE_TOLERANCE = 0.45;
+const MIN_HOLE_POINTS = 4;
+const HOLE_PICK_TOLERANCE = 1.2;
 
 export type RegionKind = 'top' | 'bottom' | 'side' | 'unknown';
 
@@ -162,32 +163,38 @@ function connectedComponents(faces: number[], adjacency: number[][]): number[][]
   return components;
 }
 
-function fitCircle2D(loop: LoopPoint[]): { center: LoopPoint; radius: number } | null {
-  if (loop.length < MIN_HOLE_POINTS) return null;
-
-  let cx = 0;
-  let cy = 0;
-  let cz = 0;
-  for (const p of loop) {
-    cx += p.x;
-    cy += p.y;
-    cz += p.z;
-  }
-  cx /= loop.length;
-  cy /= loop.length;
-  cz /= loop.length;
-
+function approximateCircleFromLoop(loop: LoopPoint[]): { center: LoopPoint; radius: number } {
+  const center = loopCentroid(loop);
   let rSum = 0;
-  let maxDev = 0;
+  let rMin = Infinity;
+  let rMax = 0;
   for (const p of loop) {
-    const r = Math.hypot(p.x - cx, p.y - cy);
+    const r = Math.hypot(p.x - center.x, p.y - center.y);
     rSum += r;
-    maxDev = Math.max(maxDev, Math.abs(r - rSum / loop.length));
+    rMin = Math.min(rMin, r);
+    rMax = Math.max(rMax, r);
   }
   const radius = rSum / loop.length;
-  if (radius <= 0 || maxDev / radius > CIRCLE_TOLERANCE) return null;
+  return { center, radius: radius > 0 ? radius : (rMin + rMax) / 2 };
+}
 
-  return { center: { x: cx, y: cy, z: cz }, radius };
+function fitCircle2D(loop: LoopPoint[]): { center: LoopPoint; radius: number } | null {
+  if (loop.length < MIN_HOLE_POINTS) {
+    return loop.length >= 3 ? approximateCircleFromLoop(loop) : null;
+  }
+
+  const approx = approximateCircleFromLoop(loop);
+  let maxDev = 0;
+  for (const p of loop) {
+    const r = Math.hypot(p.x - approx.center.x, p.y - approx.center.y);
+    maxDev = Math.max(maxDev, Math.abs(r - approx.radius));
+  }
+
+  if (approx.radius <= 0 || maxDev / approx.radius > CIRCLE_TOLERANCE) {
+    return approx.radius > 0 ? approx : null;
+  }
+
+  return approx;
 }
 
 function classifyLoops(loops: LoopPoint[][]): {
@@ -366,7 +373,7 @@ export class MeshIndex {
         if (isPhysicallyTopFace(region, this.bounds)) {
           for (const inner of innerLoops) {
             const fit = fitCircle2D(inner);
-            if (fit) {
+            if (fit && fit.radius > 0) {
               this.holes.push({
                 id: this.holes.length,
                 center: fit.center,
@@ -426,14 +433,54 @@ export class MeshIndex {
     return this.faceToRegion[faceIndex];
   }
 
+  findInnerLoopAtPoint(x: number, y: number): HoleFeature | null {
+    let best: { hole: HoleFeature; score: number } | null = null;
+
+    for (const region of this.regions) {
+      if (!isPhysicallyTopFace(region, this.bounds)) continue;
+
+      for (const inner of region.innerLoops) {
+        const fit = fitCircle2D(inner);
+        if (!fit || fit.radius <= 0) continue;
+
+        const inside = pointInPolygon2D(x, y, inner);
+        const distToCenter = Math.hypot(x - fit.center.x, y - fit.center.y);
+        const distToEdge = distanceToLoop2D(x, y, inner);
+        const insideByRadius = distToCenter <= fit.radius * HOLE_PICK_TOLERANCE;
+        const nearEdge = distToEdge <= fit.radius * 0.35;
+
+        if (!inside && !insideByRadius && !nearEdge) continue;
+
+        const score = inside ? 0 : insideByRadius ? distToCenter : distToEdge;
+        const hole: HoleFeature = {
+          id: -1,
+          center: fit.center,
+          radius: fit.radius,
+          loop: inner,
+          isVertical: true,
+          regionId: region.id,
+        };
+
+        if (!best || score < best.score) {
+          best = { hole, score };
+        }
+      }
+    }
+
+    return best?.hole ?? null;
+  }
+
   findHoleAtPoint(x: number, y: number, operationType: OperationType): HoleFeature | null {
     if (!isHoleSelectableForOperation(operationType)) return null;
 
     for (const hole of this.holes) {
+      if (!isHoleSelectable(operationType, hole)) continue;
+      const inside = pointInPolygon2D(x, y, hole.loop);
+      const dist = Math.hypot(x - hole.center.x, y - hole.center.y);
       if (
-        (pointInPolygon2D(x, y, hole.loop) ||
-          Math.hypot(x - hole.center.x, y - hole.center.y) <= hole.radius * 1.15) &&
-        isHoleSelectable(operationType, hole)
+        inside ||
+        dist <= hole.radius * HOLE_PICK_TOLERANCE ||
+        distanceToLoop2D(x, y, hole.loop) <= hole.radius * 0.35
       ) {
         return hole;
       }
@@ -444,12 +491,14 @@ export class MeshIndex {
     for (const hole of this.holes) {
       if (!isHoleSelectable(operationType, hole)) continue;
       const d = Math.hypot(x - hole.center.x, y - hole.center.y);
-      if (d <= hole.radius * 1.5 && d < nearestDist) {
+      if (d <= hole.radius * 1.75 && d < nearestDist) {
         nearest = hole;
         nearestDist = d;
       }
     }
-    return nearest;
+    if (nearest) return nearest;
+
+    return this.findInnerLoopAtPoint(x, y);
   }
 
   getOutlineLoop(region: SelectionRegion): LoopPoint[] | null {
@@ -474,10 +523,13 @@ export class MeshIndex {
       const hole = this.findHoleAtPoint(point.x, point.y, operationType);
       if (!hole) return null;
 
+      const regionForHole =
+        hole.regionId >= 0 ? this.regions[hole.regionId] ?? region : region;
+
       return {
-        faceIndices: region.faceIndices,
+        faceIndices: regionForHole.faceIndices,
         loops: [hole.loop],
-        holeId: hole.id,
+        holeId: hole.id >= 0 ? hole.id : undefined,
         outerLoop: null,
       };
     }

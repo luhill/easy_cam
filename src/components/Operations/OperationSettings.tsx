@@ -15,19 +15,32 @@ const BASE_FIELDS: {
   { key: 'toolDiameter', label: 'Tool Diameter', unit: 'mm', step: 0.1, min: 0.1 },
   { key: 'feedRate', label: 'Feed Rate', unit: 'mm/min', step: 50, min: 1 },
   { key: 'plungeRate', label: 'Plunge Rate', unit: 'mm/min', step: 25, min: 1 },
-  { key: 'stepDown', label: 'Step Down', unit: 'mm', step: 0.5, min: 0.1 },
+  { key: 'stepDown', label: 'Step Down', unit: 'mm', step: 0.1, min: 0.05 },
   { key: 'stepover', label: 'Stepover', unit: '%', step: 5, min: 1 },
   { key: 'spindleSpeed', label: 'Spindle Speed', unit: 'RPM', step: 500, min: 100 },
   { key: 'clearance', label: 'Clearance', unit: 'mm', step: 1, min: 0 },
   { key: 'depth', label: 'Cut Depth', unit: 'mm', step: 0.5, min: 0.1 },
 ];
 
+const OUTLINE_FIELDS: typeof BASE_FIELDS = [
+  { key: 'radialOffset', label: 'Additional Offset', unit: 'mm', step: 0.1, min: 0 },
+];
+
 const ADAPTIVE_FIELDS: typeof BASE_FIELDS = [
-  { key: 'channelClearance', label: 'Channel Clearance', unit: 'mm', step: 0.5, min: 0 },
+  { key: 'radialOffset', label: 'Additional Offset', unit: 'mm', step: 0.1, min: 0 },
+  { key: 'channelWidthMultiple', label: 'Channel Width', unit: '× tool ⌀', step: 0.25, min: 1.25 },
   { key: 'trochoidRadius', label: 'Trochoid Radius', unit: 'mm', step: 0.5, min: 0 },
   { key: 'helixRadius', label: 'Helix Radius', unit: 'mm', step: 0.5, min: 0 },
   { key: 'helixPitch', label: 'Helix Pitch', unit: 'mm', step: 0.5, min: 0.1 },
 ];
+
+function clampSetting(key: keyof Operation['settings'], value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  if (key === 'stepDown') return Math.max(value, 0.05);
+  if (key === 'channelWidthMultiple') return Math.max(value, 1.25);
+  if (key === 'toolDiameter') return Math.max(value, 0.1);
+  return Math.max(value, 0);
+}
 
 export function OperationSettings({ operation }: OperationSettingsProps) {
   const updateOperationSettings = useAppStore((s) => s.updateOperationSettings);
@@ -36,7 +49,9 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
   const fields =
     operation.type === 'adaptive-outline'
       ? [...BASE_FIELDS, ...ADAPTIVE_FIELDS]
-      : BASE_FIELDS;
+      : operation.type === 'outline'
+        ? [...BASE_FIELDS, ...OUTLINE_FIELDS]
+        : BASE_FIELDS;
 
   return (
     <div className="operation-settings">
@@ -61,21 +76,26 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
               step={step}
               onChange={(e) =>
                 updateOperationSettings(operation.id, {
-                  [key]: parseFloat(e.target.value) || 0,
+                  [key]: clampSetting(key, parseFloat(e.target.value)),
                 })
               }
             />
           </div>
         ))}
       </div>
-      {(operation.type === 'adaptive-outline' ||
-        operation.settings.trochoidRadius === 0 ||
-        operation.settings.helixRadius === 0) && (
+      {(operation.type === 'outline' || operation.type === 'adaptive-outline') && (
         <p className="settings-hint">
+          Toolpath runs at tool radius + additional offset from the part outline
           {operation.type === 'adaptive-outline' &&
-            'Helix/trochoid radius 0 = auto from tool diameter. Entry point is set separately in stock.'}
+            '. Channel width is a multiple of tool diameter (min 1.25×) carved with trochoidal passes.'}
         </p>
       )}
+      {operation.type === 'adaptive-outline' &&
+        (operation.settings.trochoidRadius === 0 || operation.settings.helixRadius === 0) && (
+          <p className="settings-hint">
+            Helix/trochoid radius 0 = auto from tool diameter. Entry point is set separately in stock.
+          </p>
+        )}
     </div>
   );
 }
