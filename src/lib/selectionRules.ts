@@ -20,7 +20,6 @@ export function classifyRegionKind(
   return 'unknown';
 }
 
-/** Horizontal face on the upper half of the part (works with inverted STL normals). */
 export function isPhysicallyTopFace(
   region: Pick<SelectionRegion, 'normal' | 'centroid'>,
   bounds: PartBounds

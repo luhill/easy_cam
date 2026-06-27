@@ -20,7 +20,7 @@ import {
   processStlGeometry,
   type ProcessedMesh,
 } from '../../lib/geometryProcessing';
-import { getSelectionHint, isRegionSelectableForOperation } from '../../lib/selectionRules';
+import { getSelectionHint, isHoleSelectableForOperation, isRegionSelectableForOperation } from '../../lib/selectionRules';
 import {
   clearMeshIndexCache,
   collectVertexIndices,
@@ -117,7 +117,11 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
 
     const colorAttr = processedGeometry.getAttribute('color') as THREE.BufferAttribute;
     colorAttrRef.current = colorAttr;
-    colorManagerRef.current = new FaceColorManager(colorAttr.array as Float32Array, faceCount);
+    colorManagerRef.current = new FaceColorManager(
+      colorAttr.array as Float32Array,
+      processedGeometry,
+      faceCount
+    );
 
     const timeout = window.setTimeout(() => {
       const index = getMeshIndex(processedGeometry);
@@ -164,15 +168,20 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
       if (selectionSubModeRef.current === 'bottom-face') {
         const region = meshIndex.getRegion(faceIndex);
         if (!region) return null;
+        const outline = meshIndex.getOutlineLoop(region);
         return {
           faceIndices: region.faceIndices,
-          loops: region.loops,
-          outerLoop: region.outerLoop,
+          loops: outline ? [outline] : region.loops,
+          outerLoop: outline ?? region.outerLoop,
         };
       }
 
       const opType = activeOperationTypeRef.current;
       if (!opType) return null;
+
+      if (isHoleSelectableForOperation(opType)) {
+        return meshIndex.resolveSelection(faceIndex, opType, point ?? undefined);
+      }
 
       const region = meshIndex.getRegion(faceIndex);
       if (!region || !isRegionSelectableForOperation(opType, region, meshIndex.bounds)) {
@@ -332,7 +341,7 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
       setOperationGeometry(activeOperationId, {
         faceIndices,
         vertexIndices,
-        loops,
+        loops: loops && loops.length > 0 ? loops : group.loops,
         holeCenter: hole?.center,
         holeRadius: hole?.radius,
         holeId: hole?.id,

@@ -14,8 +14,23 @@ const STATE_SELECTED = 2;
 const STATE_HOVER_SELECTED = 3;
 
 export function getFaceCount(geometry: THREE.BufferGeometry): number {
+  const index = geometry.getIndex();
+  if (index) return index.count / 3;
   const position = geometry.getAttribute('position');
   return position.count / 3;
+}
+
+function getTriangleVertexIndices(
+  geometry: THREE.BufferGeometry,
+  faceIndex: number
+): [number, number, number] {
+  const index = geometry.getIndex();
+  if (index) {
+    const i = faceIndex * 3;
+    return [index.getX(i), index.getX(i + 1), index.getX(i + 2)];
+  }
+  const base = faceIndex * 3;
+  return [base, base + 1, base + 2];
 }
 
 export function createFaceColorAttribute(
@@ -26,7 +41,7 @@ export function createFaceColorAttribute(
   const faceCount = getFaceCount(geometry);
 
   for (let faceIndex = 0; faceIndex < faceCount; faceIndex++) {
-    paintFace(colors, faceIndex, FACE_COLORS.base);
+    paintFace(colors, geometry, faceIndex, FACE_COLORS.base);
   }
 
   const attribute = new THREE.BufferAttribute(colors, 3);
@@ -36,15 +51,14 @@ export function createFaceColorAttribute(
 
 export function paintFace(
   colors: Float32Array,
+  geometry: THREE.BufferGeometry,
   faceIndex: number,
   color: THREE.Color
 ): void {
-  const offset = faceIndex * 9;
-  for (let vertex = 0; vertex < 3; vertex++) {
-    const i = offset + vertex * 3;
-    colors[i] = color.r;
-    colors[i + 1] = color.g;
-    colors[i + 2] = color.b;
+  for (const vi of getTriangleVertexIndices(geometry, faceIndex)) {
+    colors[vi * 3] = color.r;
+    colors[vi * 3 + 1] = color.g;
+    colors[vi * 3 + 2] = color.b;
   }
 }
 
@@ -77,11 +91,13 @@ function resolveState(faceIndex: number, selected: ReadonlySet<number>, hovered:
 /** Incrementally updates vertex colors — only repaints faces whose state changed. */
 export class FaceColorManager {
   private readonly colors: Float32Array;
+  private readonly geometry: THREE.BufferGeometry;
   private readonly faceCount: number;
   private readonly displayState: Uint8Array;
 
-  constructor(colors: Float32Array, faceCount: number) {
+  constructor(colors: Float32Array, geometry: THREE.BufferGeometry, faceCount: number) {
     this.colors = colors;
+    this.geometry = geometry;
     this.faceCount = faceCount;
     this.displayState = new Uint8Array(faceCount);
   }
@@ -156,7 +172,7 @@ export class FaceColorManager {
   ): void {
     if (this.displayState[faceIndex] === state) return;
     this.displayState[faceIndex] = state;
-    paintFace(this.colors, faceIndex, colorForState(state, selectedColor, hoverColor));
+    paintFace(this.colors, this.geometry, faceIndex, colorForState(state, selectedColor, hoverColor));
   }
 }
 
