@@ -1,12 +1,31 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { Operation } from '../../types/operations';
-import { OPERATION_COLORS } from '../../types/operations';
+import { OPERATION_COLORS, getSelectionStrategy } from '../../types/operations';
 import { useAppStore } from '../../store/useAppStore';
 import { OperationSettings } from './OperationSettings';
 
 interface OperationCardProps {
   operation: Operation;
+}
+
+function formatGeometrySummary(operation: Operation): string {
+  const geo = operation.geometry;
+  if (!geo || geo.faceIndices.length === 0) return 'None selected';
+
+  const strategy = getSelectionStrategy(operation.type);
+  const faceCount = geo.faceIndices.length;
+
+  if (strategy === 'outline-loop' && geo.loops && geo.loops.length > 0) {
+    const points = geo.loops.reduce((sum, loop) => sum + loop.length, 0);
+    return `${geo.loops.length} loop(s), ${points} pts (${faceCount} faces)`;
+  }
+
+  if (strategy === 'point') {
+    return faceCount === 1 ? '1 point' : `${faceCount} points`;
+  }
+
+  return `${faceCount} face${faceCount === 1 ? '' : 's'}`;
 }
 
 export function OperationCard({ operation }: OperationCardProps) {
@@ -38,7 +57,7 @@ export function OperationCard({ operation }: OperationCardProps) {
   };
 
   const isActive = activeOperationId === operation.id;
-  const faceCount = operation.geometry?.faceIndices.length ?? 0;
+  const geometrySummary = formatGeometrySummary(operation);
 
   const handleSelectGeometry = () => {
     setActiveOperation(operation.id);
@@ -108,9 +127,7 @@ export function OperationCard({ operation }: OperationCardProps) {
           <div className="geometry-section">
             <div className="geometry-header">
               <span>Geometry</span>
-              <span className="geometry-count">
-                {faceCount > 0 ? `${faceCount} face(s) selected` : 'None selected'}
-              </span>
+              <span className="geometry-count">{geometrySummary}</span>
             </div>
             <div className="geometry-actions">
               {isActive && selectionMode ? (
@@ -122,7 +139,7 @@ export function OperationCard({ operation }: OperationCardProps) {
                   Select from Model
                 </button>
               )}
-              {faceCount > 0 && (
+              {operation.geometry && operation.geometry.faceIndices.length > 0 && (
                 <button
                   className="btn btn-small btn-secondary"
                   onClick={() => useAppStore.getState().setOperationGeometry(operation.id, null)}

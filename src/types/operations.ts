@@ -17,9 +17,17 @@ export interface OperationDefaults {
   depth: number;
 }
 
+export interface LoopPoint {
+  x: number;
+  y: number;
+  z: number;
+}
+
 export interface SelectedGeometry {
   faceIndices: number[];
   vertexIndices: number[];
+  /** Closed boundary loops for outline-type selections */
+  loops?: LoopPoint[][];
 }
 
 export interface Operation {
@@ -111,6 +119,21 @@ export const OPERATION_COLORS: Record<OperationType, string> = {
   pocket: '#10b981',
   contour: '#06b6d4',
 };
+
+export function getSelectionStrategy(type: OperationType): SelectionStrategy {
+  switch (type) {
+    case 'outline':
+    case 'adaptive-outline':
+      return 'outline-loop';
+    case 'drill':
+    case 'helix':
+      return 'point';
+    default:
+      return 'region';
+  }
+}
+
+export type SelectionStrategy = 'region' | 'outline-loop' | 'point';
 
 export function getOperationLabel(type: OperationType): string {
   return OPERATION_TEMPLATES.find((t) => t.type === type)?.label ?? type;

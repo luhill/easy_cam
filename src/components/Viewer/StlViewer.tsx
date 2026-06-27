@@ -4,14 +4,23 @@ import { OrbitControls, Grid, GizmoHelper, GizmoViewport, Center } from '@react-
 import { STLLoader } from 'three-stdlib';
 import * as THREE from 'three';
 import { useAppStore } from '../../store/useAppStore';
-import { OPERATION_COLORS } from '../../types/operations';
+import { getSelectionStrategy, OPERATION_COLORS } from '../../types/operations';
+import type { LoopPoint } from '../../types/operations';
 import {
   createFaceColorAttribute,
   getFaceCount,
   hexToThreeColor,
   repaintFaceColors,
 } from '../../lib/faceColors';
+import {
+  collectVertexIndices,
+  getMeshIndex,
+  isGroupSelected,
+  mergeLoops,
+  removeGroupFromSelection,
+} from '../../lib/meshSelection';
 import { ToolpathLines } from './ToolpathLines';
+import { SelectionLoopLines } from './SelectionLoopLines';
 
 interface StlMeshProps {
   url: string;
@@ -21,7 +30,8 @@ function StlMesh({ url }: StlMeshProps) {
   const geometry = useLoader(STLLoader, url);
   const meshRef = useRef<THREE.Mesh>(null);
   const colorAttrRef = useRef<THREE.BufferAttribute | null>(null);
-  const [hoveredFace, setHoveredFace] = useState<number | null>(null);
+  const [hoveredFaces, setHoveredFaces] = useState<number[]>([]);
+  const [hoveredLoops, setHoveredLoops] = useState<LoopPoint[][]>([]);
 
   const activeOperationId = useAppStore((s) => s.activeOperationId);
   const selectionMode = useAppStore((s) => s.selectionMode);
@@ -51,12 +61,20 @@ function StlMesh({ url }: StlMeshProps) {
     return geo;
   }, [geometry]);
 
+  const meshIndex = useMemo(() => getMeshIndex(processedGeometry), [processedGeometry]);
   const faceCount = useMemo(() => getFaceCount(processedGeometry), [processedGeometry]);
+
+  const selectionStrategy = useMemo(
+    () => (activeOperationType ? getSelectionStrategy(activeOperationType) : 'region'),
+    [activeOperationType]
+  );
 
   const selectedFaces = useMemo(
     () => new Set(activeGeometry?.faceIndices ?? []),
     [activeGeometry]
   );
+
+  const selectedLoops = activeGeometry?.loops ?? [];
 
   const selectedColor = useMemo(
     () =>
@@ -66,89 +84,132 @@ function StlMesh({ url }: StlMeshProps) {
     [activeOperationType]
   );
 
+  const hoveredFaceSet = useMemo(() => new Set(hoveredFaces), [hoveredFaces]);
+
   useEffect(() => {
     const colorAttr = processedGeometry.getAttribute('color') as THREE.BufferAttribute;
     colorAttrRef.current = colorAttr;
 
-    if (selectedFaces.size === 0 && hoveredFace === null) {
-      repaintFaceColors(colorAttr.array as Float32Array, faceCount, new Set(), null);
-    } else {
-      repaintFaceColors(
-        colorAttr.array as Float32Array,
-        faceCount,
-        selectedFaces,
-        selectionMode ? hoveredFace : null,
-        selectedColor
-      );
-    }
+    repaintFaceColors(
+      colorAttr.array as Float32Array,
+      faceCount,
+      selectedFaces,
+      selectionMode ? hoveredFaceSet : new Set(),
+      selectedColor
+    );
     colorAttr.needsUpdate = true;
-  }, [processedGeometry, faceCount, selectedFaces, hoveredFace, selectionMode, selectedColor]);
+  }, [
+    processedGeometry,
+    faceCount,
+    selectedFaces,
+    hoveredFaceSet,
+    selectionMode,
+    selectedColor,
+  ]);
+
+  const previewGroup = useCallback(
+    (faceIndex: number | null) => {
+      if (faceIndex === null) {
+        return { faceIndices: [] as number[], loops: [] as LoopPoint[][] };
+      }
+      return meshIndex.getSelectionGroup(faceIndex, selectionStrategy);
+    },
+    [meshIndex, selectionStrategy]
+  );
 
   const handlePointerMove = useCallback(
     (event: { stopPropagation: () => void; faceIndex?: number }) => {
       if (!selectionMode) return;
       event.stopPropagation();
       const faceIndex = event.faceIndex ?? null;
-      setHoveredFace((prev) => (prev === faceIndex ? prev : faceIndex));
+      const group = previewGroup(faceIndex);
+      setHoveredFaces(group.faceIndices);
+      setHoveredLoops(group.loops);
     },
-    [selectionMode]
+    [selectionMode, previewGroup]
   );
 
   const handlePointerOut = useCallback(() => {
-    setHoveredFace(null);
+    setHoveredFaces([]);
+    setHoveredLoops([]);
   }, []);
 
   const handleClick = useCallback(
-    (event: {
-      stopPropagation: () => void;
-      faceIndex?: number;
-      face?: { a: number; b: number; c: number };
-    }) => {
+    (event: { stopPropagation: () => void; faceIndex?: number }) => {
       if (!selectionMode || !activeOperationId) return;
       event.stopPropagation();
 
       const faceIndex = event.faceIndex ?? 0;
-      const face = event.face;
-      const newVertices = face
-        ? [face.a, face.b, face.c]
-        : [faceIndex * 3, faceIndex * 3 + 1, faceIndex * 3 + 2];
+      const group = meshIndex.getSelectionGroup(faceIndex, selectionStrategy);
 
       const op = useAppStore.getState().operations.find((o) => o.id === activeOperationId);
       const existing = op?.geometry;
-      const isSelected = existing?.faceIndices.includes(faceIndex) ?? false;
 
-      const faceIndices = isSelected
-        ? existing!.faceIndices.filter((i) => i !== faceIndex)
-        : [...(existing?.faceIndices ?? []), faceIndex];
-      const vertexIndices = isSelected
-        ? (existing?.vertexIndices ?? []).filter((v) => !newVertices.includes(v))
-        : [...(existing?.vertexIndices ?? []), ...newVertices];
+      if (existing && isGroupSelected(existing.faceIndices, group.faceIndices)) {
+        const { faceIndices, loops } = removeGroupFromSelection(
+          existing.faceIndices,
+          existing.loops,
+          group.faceIndices,
+          group.loops
+        );
+        const vertexIndices = collectVertexIndices(meshIndex, faceIndices);
+        setOperationGeometry(
+          activeOperationId,
+          faceIndices.length > 0 ? { faceIndices, vertexIndices, loops } : null
+        );
+        return;
+      }
 
-      setOperationGeometry(
-        activeOperationId,
-        faceIndices.length > 0 ? { faceIndices, vertexIndices } : null
-      );
+      const faceIndices = [...new Set([...(existing?.faceIndices ?? []), ...group.faceIndices])];
+      const loops =
+        selectionStrategy === 'outline-loop'
+          ? mergeLoops(existing?.loops, group.loops)
+          : existing?.loops;
+      const vertexIndices = collectVertexIndices(meshIndex, faceIndices);
+
+      setOperationGeometry(activeOperationId, {
+        faceIndices,
+        vertexIndices,
+        loops,
+      });
     },
-    [selectionMode, activeOperationId, setOperationGeometry]
+    [selectionMode, activeOperationId, meshIndex, selectionStrategy, setOperationGeometry]
   );
+
+  const accentColor = activeOperationType
+    ? OPERATION_COLORS[activeOperationType]
+    : '#3b82f6';
 
   return (
     <Center>
-      <mesh
-        ref={meshRef}
-        geometry={processedGeometry}
-        onPointerMove={handlePointerMove}
-        onPointerOut={handlePointerOut}
-        onClick={handleClick}
-        rotation={[-Math.PI / 2, 0, 0]}
-      >
-        <meshStandardMaterial
-          vertexColors
-          metalness={0.25}
-          roughness={0.55}
-          side={THREE.DoubleSide}
-        />
-      </mesh>
+      <group rotation={[-Math.PI / 2, 0, 0]}>
+        <mesh
+          ref={meshRef}
+          geometry={processedGeometry}
+          onPointerMove={handlePointerMove}
+          onPointerOut={handlePointerOut}
+          onClick={handleClick}
+        >
+          <meshStandardMaterial
+            vertexColors
+            metalness={0.25}
+            roughness={0.55}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+
+        {selectionMode && hoveredLoops.length > 0 && (
+          <SelectionLoopLines loops={hoveredLoops} color="#93c5fd" opacity={0.85} />
+        )}
+
+        {!selectionMode && selectedLoops.length > 0 && (
+          <SelectionLoopLines loops={selectedLoops} color={accentColor} opacity={1} />
+        )}
+
+        {selectionMode && selectedLoops.length > 0 && (
+          <SelectionLoopLines loops={selectedLoops} color={accentColor} opacity={1} />
+        )}
+      </group>
     </Center>
   );
 }
@@ -214,6 +275,21 @@ function SceneContent() {
 export function StlViewer() {
   const stlUrl = useAppStore((s) => s.stlUrl);
   const selectionMode = useAppStore((s) => s.selectionMode);
+  const activeOperationType = useAppStore((s) => {
+    const id = s.activeOperationId;
+    if (!id) return null;
+    return s.operations.find((o) => o.id === id)?.type ?? null;
+  });
+
+  const selectionStrategy = useMemo(
+    () => (activeOperationType ? getSelectionStrategy(activeOperationType) : 'region'),
+    [activeOperationType]
+  );
+
+  const selectionHint =
+    selectionStrategy === 'outline-loop'
+      ? 'Click a surface to select its outline loop — click again to deselect — right-drag to orbit'
+      : 'Click a surface to select the whole face — click again to deselect — right-drag to orbit';
 
   return (
     <div className={`stl-viewer ${selectionMode ? 'selection-active' : ''}`}>
@@ -228,11 +304,7 @@ export function StlViewer() {
       >
         <SceneContent />
       </Canvas>
-      {selectionMode && (
-        <div className="selection-hint">
-          Hover to preview faces — click to select/deselect — right-drag to orbit
-        </div>
-      )}
+      {selectionMode && <div className="selection-hint">{selectionHint}</div>}
     </div>
   );
 }

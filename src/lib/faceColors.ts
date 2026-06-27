@@ -46,7 +46,7 @@ export function repaintFaceColors(
   colors: Float32Array,
   faceCount: number,
   selectedFaces: ReadonlySet<number>,
-  hoveredFace: number | null,
+  hoveredFaces: ReadonlySet<number>,
   selectedColor: THREE.Color = FACE_COLORS.selected
 ): void {
   for (let faceIndex = 0; faceIndex < faceCount; faceIndex++) {
@@ -54,9 +54,9 @@ export function repaintFaceColors(
       paintFace(
         colors,
         faceIndex,
-        faceIndex === hoveredFace ? FACE_COLORS.hoverSelected : selectedColor
+        hoveredFaces.has(faceIndex) ? FACE_COLORS.hoverSelected : selectedColor
       );
-    } else if (faceIndex === hoveredFace) {
+    } else if (hoveredFaces.has(faceIndex)) {
       paintFace(colors, faceIndex, FACE_COLORS.hover);
     } else {
       paintFace(colors, faceIndex, FACE_COLORS.base);

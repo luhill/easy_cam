@@ -1,4 +1,5 @@
 import type { Operation, ToolpathPoint, ToolpathSegment } from '../types/operations';
+import type { LoopPoint } from '../types/operations';
 import { OPERATION_COLORS } from '../types/operations';
 
 function getBounds(geometry: Operation['geometry']): {
@@ -7,6 +8,21 @@ function getBounds(geometry: Operation['geometry']): {
   minY: number;
   maxY: number;
 } {
+  if (geometry?.loops && geometry.loops.length > 0) {
+    const loop = geometry.loops[0];
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const p of loop) {
+      minX = Math.min(minX, p.x);
+      maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y);
+      maxY = Math.max(maxY, p.y);
+    }
+    return { minX, maxX, minY, maxY };
+  }
+
   if (!geometry || geometry.vertexIndices.length === 0) {
     return { minX: -25, maxX: 25, minY: -25, maxY: 25 };
   }
@@ -21,8 +37,40 @@ function getBounds(geometry: Operation['geometry']): {
   };
 }
 
+function loopToToolpathPoints(
+  loop: LoopPoint[],
+  settings: Operation['settings']
+): ToolpathPoint[] {
+  const z = -settings.depth;
+  const clearance = settings.clearance;
+  const points: ToolpathPoint[] = [];
+
+  if (loop.length === 0) return points;
+
+  const start = loop[0];
+  points.push({ x: start.x, y: start.y, z: clearance, rapid: true });
+  points.push({ x: start.x, y: start.y, z: 0 });
+
+  let currentZ = 0;
+  while (currentZ > z) {
+    currentZ = Math.max(currentZ - settings.stepDown, z);
+    for (const p of loop) {
+      points.push({ x: p.x, y: p.y, z: currentZ });
+    }
+    points.push({ x: loop[0].x, y: loop[0].y, z: currentZ });
+  }
+
+  points.push({ x: start.x, y: start.y, z: clearance, rapid: true });
+  return points;
+}
+
 function generateOutlinePath(op: Operation): ToolpathPoint[] {
   const { settings, geometry } = op;
+
+  if (geometry?.loops && geometry.loops.length > 0) {
+    return loopToToolpathPoints(geometry.loops[0], settings);
+  }
+
   const { minX, maxX, minY, maxY } = getBounds(geometry);
   const z = -settings.depth;
   const clearance = settings.clearance;
