@@ -22,30 +22,30 @@ export interface ProcessedMesh {
   defaultToolOrigin: ToolOrigin;
 }
 
-/** Scale, center XY, place top of part at Z=0 (Z+ up, cuts go negative). */
-export function processStlGeometry(source: THREE.BufferGeometry): ProcessedMesh {
-  const geo = source.clone();
-  geo.computeVertexNormals();
-  geo.computeBoundingBox();
+export function boundsFromGeometry(geometry: THREE.BufferGeometry): PartBounds {
+  geometry.computeBoundingBox();
+  const box = geometry.boundingBox!;
+  return {
+    minX: box.min.x,
+    maxX: box.max.x,
+    minY: box.min.y,
+    maxY: box.max.y,
+    minZ: box.min.z,
+    maxZ: box.max.z,
+  };
+}
 
+/** Center XY footprint and place bottom of part at Z = 0. */
+export function finalizePartPlacement(geometry: THREE.BufferGeometry): ProcessedMesh {
+  const geo = geometry;
+  geo.computeBoundingBox();
   const box = geo.boundingBox!;
-  const size = new THREE.Vector3();
-  box.getSize(size);
-  const maxDim = Math.max(size.x, size.y, size.z);
-  const scale = maxDim > 0 ? 50 / maxDim : 1;
-  geo.scale(scale, scale, scale);
-  geo.computeBoundingBox();
-
-  const scaledBox = geo.boundingBox!;
   const center = new THREE.Vector3();
-  scaledBox.getCenter(center);
-
-  // Center XY footprint; top surface at Z = 0
-  geo.translate(-center.x, -center.y, -scaledBox.max.z);
-
+  box.getCenter(center);
+  geo.translate(-center.x, -center.y, -box.min.z);
   geo.computeBoundingBox();
-  const finalBox = geo.boundingBox!;
 
+  const finalBox = geo.boundingBox!;
   const bounds: PartBounds = {
     minX: finalBox.min.x,
     maxX: finalBox.max.x,
@@ -64,17 +64,50 @@ export function processStlGeometry(source: THREE.BufferGeometry): ProcessedMesh 
   return { geometry: geo, bounds, defaultToolOrigin };
 }
 
-export function boundsFromGeometry(geometry: THREE.BufferGeometry): PartBounds {
-  geometry.computeBoundingBox();
-  const box = geometry.boundingBox!;
-  return {
-    minX: box.min.x,
-    maxX: box.max.x,
-    minY: box.min.y,
-    maxY: box.max.y,
-    minZ: box.min.z,
-    maxZ: box.max.z,
-  };
+/** Scale to fit, then bottom at Z=0 (Z+ up, part sits on build plate). */
+export function processStlGeometry(source: THREE.BufferGeometry): ProcessedMesh {
+  const geo = source.clone();
+  geo.computeVertexNormals();
+  geo.computeBoundingBox();
+
+  const box = geo.boundingBox!;
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  const maxDim = Math.max(size.x, size.y, size.z);
+  const scale = maxDim > 0 ? 50 / maxDim : 1;
+  geo.scale(scale, scale, scale);
+
+  return finalizePartPlacement(geo);
+}
+
+/**
+ * Rotate the model so the chosen face rests on the build plate (Z=0).
+ * The face outward normal is aligned to -Z.
+ */
+export function orientFaceToBottom(
+  geometry: THREE.BufferGeometry,
+  faceNormal: THREE.Vector3
+): THREE.BufferGeometry {
+  const geo = geometry.clone();
+  const n = faceNormal.clone().normalize();
+  const plateNormal = new THREE.Vector3(0, 0, -1);
+
+  const q = new THREE.Quaternion();
+  if (n.dot(plateNormal) < 0.999) {
+    q.setFromUnitVectors(n, plateNormal);
+  }
+
+  const positions = geo.getAttribute('position') as THREE.BufferAttribute;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < positions.count; i++) {
+    v.fromBufferAttribute(positions, i);
+    v.applyQuaternion(q);
+    positions.setXYZ(i, v.x, v.y, v.z);
+  }
+  positions.needsUpdate = true;
+  geo.computeVertexNormals();
+
+  return geo;
 }
 
 export function loopCentroid(loop: LoopPoint[]): LoopPoint {

@@ -433,6 +433,18 @@ body {
   outline-offset: -2px;
 }
 
+.part-setup {
+  flex-shrink: 0;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.part-setup-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
 .viewer-axis-hint {
   font-size: 12px;
   color: var(--text-muted);

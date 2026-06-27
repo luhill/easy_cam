@@ -129,7 +129,7 @@ export const DEFAULT_SETTINGS: OperationDefaults = {
   helixPitch: 2,
 };
 
-export type SelectionSubMode = 'geometry' | 'entry-point';
+export type SelectionSubMode = 'geometry' | 'entry-point' | 'bottom-face';
 
 export const OPERATION_COLORS: Record<OperationType, string> = {
   outline: '#3b82f6',

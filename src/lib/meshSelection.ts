@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import type { LoopPoint, OperationType, SelectionStrategy } from '../types/operations';
-import { loopArea2D, pointInPolygon2D } from './geometryProcessing';
+import { loopArea2D, pointInPolygon2D, boundsFromGeometry } from './geometryProcessing';
 import {
   classifyRegionKind,
+  effectiveOutlineLoop,
   isHoleSelectable,
   isHoleSelectableForOperation,
   isRegionSelectableForOperation,
@@ -10,8 +11,8 @@ import {
 
 const POSITION_PRECISION = 4;
 const COPLANAR_DOT_THRESHOLD = Math.cos((2 * Math.PI) / 180);
-const CIRCLE_TOLERANCE = 0.12;
-const MIN_HOLE_POINTS = 8;
+const CIRCLE_TOLERANCE = 0.18;
+const MIN_HOLE_POINTS = 6;
 
 export type RegionKind = 'top' | 'bottom' | 'side' | 'unknown';
 
@@ -67,6 +68,28 @@ function getFaceVertex(
 
 function toLoopPoint(v: THREE.Vector3): LoopPoint {
   return { x: v.x, y: v.y, z: v.z };
+}
+
+function regionCentroid(
+  faceIndices: number[],
+  positions: THREE.BufferAttribute
+): LoopPoint {
+  let x = 0;
+  let y = 0;
+  let z = 0;
+  let count = 0;
+  const v = new THREE.Vector3();
+  for (const face of faceIndices) {
+    for (let corner = 0; corner < 3; corner++) {
+      getFaceVertex(positions, face, corner, v);
+      x += v.x;
+      y += v.y;
+      z += v.z;
+      count++;
+    }
+  }
+  if (count === 0) return { x: 0, y: 0, z: 0 };
+  return { x: x / count, y: y / count, z: z / count };
 }
 
 function averageNormal(faceIndices: number[], faceNormals: THREE.Vector3[]): THREE.Vector3 {
@@ -224,6 +247,7 @@ export class MeshIndex {
     this.faceToRegion = new Int32Array(this.faceCount).fill(-1);
     this.regions = [];
     const visited = new Uint8Array(this.faceCount);
+    const bounds = boundsFromGeometry(geometry);
 
     for (let startFace = 0; startFace < this.faceCount; startFace++) {
       if (visited[startFace]) continue;
@@ -232,7 +256,8 @@ export class MeshIndex {
       const regionId = this.regions.length;
       const loops = this.computeBoundaryLoops(faceIndices);
       const normal = averageNormal(faceIndices, faceNormals);
-      const kind = classifyRegionKind(normal);
+      const centroid = regionCentroid(faceIndices, this.positions);
+      const kind = classifyRegionKind(normal, centroid, bounds);
       const { outerLoop, innerLoops } = classifyLoops(loops);
 
       for (const face of faceIndices) {
@@ -342,11 +367,26 @@ export class MeshIndex {
     if (!isHoleSelectableForOperation(operationType)) return null;
 
     for (const hole of this.holes) {
-      if (pointInPolygon2D(x, y, hole.loop) && isHoleSelectable(operationType, hole)) {
+      if (
+        (pointInPolygon2D(x, y, hole.loop) ||
+          Math.hypot(x - hole.center.x, y - hole.center.y) <= hole.radius * 1.15) &&
+        isHoleSelectable(operationType, hole)
+      ) {
         return hole;
       }
     }
-    return null;
+
+    let nearest: HoleFeature | null = null;
+    let nearestDist = Infinity;
+    for (const hole of this.holes) {
+      if (!isHoleSelectable(operationType, hole)) continue;
+      const d = Math.hypot(x - hole.center.x, y - hole.center.y);
+      if (d <= hole.radius * 1.5 && d < nearestDist) {
+        nearest = hole;
+        nearestDist = d;
+      }
+    }
+    return nearest;
   }
 
   resolveSelection(
@@ -372,17 +412,18 @@ export class MeshIndex {
 
     if (!isRegionSelectableForOperation(operationType, region)) return null;
 
+    const outline = effectiveOutlineLoop(region);
     const loops =
       operationType === 'outline' || operationType === 'adaptive-outline'
-        ? region.outerLoop
-          ? [region.outerLoop]
+        ? outline
+          ? [outline]
           : []
         : region.loops;
 
     return {
       faceIndices: region.faceIndices,
       loops,
-      outerLoop: region.outerLoop,
+      outerLoop: outline,
     };
   }
 
@@ -406,6 +447,12 @@ export class MeshIndex {
 }
 
 const meshIndexCache = new WeakMap<THREE.BufferGeometry, MeshIndex>();
+
+export function clearMeshIndexCache(geometry?: THREE.BufferGeometry): void {
+  if (geometry) {
+    meshIndexCache.delete(geometry);
+  }
+}
 
 export function getMeshIndex(geometry: THREE.BufferGeometry): MeshIndex {
   let index = meshIndexCache.get(geometry);

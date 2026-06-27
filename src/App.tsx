@@ -3,6 +3,7 @@ import { useAppStore } from './store/useAppStore';
 import { useSettingsStore } from './store/useSettingsStore';
 import { StlViewer } from './components/Viewer/StlViewer';
 import { FileUpload, OperationPalette } from './components/FileUpload';
+import { PartSetup } from './components/PartSetup';
 import { OperationList } from './components/Operations/OperationList';
 import { GcodeSettings } from './components/GcodeSettings';
 import { ToolOriginSettings } from './components/ToolOriginSettings';
@@ -55,6 +56,7 @@ export default function App() {
       <main className="app-main">
         <aside className="sidebar">
           <OperationPalette />
+          <PartSetup />
           <OperationList />
           <ToolOriginSettings />
           <GcodeSettings />

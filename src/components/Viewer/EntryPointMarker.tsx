@@ -3,18 +3,24 @@ import { Line } from '@react-three/drei';
 
 interface EntryPointMarkerProps {
   point: { x: number; y: number };
+  topZ?: number;
   color?: string;
 }
 
-export function EntryPointMarker({ point, color = '#f59e0b' }: EntryPointMarkerProps) {
+export function EntryPointMarker({
+  point,
+  topZ = 0,
+  color = '#f59e0b',
+}: EntryPointMarkerProps) {
+  const z = topZ + 0.05;
   const cross = useMemo(
     () => [
-      [point.x - 2, point.y, 0] as [number, number, number],
-      [point.x + 2, point.y, 0] as [number, number, number],
-      [point.x, point.y - 2, 0] as [number, number, number],
-      [point.x, point.y + 2, 0] as [number, number, number],
+      [point.x - 2, point.y, z] as [number, number, number],
+      [point.x + 2, point.y, z] as [number, number, number],
+      [point.x, point.y - 2, z] as [number, number, number],
+      [point.x, point.y + 2, z] as [number, number, number],
     ],
-    [point.x, point.y]
+    [point.x, point.y, z]
   );
 
   return (
@@ -29,10 +35,12 @@ export function StockTopPlane({
   onPick,
   active,
   bounds,
+  topZ = 0,
 }: {
   onPick: (x: number, y: number) => void;
   active: boolean;
   bounds: { minX: number; maxX: number; minY: number; maxY: number };
+  topZ?: number;
 }) {
   if (!active) return null;
 
@@ -44,8 +52,7 @@ export function StockTopPlane({
 
   return (
     <mesh
-      position={[cx, cy, 0.01]}
-      rotation={[0, 0, 0]}
+      position={[cx, cy, topZ + 0.02]}
       onClick={(e) => {
         e.stopPropagation();
         onPick(e.point.x, e.point.y);

@@ -13,9 +13,15 @@ import {
   getFaceCount,
   hexToThreeColor,
 } from '../../lib/faceColors';
-import { processStlGeometry, type PartBounds } from '../../lib/geometryProcessing';
+import {
+  finalizePartPlacement,
+  orientFaceToBottom,
+  processStlGeometry,
+  type ProcessedMesh,
+} from '../../lib/geometryProcessing';
 import { getSelectionHint } from '../../lib/selectionRules';
 import {
+  clearMeshIndexCache,
   collectVertexIndices,
   getMeshIndex,
   isGroupSelected,
@@ -30,18 +36,22 @@ import { ToolOriginMarker } from './ToolOriginMarker';
 import { EntryPointMarker, StockTopPlane } from './EntryPointMarker';
 
 interface StlMeshProps {
-  url: string;
+  processedMesh: ProcessedMesh;
+  meshKey: number;
+  onMeshUpdate: (mesh: ProcessedMesh) => void;
   onIndexReady: (ready: boolean, regionCount?: number) => void;
-  onBoundsReady: (bounds: PartBounds) => void;
 }
 
-function StlMesh({ url, onIndexReady, onBoundsReady }: StlMeshProps) {
-  const geometry = useLoader(STLLoader, url);
-
+function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMeshProps) {
   const activeOperationId = useAppStore((s) => s.activeOperationId);
   const selectionMode = useAppStore((s) => s.selectionMode);
   const selectionSubMode = useAppStore((s) => s.selectionSubMode);
   const setSelectionSubMode = useAppStore((s) => s.setSelectionSubMode);
+  const setSelectionMode = useAppStore((s) => s.setSelectionMode);
+  const setPartBounds = useAppStore((s) => s.setPartBounds);
+  const setToolOriginFromBounds = useSettingsStore((s) => s.setToolOriginFromBounds);
+  const regenerateToolpaths = useAppStore((s) => s.regenerateToolpaths);
+
   const activeGeometry = useAppStore((s) => {
     if (!s.activeOperationId) return null;
     return s.operations.find((o) => o.id === s.activeOperationId)?.geometry ?? null;
@@ -53,14 +63,8 @@ function StlMesh({ url, onIndexReady, onBoundsReady }: StlMeshProps) {
   const setOperationGeometry = useAppStore((s) => s.setOperationGeometry);
   const updateOperation = useAppStore((s) => s.updateOperation);
 
-  const processed = useMemo(() => {
-    const result = processStlGeometry(geometry);
-    createFaceColorAttribute(result.geometry);
-    return result;
-  }, [geometry]);
-
-  const processedGeometry = processed.geometry;
-  const partBounds = processed.bounds;
+  const processedGeometry = processedMesh.geometry;
+  const partBounds = processedMesh.bounds;
 
   const faceCount = useMemo(() => getFaceCount(processedGeometry), [processedGeometry]);
 
@@ -94,8 +98,9 @@ function StlMesh({ url, onIndexReady, onBoundsReady }: StlMeshProps) {
   selectedColorRef.current = selectedColor;
 
   useEffect(() => {
-    onBoundsReady(partBounds);
-  }, [partBounds, onBoundsReady]);
+    setPartBounds(partBounds);
+    setToolOriginFromBounds(partBounds);
+  }, [partBounds, setPartBounds, setToolOriginFromBounds]);
 
   useEffect(() => {
     onIndexReady(false);
@@ -112,7 +117,7 @@ function StlMesh({ url, onIndexReady, onBoundsReady }: StlMeshProps) {
     }, 0);
 
     return () => window.clearTimeout(timeout);
-  }, [processedGeometry, faceCount, onIndexReady]);
+  }, [processedGeometry, faceCount, meshKey, onIndexReady]);
 
   useEffect(() => {
     const colorManager = colorManagerRef.current;
@@ -130,27 +135,37 @@ function StlMesh({ url, onIndexReady, onBoundsReady }: StlMeshProps) {
   const resolveHoverGroup = useCallback(
     (faceIndex: number | null, point: THREE.Vector3 | null): SelectionGroup | null => {
       const meshIndex = meshIndexRef.current;
-      if (!meshIndex || !activeOperationType || faceIndex === null) return null;
+      if (!meshIndex || faceIndex === null) return null;
+
+      if (selectionSubMode === 'bottom-face') {
+        const region = meshIndex.getRegion(faceIndex);
+        if (!region) return null;
+        return { faceIndices: region.faceIndices, loops: region.loops, outerLoop: region.outerLoop };
+      }
+
+      if (!activeOperationType) return null;
       return meshIndex.resolveSelection(faceIndex, activeOperationType, point ?? undefined);
     },
-    [activeOperationType]
+    [activeOperationType, selectionSubMode]
   );
+
+  const lastHoverKeyRef = useRef('');
 
   const applyHover = useCallback(
     (faceIndex: number | null, point: THREE.Vector3 | null) => {
       const meshIndex = meshIndexRef.current;
       const colorManager = colorManagerRef.current;
       const colorAttr = colorAttrRef.current;
-      if (!meshIndex || !colorManager || !colorAttr || !activeOperationType) return;
+      if (!meshIndex || !colorManager || !colorAttr) return;
 
       const group = resolveHoverGroup(faceIndex, point);
-      const regionId =
-        faceIndex !== null && group ? meshIndex.getRegionId(faceIndex) : -1;
+      const nextFaces = group?.faceIndices ?? [];
+      const hoverKey = `${faceIndex}:${nextFaces.length}:${selectionSubMode}`;
 
-      if (regionId === hoveredRegionIdRef.current && group) return;
+      if (hoverKey === lastHoverKeyRef.current) return;
+      lastHoverKeyRef.current = hoverKey;
 
       const prevFaces = prevHoveredFacesRef.current;
-      const nextFaces = group?.faceIndices ?? [];
 
       colorManager.updateHoverRegion(
         prevFaces,
@@ -160,21 +175,12 @@ function StlMesh({ url, onIndexReady, onBoundsReady }: StlMeshProps) {
       );
       colorAttr.needsUpdate = true;
 
-      hoveredRegionIdRef.current = regionId;
+      hoveredRegionIdRef.current = faceIndex !== null ? meshIndex.getRegionId(faceIndex) : -1;
       prevHoveredFacesRef.current = nextFaces;
 
-      if (
-        group &&
-        (activeOperationType === 'outline' || activeOperationType === 'adaptive-outline')
-      ) {
-        setHoveredLoops(group.loops);
-      } else if (group && group.loops.length > 0) {
-        setHoveredLoops(group.loops);
-      } else {
-        setHoveredLoops([]);
-      }
+      setHoveredLoops(group && group.loops.length > 0 ? group.loops : []);
     },
-    [activeOperationType, resolveHoverGroup]
+    [resolveHoverGroup, selectionSubMode]
   );
 
   const scheduleHover = useCallback(
@@ -198,14 +204,12 @@ function StlMesh({ url, onIndexReady, onBoundsReady }: StlMeshProps) {
   }, []);
 
   useEffect(() => {
-    if (!selectionMode) {
-      scheduleHover(null, null);
-    }
+    if (!selectionMode) scheduleHover(null, null);
   }, [selectionMode, scheduleHover]);
 
   const handlePointerMove = useCallback(
     (event: { stopPropagation: () => void; faceIndex?: number; point: THREE.Vector3 }) => {
-      if (!selectionMode || selectionSubMode !== 'geometry') return;
+      if (!selectionMode || selectionSubMode === 'entry-point') return;
       event.stopPropagation();
       scheduleHover(event.faceIndex ?? null, event.point);
     },
@@ -213,9 +217,38 @@ function StlMesh({ url, onIndexReady, onBoundsReady }: StlMeshProps) {
   );
 
   const handlePointerOut = useCallback(() => {
-    if (!selectionMode || selectionSubMode !== 'geometry') return;
+    if (!selectionMode || selectionSubMode === 'entry-point') return;
     scheduleHover(null, null);
   }, [selectionMode, selectionSubMode, scheduleHover]);
+
+  const applyBottomFace = useCallback(
+    (faceIndex: number) => {
+      const meshIndex = meshIndexRef.current;
+      if (!meshIndex) return;
+
+      const region = meshIndex.getRegion(faceIndex);
+      if (!region) return;
+
+      clearMeshIndexCache(processedGeometry);
+
+      const normal = new THREE.Vector3(region.normal.x, region.normal.y, region.normal.z);
+      const rotated = orientFaceToBottom(processedGeometry, normal);
+      const newMesh = finalizePartPlacement(rotated);
+      createFaceColorAttribute(newMesh.geometry);
+
+      onMeshUpdate(newMesh);
+      setSelectionMode(false);
+      setSelectionSubMode('geometry');
+      regenerateToolpaths();
+    },
+    [
+      processedGeometry,
+      onMeshUpdate,
+      setSelectionMode,
+      setSelectionSubMode,
+      regenerateToolpaths,
+    ]
+  );
 
   const applyGeometrySelection = useCallback(
     (group: SelectionGroup, operationType: OperationType) => {
@@ -276,12 +309,18 @@ function StlMesh({ url, onIndexReady, onBoundsReady }: StlMeshProps) {
 
   const handleClick = useCallback(
     (event: { stopPropagation: () => void; faceIndex?: number; point: THREE.Vector3 }) => {
-      if (!selectionMode || !activeOperationId || !meshIndexRef.current || !activeOperationType)
-        return;
-      if (selectionSubMode !== 'geometry') return;
+      if (!selectionMode || !meshIndexRef.current) return;
       event.stopPropagation();
 
       const faceIndex = event.faceIndex ?? 0;
+
+      if (selectionSubMode === 'bottom-face') {
+        applyBottomFace(faceIndex);
+        return;
+      }
+
+      if (selectionSubMode !== 'geometry' || !activeOperationId || !activeOperationType) return;
+
       const group = meshIndexRef.current.resolveSelection(
         faceIndex,
         activeOperationType,
@@ -291,7 +330,14 @@ function StlMesh({ url, onIndexReady, onBoundsReady }: StlMeshProps) {
 
       applyGeometrySelection(group, activeOperationType);
     },
-    [selectionMode, selectionSubMode, activeOperationId, activeOperationType, applyGeometrySelection]
+    [
+      selectionMode,
+      selectionSubMode,
+      activeOperationId,
+      activeOperationType,
+      applyBottomFace,
+      applyGeometrySelection,
+    ]
   );
 
   const handleEntryPick = useCallback(
@@ -332,6 +378,7 @@ function StlMesh({ url, onIndexReady, onBoundsReady }: StlMeshProps) {
       <StockTopPlane
         active={selectionMode && selectionSubMode === 'entry-point'}
         bounds={partBounds}
+        topZ={partBounds.maxZ}
         onPick={handleEntryPick}
       />
 
@@ -343,17 +390,50 @@ function StlMesh({ url, onIndexReady, onBoundsReady }: StlMeshProps) {
         <SelectionLoopLines loops={selectedLoops} color={accentColor} opacity={1} />
       )}
 
-      {entryPoint && <EntryPointMarker point={entryPoint} />}
+      {entryPoint && <EntryPointMarker point={entryPoint} topZ={partBounds.maxZ} />}
     </>
+  );
+}
+
+function LoadedStl({
+  url,
+  onIndexReady,
+}: {
+  url: string;
+  onIndexReady: (ready: boolean, regionCount?: number) => void;
+}) {
+  const rawGeometry = useLoader(STLLoader, url);
+  const [processedMesh, setProcessedMesh] = useState<ProcessedMesh | null>(null);
+  const [meshKey, setMeshKey] = useState(0);
+
+  useEffect(() => {
+    const mesh = processStlGeometry(rawGeometry);
+    createFaceColorAttribute(mesh.geometry);
+    setProcessedMesh(mesh);
+    setMeshKey((k) => k + 1);
+  }, [rawGeometry]);
+
+  const handleMeshUpdate = useCallback((mesh: ProcessedMesh) => {
+    setProcessedMesh(mesh);
+    setMeshKey((k) => k + 1);
+  }, []);
+
+  if (!processedMesh) return null;
+
+  return (
+    <StlMesh
+      processedMesh={processedMesh}
+      meshKey={meshKey}
+      onMeshUpdate={handleMeshUpdate}
+      onIndexReady={onIndexReady}
+    />
   );
 }
 
 function SceneContent({
   onIndexReady,
-  onBoundsReady,
 }: {
   onIndexReady: (ready: boolean, regionCount?: number) => void;
-  onBoundsReady: (bounds: PartBounds) => void;
 }) {
   const stlUrl = useAppStore((s) => s.stlUrl);
   const toolpaths = useAppStore((s) => s.toolpaths);
@@ -394,7 +474,7 @@ function SceneContent({
       />
       {stlUrl && (
         <Suspense fallback={null}>
-          <StlMesh url={stlUrl} onIndexReady={onIndexReady} onBoundsReady={onBoundsReady} />
+          <LoadedStl url={stlUrl} onIndexReady={onIndexReady} />
         </Suspense>
       )}
       <ToolpathLines segments={visiblePaths} />
@@ -426,8 +506,6 @@ export function StlViewer() {
     return s.operations.find((o) => o.id === id)?.type ?? null;
   });
 
-  const setToolOriginFromBounds = useSettingsStore((s) => s.setToolOriginFromBounds);
-
   const [indexStatus, setIndexStatus] = useState<{ ready: boolean; regions?: number }>({
     ready: false,
   });
@@ -436,13 +514,6 @@ export function StlViewer() {
     setIndexStatus({ ready, regions: regionCount });
   }, []);
 
-  const handleBoundsReady = useCallback(
-    (bounds: PartBounds) => {
-      setToolOriginFromBounds(bounds);
-    },
-    [setToolOriginFromBounds]
-  );
-
   const selectionHint = getSelectionHint(activeOperationType, selectionSubMode);
 
   return (
@@ -450,7 +521,7 @@ export function StlViewer() {
       {!stlUrl && (
         <div className="viewer-placeholder">
           <p>Upload an STL file to begin</p>
-          <p className="viewer-axis-hint">Z+ up · XY work plane · cuts into −Z</p>
+          <p className="viewer-axis-hint">Z+ up · build plate at Z=0 · top of part at +Z</p>
         </div>
       )}
       {stlUrl && !indexStatus.ready && (
@@ -462,7 +533,7 @@ export function StlViewer() {
         camera={{ fov: 45, near: 0.1, far: 1000, position: [60, -60, 60], up: [0, 0, 1] }}
         style={{ background: '#0f1115', cursor: selectionMode ? 'crosshair' : 'default' }}
       >
-        <SceneContent onIndexReady={handleIndexReady} onBoundsReady={handleBoundsReady} />
+        <SceneContent onIndexReady={handleIndexReady} />
       </Canvas>
       {selectionMode && indexStatus.ready && (
         <div className="selection-hint">{selectionHint} — right-drag to orbit</div>

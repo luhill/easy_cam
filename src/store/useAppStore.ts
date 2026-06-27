@@ -7,6 +7,7 @@ import type {
   SelectionSubMode,
   ToolpathSegment,
 } from '../types/operations';
+import type { PartBounds } from '../lib/geometryProcessing';
 import {
   DEFAULT_SETTINGS,
   getOperationLabel,
@@ -20,6 +21,7 @@ interface AppState {
   activeOperationId: string | null;
   selectionMode: boolean;
   selectionSubMode: SelectionSubMode;
+  partBounds: PartBounds | null;
   toolpaths: ToolpathSegment[];
 
   setStlFile: (file: File) => void;
@@ -39,6 +41,7 @@ interface AppState {
   toggleOperationEnabled: (id: string) => void;
   toggleOperationVisible: (id: string) => void;
   toggleOperationCollapsed: (id: string) => void;
+  setPartBounds: (bounds: PartBounds | null) => void;
   regenerateToolpaths: () => void;
 }
 
@@ -49,13 +52,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeOperationId: null,
   selectionMode: false,
   selectionSubMode: 'geometry',
+  partBounds: null,
   toolpaths: [],
 
   setStlFile: (file) => {
     const prev = get().stlUrl;
     if (prev) URL.revokeObjectURL(prev);
     const url = URL.createObjectURL(file);
-    set({ stlFile: file, stlUrl: url, operations: [], toolpaths: [] });
+    set({ stlFile: file, stlUrl: url, operations: [], toolpaths: [], partBounds: null });
   },
 
   clearStl: () => {
@@ -66,6 +70,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       stlUrl: null,
       operations: [],
       toolpaths: [],
+      partBounds: null,
       activeOperationId: null,
     });
   },
@@ -166,9 +171,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
 
+  setPartBounds: (bounds) => set({ partBounds: bounds }),
+
   regenerateToolpaths: () => {
-    const { operations } = get();
-    const toolpaths = generateToolpaths(operations);
+    const { operations, partBounds } = get();
+    const toolpaths = generateToolpaths(operations, partBounds);
     set({ toolpaths });
   },
 }));

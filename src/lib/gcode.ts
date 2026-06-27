@@ -93,8 +93,7 @@ export function generateGcode(
       if (pt.rapid) {
         lines.push(`G0 X${x.toFixed(3)} Y${y.toFixed(3)} Z${z.toFixed(3)}`);
       } else {
-        const isPlunge = z < 0;
-        const feed = isPlunge ? settings.plungeRate : settings.feedRate;
+        const feed = settings.feedRate;
         lines.push(`G1 X${x.toFixed(3)} Y${y.toFixed(3)} Z${z.toFixed(3)} F${feed}`);
       }
     }
