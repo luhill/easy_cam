@@ -1,4 +1,5 @@
 import type { GcodeTemplates } from '../store/useSettingsStore';
+import type { ToolOrigin } from './geometryProcessing';
 import type { Operation, ToolpathSegment } from '../types/operations';
 
 export interface GcodeTemplateVars {
@@ -29,7 +30,8 @@ export function applyGcodeTemplate(
 export function generateGcode(
   operations: Operation[],
   toolpaths: ToolpathSegment[],
-  templates: GcodeTemplates
+  templates: GcodeTemplates,
+  toolOrigin: ToolOrigin = { x: 0, y: 0, z: 0 }
 ): string {
   const enabledOps = operations.filter((op) => op.enabled);
   if (enabledOps.length === 0) {
@@ -85,16 +87,15 @@ export function generateGcode(
     lines.push(`G0 Z${settings.clearance.toFixed(3)} ; safe Z`);
 
     for (const pt of path.points) {
+      const x = pt.x - toolOrigin.x;
+      const y = pt.y - toolOrigin.y;
+      const z = pt.z - toolOrigin.z;
       if (pt.rapid) {
-        lines.push(
-          `G0 X${pt.x.toFixed(3)} Y${pt.y.toFixed(3)} Z${pt.z.toFixed(3)}`
-        );
+        lines.push(`G0 X${x.toFixed(3)} Y${y.toFixed(3)} Z${z.toFixed(3)}`);
       } else {
-        const isPlunge = pt.z < 0;
+        const isPlunge = z < 0;
         const feed = isPlunge ? settings.plungeRate : settings.feedRate;
-        lines.push(
-          `G1 X${pt.x.toFixed(3)} Y${pt.y.toFixed(3)} Z${pt.z.toFixed(3)} F${feed}`
-        );
+        lines.push(`G1 X${x.toFixed(3)} Y${y.toFixed(3)} Z${z.toFixed(3)} F${feed}`);
       }
     }
 

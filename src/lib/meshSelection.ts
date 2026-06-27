@@ -1,18 +1,44 @@
 import * as THREE from 'three';
-import type { LoopPoint, SelectionStrategy } from '../types/operations';
+import type { LoopPoint, OperationType, SelectionStrategy } from '../types/operations';
+import { loopArea2D, pointInPolygon2D } from './geometryProcessing';
+import {
+  classifyRegionKind,
+  isHoleSelectable,
+  isHoleSelectableForOperation,
+  isRegionSelectableForOperation,
+} from './selectionRules';
 
 const POSITION_PRECISION = 4;
-const COPLANAR_DOT_THRESHOLD = Math.cos((2 * Math.PI) / 180); // 2 degrees
+const COPLANAR_DOT_THRESHOLD = Math.cos((2 * Math.PI) / 180);
+const CIRCLE_TOLERANCE = 0.12;
+const MIN_HOLE_POINTS = 8;
+
+export type RegionKind = 'top' | 'bottom' | 'side' | 'unknown';
 
 export interface SelectionGroup {
   faceIndices: number[];
   loops: LoopPoint[][];
+  holeId?: number;
+  outerLoop?: LoopPoint[] | null;
+}
+
+export interface HoleFeature {
+  id: number;
+  center: LoopPoint;
+  radius: number;
+  loop: LoopPoint[];
+  isVertical: boolean;
+  regionId: number;
 }
 
 export interface SelectionRegion {
   id: number;
   faceIndices: number[];
   loops: LoopPoint[][];
+  normal: { x: number; y: number; z: number };
+  kind: RegionKind;
+  outerLoop: LoopPoint[] | null;
+  innerLoops: LoopPoint[][];
 }
 
 function quantize(value: number): string {
@@ -41,6 +67,49 @@ function getFaceVertex(
 
 function toLoopPoint(v: THREE.Vector3): LoopPoint {
   return { x: v.x, y: v.y, z: v.z };
+}
+
+function averageNormal(faceIndices: number[], faceNormals: THREE.Vector3[]): THREE.Vector3 {
+  const n = new THREE.Vector3();
+  for (const f of faceIndices) n.add(faceNormals[f]);
+  return n.lengthSq() > 0 ? n.normalize() : new THREE.Vector3(0, 0, 1);
+}
+
+function fitCircle2D(loop: LoopPoint[]): { center: LoopPoint; radius: number } | null {
+  if (loop.length < MIN_HOLE_POINTS) return null;
+
+  let cx = 0;
+  let cy = 0;
+  let cz = 0;
+  for (const p of loop) {
+    cx += p.x;
+    cy += p.y;
+    cz += p.z;
+  }
+  cx /= loop.length;
+  cy /= loop.length;
+  cz /= loop.length;
+
+  let rSum = 0;
+  let maxDev = 0;
+  for (const p of loop) {
+    const r = Math.hypot(p.x - cx, p.y - cy);
+    rSum += r;
+    maxDev = Math.max(maxDev, Math.abs(r - rSum / loop.length));
+  }
+  const radius = rSum / loop.length;
+  if (radius <= 0 || maxDev / radius > CIRCLE_TOLERANCE) return null;
+
+  return { center: { x: cx, y: cy, z: cz }, radius };
+}
+
+function classifyLoops(loops: LoopPoint[][]): {
+  outerLoop: LoopPoint[] | null;
+  innerLoops: LoopPoint[][];
+} {
+  if (loops.length === 0) return { outerLoop: null, innerLoops: [] };
+  const sorted = [...loops].sort((a, b) => loopArea2D(b) - loopArea2D(a));
+  return { outerLoop: sorted[0], innerLoops: sorted.slice(1) };
 }
 
 function traceLoops(edges: Array<[THREE.Vector3, THREE.Vector3]>): LoopPoint[][] {
@@ -104,42 +173,37 @@ function traceLoops(edges: Array<[THREE.Vector3, THREE.Vector3]>): LoopPoint[][]
     }
   }
 
-  return loops.sort((a, b) => b.length - a.length);
+  return loops;
 }
 
 export class MeshIndex {
   readonly faceCount: number;
   readonly regions: SelectionRegion[];
+  readonly holes: HoleFeature[];
   readonly faceToRegion: Int32Array;
   private readonly edgeToFaces: Map<string, number[]>;
   private readonly positions: THREE.BufferAttribute;
-  private readonly vTemp0 = new THREE.Vector3();
-  private readonly vTemp1 = new THREE.Vector3();
-  private readonly vTemp2 = new THREE.Vector3();
 
   constructor(geometry: THREE.BufferGeometry) {
     this.positions = geometry.getAttribute('position') as THREE.BufferAttribute;
     this.faceCount = this.positions.count / 3;
     this.edgeToFaces = new Map();
+    this.holes = [];
 
     const faceNormals: THREE.Vector3[] = [];
     const adjacency: number[][] = Array.from({ length: this.faceCount }, () => []);
 
     for (let faceIndex = 0; faceIndex < this.faceCount; faceIndex++) {
-      const v0 = getFaceVertex(this.positions, faceIndex, 0, this.vTemp0.clone());
-      const v1 = getFaceVertex(this.positions, faceIndex, 1, this.vTemp1.clone());
-      const v2 = getFaceVertex(this.positions, faceIndex, 2, this.vTemp2.clone());
+      const v0 = getFaceVertex(this.positions, faceIndex, 0, new THREE.Vector3());
+      const v1 = getFaceVertex(this.positions, faceIndex, 1, new THREE.Vector3());
+      const v2 = getFaceVertex(this.positions, faceIndex, 2, new THREE.Vector3());
 
       const normal = new THREE.Vector3()
         .crossVectors(v1.sub(v0), v2.clone().sub(v0))
         .normalize();
       faceNormals.push(normal);
 
-      const verts = [
-        getFaceVertex(this.positions, faceIndex, 0, new THREE.Vector3()),
-        getFaceVertex(this.positions, faceIndex, 1, new THREE.Vector3()),
-        getFaceVertex(this.positions, faceIndex, 2, new THREE.Vector3()),
-      ];
+      const verts = [v0, v1, v2];
       for (let i = 0; i < 3; i++) {
         const key = edgeKey(verts[i], verts[(i + 1) % 3]);
         const faces = this.edgeToFaces.get(key) ?? [];
@@ -167,12 +231,39 @@ export class MeshIndex {
       const faceIndices = this.floodCoplanar(startFace, faceNormals, adjacency, visited);
       const regionId = this.regions.length;
       const loops = this.computeBoundaryLoops(faceIndices);
+      const normal = averageNormal(faceIndices, faceNormals);
+      const kind = classifyRegionKind(normal);
+      const { outerLoop, innerLoops } = classifyLoops(loops);
 
       for (const face of faceIndices) {
         this.faceToRegion[face] = regionId;
       }
 
-      this.regions.push({ id: regionId, faceIndices, loops });
+      this.regions.push({
+        id: regionId,
+        faceIndices,
+        loops,
+        normal: { x: normal.x, y: normal.y, z: normal.z },
+        kind,
+        outerLoop,
+        innerLoops,
+      });
+
+      if (kind === 'top') {
+        for (const inner of innerLoops) {
+          const fit = fitCircle2D(inner);
+          if (fit) {
+            this.holes.push({
+              id: this.holes.length,
+              center: fit.center,
+              radius: fit.radius,
+              loop: inner,
+              isVertical: true,
+              regionId,
+            });
+          }
+        }
+      }
     }
   }
 
@@ -208,15 +299,12 @@ export class MeshIndex {
 
     const faceSet = new Set(faceIndices);
     const boundaryEdges: Array<[THREE.Vector3, THREE.Vector3]> = [];
-    const va = new THREE.Vector3();
-    const vb = new THREE.Vector3();
-    const vc = new THREE.Vector3();
 
     for (const faceIndex of faceIndices) {
       const verts = [
-        getFaceVertex(this.positions, faceIndex, 0, va.clone()),
-        getFaceVertex(this.positions, faceIndex, 1, vb.clone()),
-        getFaceVertex(this.positions, faceIndex, 2, vc.clone()),
+        getFaceVertex(this.positions, faceIndex, 0, new THREE.Vector3()),
+        getFaceVertex(this.positions, faceIndex, 1, new THREE.Vector3()),
+        getFaceVertex(this.positions, faceIndex, 2, new THREE.Vector3()),
       ];
 
       for (let i = 0; i < 3; i++) {
@@ -250,12 +338,65 @@ export class MeshIndex {
     return this.faceToRegion[faceIndex];
   }
 
+  findHoleAtPoint(x: number, y: number, operationType: OperationType): HoleFeature | null {
+    if (!isHoleSelectableForOperation(operationType)) return null;
+
+    for (const hole of this.holes) {
+      if (pointInPolygon2D(x, y, hole.loop) && isHoleSelectable(operationType, hole)) {
+        return hole;
+      }
+    }
+    return null;
+  }
+
+  resolveSelection(
+    faceIndex: number,
+    operationType: OperationType,
+    point?: THREE.Vector3
+  ): SelectionGroup | null {
+    const region = this.getRegion(faceIndex);
+    if (!region) return null;
+
+    if (isHoleSelectableForOperation(operationType)) {
+      if (!point) return null;
+      const hole = this.findHoleAtPoint(point.x, point.y, operationType);
+      if (!hole) return null;
+
+      return {
+        faceIndices: region.faceIndices,
+        loops: [hole.loop],
+        holeId: hole.id,
+        outerLoop: null,
+      };
+    }
+
+    if (!isRegionSelectableForOperation(operationType, region)) return null;
+
+    const loops =
+      operationType === 'outline' || operationType === 'adaptive-outline'
+        ? region.outerLoop
+          ? [region.outerLoop]
+          : []
+        : region.loops;
+
+    return {
+      faceIndices: region.faceIndices,
+      loops,
+      outerLoop: region.outerLoop,
+    };
+  }
+
+  isSelectable(faceIndex: number, operationType: OperationType, point?: THREE.Vector3): boolean {
+    return this.resolveSelection(faceIndex, operationType, point) !== null;
+  }
+
   getSelectionGroup(faceIndex: number, strategy: SelectionStrategy): SelectionGroup {
     const region = this.getRegion(faceIndex);
     if (!region) return { faceIndices: [], loops: [] };
     return {
       faceIndices: region.faceIndices,
-      loops: strategy === 'outline-loop' ? region.loops : [],
+      loops: strategy === 'outline-loop' && region.outerLoop ? [region.outerLoop] : region.loops,
+      outerLoop: region.outerLoop,
     };
   }
 

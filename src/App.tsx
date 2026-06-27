@@ -5,6 +5,7 @@ import { StlViewer } from './components/Viewer/StlViewer';
 import { FileUpload, OperationPalette } from './components/FileUpload';
 import { OperationList } from './components/Operations/OperationList';
 import { GcodeSettings } from './components/GcodeSettings';
+import { ToolOriginSettings } from './components/ToolOriginSettings';
 import { generateGcode, downloadGcode } from './lib/gcode';
 import './App.css';
 
@@ -12,10 +13,11 @@ function GcodePanel() {
   const operations = useAppStore((s) => s.operations);
   const toolpaths = useAppStore((s) => s.toolpaths);
   const gcodeTemplates = useSettingsStore((s) => s.gcodeTemplates);
+  const toolOrigin = useSettingsStore((s) => s.toolOrigin);
   const enabledCount = operations.filter((o) => o.enabled).length;
 
   const handleExport = () => {
-    const gcode = generateGcode(operations, toolpaths, gcodeTemplates);
+    const gcode = generateGcode(operations, toolpaths, gcodeTemplates, toolOrigin);
     downloadGcode(gcode);
   };
 
@@ -54,6 +56,7 @@ export default function App() {
         <aside className="sidebar">
           <OperationPalette />
           <OperationList />
+          <ToolOriginSettings />
           <GcodeSettings />
         </aside>
         <section className="viewer-panel">

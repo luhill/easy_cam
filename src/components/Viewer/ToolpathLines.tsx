@@ -15,7 +15,7 @@ function PathLine({ segment }: { segment: ToolpathSegment }) {
     for (let i = 0; i < segment.points.length - 1; i++) {
       const a = segment.points[i];
       const b = segment.points[i + 1];
-      positions.push(a.x, a.z, a.y, b.x, b.z, b.y);
+      positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
       const alpha = a.rapid || b.rapid ? 0.4 : 1;
       colors.push(color.r * alpha, color.g * alpha, color.b * alpha);
       colors.push(color.r * alpha, color.g * alpha, color.b * alpha);
@@ -28,7 +28,7 @@ function PathLine({ segment }: { segment: ToolpathSegment }) {
   }, [segment]);
 
   return (
-    <lineSegments geometry={geometry} rotation={[-Math.PI / 2, 0, 0]}>
+    <lineSegments geometry={geometry}>
       <lineBasicMaterial vertexColors linewidth={2} />
     </lineSegments>
   );

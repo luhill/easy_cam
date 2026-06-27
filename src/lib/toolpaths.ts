@@ -1,5 +1,6 @@
 import type { Operation, ToolpathPoint, ToolpathSegment } from '../types/operations';
 import type { LoopPoint } from '../types/operations';
+import { loopCentroid } from './geometryProcessing';
 import { OPERATION_COLORS } from '../types/operations';
 
 function getBounds(geometry: Operation['geometry']): {
@@ -23,25 +24,24 @@ function getBounds(geometry: Operation['geometry']): {
     return { minX, maxX, minY, maxY };
   }
 
-  if (!geometry || geometry.vertexIndices.length === 0) {
-    return { minX: -25, maxX: 25, minY: -25, maxY: 25 };
+  if (geometry?.holeCenter) {
+    const r = geometry.holeRadius ?? 2;
+    return {
+      minX: geometry.holeCenter.x - r,
+      maxX: geometry.holeCenter.x + r,
+      minY: geometry.holeCenter.y - r,
+      maxY: geometry.holeCenter.y + r,
+    };
   }
-  const spread = 10 + geometry.vertexIndices.length * 2;
-  const cx = (geometry.vertexIndices[0] % 10) * 3 - 15;
-  const cy = Math.floor(geometry.vertexIndices[0] / 10) * 3 - 15;
-  return {
-    minX: cx - spread / 2,
-    maxX: cx + spread / 2,
-    minY: cy - spread / 2,
-    maxY: cy + spread / 2,
-  };
+
+  return { minX: -25, maxX: 25, minY: -25, maxY: 25 };
 }
 
 function loopToToolpathPoints(
   loop: LoopPoint[],
   settings: Operation['settings']
 ): ToolpathPoint[] {
-  const z = -settings.depth;
+  const cutZ = -settings.depth;
   const clearance = settings.clearance;
   const points: ToolpathPoint[] = [];
 
@@ -52,8 +52,8 @@ function loopToToolpathPoints(
   points.push({ x: start.x, y: start.y, z: 0 });
 
   let currentZ = 0;
-  while (currentZ > z) {
-    currentZ = Math.max(currentZ - settings.stepDown, z);
+  while (currentZ > cutZ) {
+    currentZ = Math.max(currentZ - settings.stepDown, cutZ);
     for (const p of loop) {
       points.push({ x: p.x, y: p.y, z: currentZ });
     }
@@ -61,6 +61,57 @@ function loopToToolpathPoints(
   }
 
   points.push({ x: start.x, y: start.y, z: clearance, rapid: true });
+  return points;
+}
+
+function offsetLoopOutward(loop: LoopPoint[], offset: number): LoopPoint[] {
+  const c = loopCentroid(loop);
+  return loop.map((p) => {
+    const dx = p.x - c.x;
+    const dy = p.y - c.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const scale = (len + offset) / len;
+    return { x: c.x + dx * scale, y: c.y + dy * scale, z: p.z };
+  });
+}
+
+function generateTrochoidalPath(
+  loop: LoopPoint[],
+  settings: Operation['settings'],
+  z: number
+): ToolpathPoint[] {
+  const toolR = settings.toolDiameter / 2;
+  const trochoidR =
+    settings.trochoidRadius > 0 ? settings.trochoidRadius : toolR * 0.35;
+  const step = Math.max(settings.toolDiameter * (settings.stepover / 100), 0.5);
+  const offset = settings.channelClearance + toolR;
+  const path = offsetLoopOutward(loop, offset);
+  const points: ToolpathPoint[] = [];
+
+  for (let i = 0; i < path.length; i++) {
+    const p0 = path[i];
+    const p1 = path[(i + 1) % path.length];
+    const segLen = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+    const steps = Math.max(2, Math.ceil(segLen / step));
+
+    for (let s = 0; s <= steps; s++) {
+      const t = s / steps;
+      const mx = p0.x + (p1.x - p0.x) * t;
+      const my = p0.y + (p1.y - p0.y) * t;
+      const dx = p1.x - p0.x;
+      const dy = p1.y - p0.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len;
+      const ny = dx / len;
+      const phase = t * Math.PI * 4;
+      points.push({
+        x: mx + nx * trochoidR * Math.sin(phase),
+        y: my + ny * trochoidR * Math.sin(phase),
+        z,
+      });
+    }
+  }
+
   return points;
 }
 
@@ -72,17 +123,16 @@ function generateOutlinePath(op: Operation): ToolpathPoint[] {
   }
 
   const { minX, maxX, minY, maxY } = getBounds(geometry);
-  const z = -settings.depth;
+  const cutZ = -settings.depth;
   const clearance = settings.clearance;
   const points: ToolpathPoint[] = [];
 
   points.push({ x: minX, y: minY, z: clearance, rapid: true });
   points.push({ x: minX, y: minY, z: 0 });
-  points.push({ x: minX, y: minY, z });
 
   let currentZ = 0;
-  while (currentZ > z) {
-    currentZ = Math.max(currentZ - settings.stepDown, z);
+  while (currentZ > cutZ) {
+    currentZ = Math.max(currentZ - settings.stepDown, cutZ);
     points.push({ x: minX, y: minY, z: currentZ });
     points.push({ x: maxX, y: minY, z: currentZ });
     points.push({ x: maxX, y: maxY, z: currentZ });
@@ -94,40 +144,70 @@ function generateOutlinePath(op: Operation): ToolpathPoint[] {
   return points;
 }
 
-function generateAdaptiveOutlinePath(op: Operation): ToolpathPoint[] {
-  const base = generateOutlinePath(op);
-  const { settings, geometry } = op;
-  const { minX, maxX, minY, maxY } = getBounds(geometry);
-  const inset = settings.toolDiameter * (settings.stepover / 100);
-  const points: ToolpathPoint[] = [...base];
+function generateHelixBore(
+  entry: { x: number; y: number },
+  settings: Operation['settings'],
+  targetZ: number
+): ToolpathPoint[] {
+  const helixR = settings.helixRadius > 0 ? settings.helixRadius : settings.toolDiameter / 2;
+  const pitch = settings.helixPitch;
+  const segments = 24;
+  const points: ToolpathPoint[] = [];
 
-  let x0 = minX + inset;
-  let y0 = minY + inset;
-  let x1 = maxX - inset;
-  let y1 = maxY - inset;
-
-  while (x1 - x0 > inset * 2) {
-    const z = -settings.depth;
-    points.push({ x: x0, y: y0, z, rapid: true });
-    points.push({ x: x1, y: y0, z });
-    points.push({ x: x1, y: y1, z });
-    points.push({ x: x0, y: y1, z });
-    points.push({ x: x0, y: y0, z });
-    x0 += inset;
-    y0 += inset;
-    x1 -= inset;
-    y1 -= inset;
+  let z = 0;
+  let angle = 0;
+  while (z > targetZ) {
+    for (let i = 0; i < segments; i++) {
+      angle += (Math.PI * 2) / segments;
+      z = Math.max(z - pitch / segments, targetZ);
+      points.push({
+        x: entry.x + Math.cos(angle) * helixR,
+        y: entry.y + Math.sin(angle) * helixR,
+        z,
+      });
+    }
   }
 
   return points;
 }
 
+function generateAdaptiveOutlinePath(op: Operation): ToolpathPoint[] {
+  const { settings, geometry } = op;
+  const loop = geometry?.loops?.[0];
+  const entry = geometry?.entryPoint;
+
+  if (!loop || !entry) {
+    return generateOutlinePath(op);
+  }
+
+  const cutZ = -settings.depth;
+  const clearance = settings.clearance;
+  const points: ToolpathPoint[] = [];
+
+  points.push({ x: entry.x, y: entry.y, z: clearance, rapid: true });
+  points.push({ x: entry.x, y: entry.y, z: 0 });
+
+  points.push(...generateHelixBore(entry, settings, cutZ));
+
+  let layerZ = 0;
+  while (layerZ > cutZ) {
+    layerZ = Math.max(layerZ - settings.stepDown, cutZ);
+    const troch = generateTrochoidalPath(loop, settings, layerZ);
+    if (troch.length > 0) {
+      points.push({ x: troch[0].x, y: troch[0].y, z: layerZ, rapid: true });
+      points.push(...troch);
+    }
+  }
+
+  points.push({ x: entry.x, y: entry.y, z: clearance, rapid: true });
+  return points;
+}
+
 function generateDrillPath(op: Operation): ToolpathPoint[] {
   const { settings, geometry } = op;
-  const { minX, maxX, minY, maxY } = getBounds(geometry);
-  const cx = (minX + maxX) / 2;
-  const cy = (minY + maxY) / 2;
-  const z = -settings.depth;
+  const cx = geometry?.holeCenter?.x ?? 0;
+  const cy = geometry?.holeCenter?.y ?? 0;
+  const cutZ = -settings.depth;
   const clearance = settings.clearance;
   const points: ToolpathPoint[] = [];
 
@@ -136,8 +216,8 @@ function generateDrillPath(op: Operation): ToolpathPoint[] {
 
   let currentZ = 0;
   const peckDepth = settings.stepDown;
-  while (currentZ > z) {
-    currentZ = Math.max(currentZ - peckDepth, z);
+  while (currentZ > cutZ) {
+    currentZ = Math.max(currentZ - peckDepth, cutZ);
     points.push({ x: cx, y: cy, z: currentZ });
     points.push({ x: cx, y: cy, z: 0, rapid: true });
   }
@@ -148,11 +228,10 @@ function generateDrillPath(op: Operation): ToolpathPoint[] {
 
 function generateHelixPath(op: Operation): ToolpathPoint[] {
   const { settings, geometry } = op;
-  const { minX, maxX, minY, maxY } = getBounds(geometry);
-  const cx = (minX + maxX) / 2;
-  const cy = (minY + maxY) / 2;
-  const radius = settings.toolDiameter / 2;
-  const z = -settings.depth;
+  const cx = geometry?.holeCenter?.x ?? 0;
+  const cy = geometry?.holeCenter?.y ?? 0;
+  const radius = geometry?.holeRadius ?? settings.toolDiameter / 2;
+  const cutZ = -settings.depth;
   const clearance = settings.clearance;
   const points: ToolpathPoint[] = [];
   const segments = 36;
@@ -161,11 +240,11 @@ function generateHelixPath(op: Operation): ToolpathPoint[] {
 
   let currentZ = 0;
   let angle = 0;
-  while (currentZ > z) {
+  while (currentZ > cutZ) {
     const zStep = settings.stepDown / segments;
     for (let i = 0; i < segments; i++) {
       angle += (Math.PI * 2) / segments;
-      currentZ = Math.max(currentZ - zStep, z);
+      currentZ = Math.max(currentZ - zStep, cutZ);
       points.push({
         x: cx + Math.cos(angle) * radius,
         y: cy + Math.sin(angle) * radius,
@@ -182,24 +261,24 @@ function generatePocketPath(op: Operation): ToolpathPoint[] {
   const { settings, geometry } = op;
   const { minX, maxX, minY, maxY } = getBounds(geometry);
   const stepover = settings.toolDiameter * (settings.stepover / 100);
-  const z = -settings.depth;
+  const cutZ = -settings.depth;
   const clearance = settings.clearance;
   const points: ToolpathPoint[] = [];
 
   points.push({ x: minX, y: minY, z: clearance, rapid: true });
-  points.push({ x: minX, y: minY, z });
+  points.push({ x: minX, y: minY, z: cutZ });
 
   let y = minY;
   let direction = 1;
   while (y <= maxY) {
     if (direction === 1) {
-      points.push({ x: maxX, y, z });
+      points.push({ x: maxX, y, z: cutZ });
     } else {
-      points.push({ x: minX, y, z });
+      points.push({ x: minX, y, z: cutZ });
     }
     y += stepover;
     if (y <= maxY) {
-      points.push({ x: direction === 1 ? maxX : minX, y, z });
+      points.push({ x: direction === 1 ? maxX : minX, y, z: cutZ });
     }
     direction *= -1;
   }

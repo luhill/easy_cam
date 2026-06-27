@@ -11,18 +11,32 @@ interface OperationCardProps {
 
 function formatGeometrySummary(operation: Operation): string {
   const geo = operation.geometry;
-  if (!geo || geo.faceIndices.length === 0) return 'None selected';
+  if (!geo) return 'None selected';
+
+  if (geo.holeCenter && geo.holeRadius) {
+    return `Hole ⌀${(geo.holeRadius * 2).toFixed(1)} mm`;
+  }
+
+  if (operation.type === 'adaptive-outline') {
+    const hasOutline = geo.loops && geo.loops.length > 0;
+    const hasEntry = !!geo.entryPoint;
+    if (!hasOutline && !hasEntry) return 'None selected';
+    const parts: string[] = [];
+    if (hasOutline) parts.push('outline');
+    if (hasEntry) {
+      parts.push(`entry (${geo.entryPoint!.x.toFixed(1)}, ${geo.entryPoint!.y.toFixed(1)})`);
+    }
+    return parts.join(', ');
+  }
+
+  if (!geo.faceIndices.length) return 'None selected';
 
   const strategy = getSelectionStrategy(operation.type);
   const faceCount = geo.faceIndices.length;
 
   if (strategy === 'outline-loop' && geo.loops && geo.loops.length > 0) {
     const points = geo.loops.reduce((sum, loop) => sum + loop.length, 0);
-    return `${geo.loops.length} loop(s), ${points} pts (${faceCount} faces)`;
-  }
-
-  if (strategy === 'point') {
-    return faceCount === 1 ? '1 point' : `${faceCount} points`;
+    return `${geo.loops.length} loop(s), ${points} pts`;
   }
 
   return `${faceCount} face${faceCount === 1 ? '' : 's'}`;
@@ -35,9 +49,11 @@ export function OperationCard({ operation }: OperationCardProps) {
     toggleOperationCollapsed,
     setActiveOperation,
     setSelectionMode,
+    setSelectionSubMode,
     removeOperation,
     activeOperationId,
     selectionMode,
+    selectionSubMode,
   } = useAppStore();
 
   const {
@@ -58,9 +74,21 @@ export function OperationCard({ operation }: OperationCardProps) {
 
   const isActive = activeOperationId === operation.id;
   const geometrySummary = formatGeometrySummary(operation);
+  const hasGeometry =
+    !!operation.geometry &&
+    (operation.geometry.faceIndices.length > 0 ||
+      !!operation.geometry.holeCenter ||
+      !!operation.geometry.entryPoint);
 
   const handleSelectGeometry = () => {
     setActiveOperation(operation.id);
+    setSelectionSubMode('geometry');
+    setSelectionMode(true);
+  };
+
+  const handleSelectEntry = () => {
+    setActiveOperation(operation.id);
+    setSelectionSubMode('entry-point');
     setSelectionMode(true);
   };
 
@@ -135,11 +163,18 @@ export function OperationCard({ operation }: OperationCardProps) {
                   Done Selecting
                 </button>
               ) : (
-                <button className="btn btn-small" onClick={handleSelectGeometry}>
-                  Select from Model
-                </button>
+                <>
+                  <button className="btn btn-small" onClick={handleSelectGeometry}>
+                    Select from Model
+                  </button>
+                  {operation.type === 'adaptive-outline' && (
+                    <button className="btn btn-small btn-secondary" onClick={handleSelectEntry}>
+                      Set Entry Point
+                    </button>
+                  )}
+                </>
               )}
-              {operation.geometry && operation.geometry.faceIndices.length > 0 && (
+              {hasGeometry && !(isActive && selectionMode) && (
                 <button
                   className="btn btn-small btn-secondary"
                   onClick={() => useAppStore.getState().setOperationGeometry(operation.id, null)}
@@ -148,6 +183,13 @@ export function OperationCard({ operation }: OperationCardProps) {
                 </button>
               )}
             </div>
+            {isActive && selectionMode && operation.type === 'adaptive-outline' && (
+              <p className="geometry-submode">
+                {selectionSubMode === 'entry-point'
+                  ? 'Click in stock above the part to place helix entry'
+                  : 'Select top-facing part outline'}
+              </p>
+            )}
           </div>
         </div>
       )}

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import type { PartBounds, ToolOrigin } from '../lib/geometryProcessing';
 
 export interface GcodeTemplates {
   startGcode: string;
@@ -31,20 +32,44 @@ M3 S{spindleSpeed} ; spindle on
 
 interface SettingsState {
   gcodeTemplates: GcodeTemplates;
+  toolOrigin: ToolOrigin;
+  toolOriginAuto: boolean;
   setGcodeTemplate: (key: keyof GcodeTemplates, value: string) => void;
   resetGcodeTemplates: () => void;
+  setToolOrigin: (origin: Partial<ToolOrigin>) => void;
+  setToolOriginFromBounds: (bounds: PartBounds) => void;
+  setToolOriginAuto: (auto: boolean) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
       gcodeTemplates: DEFAULT_GCODE_TEMPLATES,
+      toolOrigin: { x: 0, y: 0, z: 0 },
+      toolOriginAuto: true,
       setGcodeTemplate: (key, value) =>
         set((state) => ({
           gcodeTemplates: { ...state.gcodeTemplates, [key]: value },
         })),
       resetGcodeTemplates: () =>
         set({ gcodeTemplates: { ...DEFAULT_GCODE_TEMPLATES } }),
+      setToolOrigin: (origin) =>
+        set((state) => ({
+          toolOrigin: { ...state.toolOrigin, ...origin },
+          toolOriginAuto: false,
+        })),
+      setToolOriginFromBounds: (bounds) =>
+        set((state) => {
+          if (!state.toolOriginAuto) return state;
+          return {
+            toolOrigin: {
+              x: (bounds.minX + bounds.maxX) / 2,
+              y: (bounds.minY + bounds.maxY) / 2,
+              z: bounds.maxZ,
+            },
+          };
+        }),
+      setToolOriginAuto: (auto) => set({ toolOriginAuto: auto }),
     }),
     { name: 'easy-cam-gcode-settings' }
   )

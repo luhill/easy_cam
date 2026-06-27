@@ -4,6 +4,7 @@ import type {
   Operation,
   OperationType,
   SelectedGeometry,
+  SelectionSubMode,
   ToolpathSegment,
 } from '../types/operations';
 import {
@@ -18,6 +19,7 @@ interface AppState {
   operations: Operation[];
   activeOperationId: string | null;
   selectionMode: boolean;
+  selectionSubMode: SelectionSubMode;
   toolpaths: ToolpathSegment[];
 
   setStlFile: (file: File) => void;
@@ -32,6 +34,7 @@ interface AppState {
   reorderOperations: (fromIndex: number, toIndex: number) => void;
   setActiveOperation: (id: string | null) => void;
   setSelectionMode: (enabled: boolean) => void;
+  setSelectionSubMode: (mode: SelectionSubMode) => void;
   setOperationGeometry: (id: string, geometry: SelectedGeometry | null) => void;
   toggleOperationEnabled: (id: string) => void;
   toggleOperationVisible: (id: string) => void;
@@ -45,6 +48,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   operations: [],
   activeOperationId: null,
   selectionMode: false,
+  selectionSubMode: 'geometry',
   toolpaths: [],
 
   setStlFile: (file) => {
@@ -123,7 +127,10 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setActiveOperation: (id) => set({ activeOperationId: id }),
 
-  setSelectionMode: (enabled) => set({ selectionMode: enabled }),
+  setSelectionMode: (enabled) =>
+    set({ selectionMode: enabled, selectionSubMode: 'geometry' }),
+
+  setSelectionSubMode: (mode) => set({ selectionSubMode: mode }),
 
   setOperationGeometry: (id, geometry) => {
     set((state) => ({
