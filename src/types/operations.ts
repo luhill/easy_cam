@@ -33,14 +33,25 @@ export interface LoopPoint {
   z: number;
 }
 
+export interface HoleSelection {
+  center: LoopPoint;
+  radius: number;
+  loop?: LoopPoint[];
+  holeId?: number;
+}
+
 export interface SelectedGeometry {
   faceIndices: number[];
   vertexIndices: number[];
   /** Closed boundary loops for outline-type selections */
   loops?: LoopPoint[][];
-  /** Drill/helix hole center */
+  /** Drill/helix — one or more holes */
+  holes?: HoleSelection[];
+  /** @deprecated use holes[] */
   holeCenter?: LoopPoint;
+  /** @deprecated use holes[] */
   holeRadius?: number;
+  /** @deprecated use holes[].holeId */
   holeId?: number;
   /** Adaptive outline helix entry in stock (XY at top of part, Z=0) */
   entryPoint?: { x: number; y: number };
@@ -160,4 +171,25 @@ export type SelectionStrategy = 'region' | 'outline-loop' | 'point';
 
 export function getOperationLabel(type: OperationType): string {
   return OPERATION_TEMPLATES.find((t) => t.type === type)?.label ?? type;
+}
+
+export function getSelectedHoles(geometry: SelectedGeometry | null | undefined): HoleSelection[] {
+  if (!geometry) return [];
+  if (geometry.holes && geometry.holes.length > 0) return geometry.holes;
+  if (geometry.holeCenter && geometry.holeRadius) {
+    return [
+      {
+        center: geometry.holeCenter,
+        radius: geometry.holeRadius,
+        loop: geometry.loops?.[0],
+        holeId: geometry.holeId,
+      },
+    ];
+  }
+  return [];
+}
+
+export function holesMatch(a: HoleSelection, b: HoleSelection, epsilon = 0.5): boolean {
+  if (a.holeId !== undefined && b.holeId !== undefined && a.holeId === b.holeId) return true;
+  return Math.hypot(a.center.x - b.center.x, a.center.y - b.center.y) < epsilon;
 }

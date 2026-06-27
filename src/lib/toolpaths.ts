@@ -2,7 +2,11 @@ import type { Operation, ToolpathPoint, ToolpathSegment } from '../types/operati
 import type { LoopPoint } from '../types/operations';
 import type { PartBounds } from './geometryProcessing';
 import { offsetLoop2D } from './geometryProcessing';
-import { OPERATION_COLORS } from '../types/operations';
+import { OPERATION_COLORS, getSelectedHoles } from '../types/operations';
+import {
+  defaultTrochoidRadius,
+  generateTrochoidalOutlinePath,
+} from './trochoidalPath';
 
 const MIN_STEP_DOWN = 0.05;
 const MAX_Z_LAYERS = 500;
@@ -65,14 +69,19 @@ function getBounds(geometry: Operation['geometry']): {
     return { minX, maxX, minY, maxY };
   }
 
-  if (geometry?.holeCenter) {
-    const r = geometry.holeRadius ?? 2;
-    return {
-      minX: geometry.holeCenter.x - r,
-      maxX: geometry.holeCenter.x + r,
-      minY: geometry.holeCenter.y - r,
-      maxY: geometry.holeCenter.y + r,
-    };
+  const holes = getSelectedHoles(geometry);
+  if (holes.length > 0) {
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const hole of holes) {
+      minX = Math.min(minX, hole.center.x - hole.radius);
+      maxX = Math.max(maxX, hole.center.x + hole.radius);
+      minY = Math.min(minY, hole.center.y - hole.radius);
+      maxY = Math.max(maxY, hole.center.y + hole.radius);
+    }
+    return { minX, maxX, minY, maxY };
   }
 
   return { minX: -25, maxX: 25, minY: -25, maxY: 25 };
@@ -90,8 +99,7 @@ function appendPoints(target: ToolpathPoint[], points: ToolpathPoint[]): boolean
 function loopToToolpathPoints(
   loop: LoopPoint[],
   settings: Operation['settings'],
-  topZ: number,
-  radialOffsetExtra = 0
+  topZ: number
 ): ToolpathPoint[] {
   const cutZ = Math.max(topZ - settings.depth, 0);
   const clearance = topZ + settings.clearance;
@@ -99,8 +107,7 @@ function loopToToolpathPoints(
 
   if (loop.length === 0) return points;
 
-  const offset = toolCenterlineOffset(settings) + radialOffsetExtra;
-  const toolLoop = offsetLoop2D(loop, offset);
+  const toolLoop = offsetLoop2D(loop, toolCenterlineOffset(settings));
   const layers = computeZLayers(topZ, cutZ, settings.stepDown);
 
   const start = toolLoop[0];
@@ -115,78 +122,6 @@ function loopToToolpathPoints(
   }
 
   points.push({ x: start.x, y: start.y, z: clearance, rapid: true });
-  return points;
-}
-
-function generateTrochoidalAlongLoop(
-  loop: LoopPoint[],
-  settings: Operation['settings'],
-  z: number
-): ToolpathPoint[] {
-  const toolR = toolRadius(settings);
-  const trochoidR =
-    settings.trochoidRadius > 0 ? settings.trochoidRadius : toolR * 0.35;
-  const step = Math.max(settings.toolDiameter * (settings.stepover / 100), 0.25);
-  const points: ToolpathPoint[] = [];
-
-  if (loop.length < 2) return points;
-
-  for (let i = 0; i < loop.length; i++) {
-    const p0 = loop[i];
-    const p1 = loop[(i + 1) % loop.length];
-    const segLen = Math.hypot(p1.x - p0.x, p1.y - p0.y);
-    const steps = Math.min(Math.max(2, Math.ceil(segLen / step)), 200);
-
-    for (let s = 0; s <= steps; s++) {
-      const t = s / steps;
-      const mx = p0.x + (p1.x - p0.x) * t;
-      const my = p0.y + (p1.y - p0.y) * t;
-      const dx = p1.x - p0.x;
-      const dy = p1.y - p0.y;
-      const len = Math.hypot(dx, dy) || 1;
-      const nx = -dy / len;
-      const ny = dx / len;
-      const phase = t * Math.PI * 4;
-      points.push({
-        x: mx + nx * trochoidR * Math.sin(phase),
-        y: my + ny * trochoidR * Math.sin(phase),
-        z,
-      });
-    }
-  }
-
-  return points;
-}
-
-function generateAdaptiveSlotPasses(
-  loop: LoopPoint[],
-  settings: Operation['settings'],
-  z: number
-): ToolpathPoint[] {
-  const baseOffset = toolCenterlineOffset(settings);
-  const slotWidth = channelWidth(settings);
-  const stepoverDist = Math.max(settings.toolDiameter * (settings.stepover / 100), 0.25);
-  const outerOffset = baseOffset + Math.max(slotWidth - settings.toolDiameter, 0);
-
-  const points: ToolpathPoint[] = [];
-  let offset = baseOffset;
-  let pass = 0;
-  const maxPasses = 64;
-
-  while (offset <= outerOffset + 1e-6 && pass < maxPasses) {
-    const offsetLoop = offsetLoop2D(loop, offset);
-    const troch = generateTrochoidalAlongLoop(offsetLoop, settings, z);
-    if (troch.length > 0) {
-      if (points.length > 0) {
-        points.push({ ...troch[0], rapid: true });
-      }
-      points.push(...troch);
-    }
-    if (Math.abs(offset - outerOffset) < 1e-6) break;
-    offset = Math.min(offset + stepoverDist, outerOffset);
-    pass++;
-  }
-
   return points;
 }
 
@@ -239,6 +174,28 @@ function generateHelixBore(
   return points;
 }
 
+function generateAdaptiveTrochoidalPath(
+  partLoop: LoopPoint[],
+  settings: Operation['settings'],
+  z: number
+): ToolpathPoint[] {
+  const toolD = Math.max(settings.toolDiameter, 0.1);
+  const slotW = channelWidth(settings);
+  const forwardIncrement = Math.max(toolD * (settings.stepover / 100), toolD * 0.05);
+  const trochoidR =
+    settings.trochoidRadius > 0
+      ? settings.trochoidRadius
+      : defaultTrochoidRadius(slotW, toolD);
+
+  const guideLoop = offsetLoop2D(partLoop, toolCenterlineOffset(settings));
+
+  return generateTrochoidalOutlinePath(guideLoop, {
+    trochoidRadius: trochoidR,
+    forwardIncrement,
+    z,
+  });
+}
+
 function generateAdaptiveOutlinePath(op: Operation, topZ: number): ToolpathPoint[] {
   const { settings, geometry } = op;
   const loop = geometry?.loops?.[0];
@@ -259,10 +216,10 @@ function generateAdaptiveOutlinePath(op: Operation, topZ: number): ToolpathPoint
 
   const layers = computeZLayers(topZ, cutZ, settings.stepDown);
   for (const layerZ of layers) {
-    const slotPasses = generateAdaptiveSlotPasses(loop, settings, layerZ);
-    if (slotPasses.length > 0) {
-      if (!appendPoints(points, [{ ...slotPasses[0], rapid: true }])) break;
-      if (!appendPoints(points, slotPasses)) break;
+    const troch = generateAdaptiveTrochoidalPath(loop, settings, layerZ);
+    if (troch.length > 0) {
+      if (!appendPoints(points, [{ ...troch[0], rapid: true }])) break;
+      if (!appendPoints(points, troch)) break;
     }
   }
 
@@ -270,15 +227,22 @@ function generateAdaptiveOutlinePath(op: Operation, topZ: number): ToolpathPoint
   return points;
 }
 
-function generateDrillPath(op: Operation, topZ: number): ToolpathPoint[] {
-  const { settings, geometry } = op;
-  const cx = geometry?.holeCenter?.x ?? 0;
-  const cy = geometry?.holeCenter?.y ?? 0;
-  const cutZ = Math.max(topZ - settings.depth, 0);
-  const clearance = topZ + settings.clearance;
+function generateDrillPathForHole(
+  cx: number,
+  cy: number,
+  settings: Operation['settings'],
+  topZ: number,
+  cutZ: number,
+  clearance: number,
+  isFirst: boolean
+): ToolpathPoint[] {
   const points: ToolpathPoint[] = [];
 
-  points.push({ x: cx, y: cy, z: clearance, rapid: true });
+  if (isFirst) {
+    points.push({ x: cx, y: cy, z: clearance, rapid: true });
+  } else {
+    points.push({ x: cx, y: cy, z: clearance, rapid: true });
+  }
   points.push({ x: cx, y: cy, z: topZ });
 
   const layers = computeZLayers(topZ, cutZ, settings.stepDown);
@@ -287,22 +251,58 @@ function generateDrillPath(op: Operation, topZ: number): ToolpathPoint[] {
     points.push({ x: cx, y: cy, z: topZ, rapid: true });
   }
 
-  points.push({ x: cx, y: cy, z: clearance, rapid: true });
   return points;
 }
 
-function generateHelixPath(op: Operation, topZ: number): ToolpathPoint[] {
+function generateDrillPath(op: Operation, topZ: number): ToolpathPoint[] {
   const { settings, geometry } = op;
-  const cx = geometry?.holeCenter?.x ?? 0;
-  const cy = geometry?.holeCenter?.y ?? 0;
-  const holeR = geometry?.holeRadius ?? toolRadius(settings);
-  const cutR = Math.max(holeR - toolRadius(settings), toolRadius(settings) * 0.25);
+  const holes = getSelectedHoles(geometry);
+  if (holes.length === 0) return [];
+
   const cutZ = Math.max(topZ - settings.depth, 0);
   const clearance = topZ + settings.clearance;
   const points: ToolpathPoint[] = [];
+
+  holes.forEach((hole, index) => {
+    appendPoints(
+      points,
+      generateDrillPathForHole(
+        hole.center.x,
+        hole.center.y,
+        settings,
+        topZ,
+        cutZ,
+        clearance,
+        index === 0
+      )
+    );
+  });
+
+  const last = holes[holes.length - 1];
+  points.push({ x: last.center.x, y: last.center.y, z: clearance, rapid: true });
+  return points;
+}
+
+function generateHelixPathForHole(
+  cx: number,
+  cy: number,
+  holeR: number,
+  settings: Operation['settings'],
+  topZ: number,
+  cutZ: number,
+  clearance: number,
+  isFirst: boolean
+): ToolpathPoint[] {
+  const cutR = Math.max(holeR - toolRadius(settings), toolRadius(settings) * 0.25);
+  const points: ToolpathPoint[] = [];
   const segments = 36;
 
-  points.push({ x: cx + cutR, y: cy, z: clearance, rapid: true });
+  if (isFirst) {
+    points.push({ x: cx + cutR, y: cy, z: clearance, rapid: true });
+  } else {
+    points.push({ x: cx, y: cy, z: clearance, rapid: true });
+    points.push({ x: cx + cutR, y: cy, z: topZ });
+  }
 
   let currentZ = topZ;
   let angle = 0;
@@ -323,7 +323,36 @@ function generateHelixPath(op: Operation, topZ: number): ToolpathPoint[] {
     }
   }
 
-  points.push({ x: cx, y: cy, z: clearance, rapid: true });
+  return points;
+}
+
+function generateHelixPath(op: Operation, topZ: number): ToolpathPoint[] {
+  const { settings, geometry } = op;
+  const holes = getSelectedHoles(geometry);
+  if (holes.length === 0) return [];
+
+  const cutZ = Math.max(topZ - settings.depth, 0);
+  const clearance = topZ + settings.clearance;
+  const points: ToolpathPoint[] = [];
+
+  holes.forEach((hole, index) => {
+    appendPoints(
+      points,
+      generateHelixPathForHole(
+        hole.center.x,
+        hole.center.y,
+        hole.radius,
+        settings,
+        topZ,
+        cutZ,
+        clearance,
+        index === 0
+      )
+    );
+  });
+
+  const last = holes[holes.length - 1];
+  points.push({ x: last.center.x, y: last.center.y, z: clearance, rapid: true });
   return points;
 }
 

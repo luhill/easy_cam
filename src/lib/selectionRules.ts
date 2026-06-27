@@ -72,7 +72,7 @@ export function getSelectionHint(
       return 'Select top-facing part outline, then set helix entry point in stock';
     case 'drill':
     case 'helix':
-      return 'Click inside a circular hole on the top surface';
+      return 'Click holes to add or remove — multiple holes supported';
     case 'pocket':
       return 'Select a top-facing surface to pocket';
     case 'contour':

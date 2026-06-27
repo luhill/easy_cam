@@ -5,7 +5,7 @@ import { STLLoader } from 'three-stdlib';
 import * as THREE from 'three';
 import { useAppStore } from '../../store/useAppStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
-import { OPERATION_COLORS } from '../../types/operations';
+import { OPERATION_COLORS, getSelectedHoles } from '../../types/operations';
 import type { LoopPoint, OperationType } from '../../types/operations';
 import {
   createFaceColorAttribute,
@@ -29,6 +29,7 @@ import {
   isGroupSelected,
   mergeLoops,
   removeGroupFromSelection,
+  isHoleInSelection,
   type MeshIndex,
   type SelectionGroup,
 } from '../../lib/meshSelection';
@@ -78,7 +79,15 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
     [activeOperationType]
   );
 
-  const selectedLoops = activeGeometry?.loops ?? [];
+  const selectedLoops = useMemo(() => {
+    const loops = [...(activeGeometry?.loops ?? [])];
+    if (activeOperationType === 'drill' || activeOperationType === 'helix') {
+      for (const hole of getSelectedHoles(activeGeometry)) {
+        if (hole.loop && hole.loop.length > 0) loops.push(hole.loop);
+      }
+    }
+    return loops;
+  }, [activeGeometry, activeOperationType]);
   const entryPoint = activeGeometry?.entryPoint;
   const accentColor = activeOperationType
     ? OPERATION_COLORS[activeOperationType]
@@ -302,6 +311,59 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
       const op = useAppStore.getState().operations.find((o) => o.id === activeOperationId);
       const existing = op?.geometry;
 
+      if (operationType === 'drill' || operationType === 'helix') {
+        const hole =
+          group.holeId !== undefined
+            ? meshIndexRef.current.holes.find((h) => h.id === group.holeId)
+            : null;
+
+        let center = hole?.center;
+        let radius = hole?.radius;
+        const loop = group.loops?.[0];
+        if ((!center || !radius) && loop?.length) {
+          center = loopCentroid(loop);
+          let rSum = 0;
+          for (const p of loop) {
+            rSum += Math.hypot(p.x - center.x, p.y - center.y);
+          }
+          radius = rSum / loop.length;
+        }
+        if (!center || !radius) return;
+
+        const candidate = {
+          center,
+          radius,
+          loop,
+          holeId: hole?.id,
+        };
+        const existingHoles = getSelectedHoles(existing);
+
+        if (isHoleInSelection(existingHoles, candidate)) {
+          const holes = existingHoles.filter((h) => !isHoleInSelection([h], candidate));
+          setOperationGeometry(
+            activeOperationId,
+            holes.length > 0
+              ? {
+                  faceIndices: existing?.faceIndices ?? [],
+                  vertexIndices: existing?.vertexIndices ?? [],
+                  holes,
+                  loops: holes.map((h) => h.loop).filter((l): l is LoopPoint[] => !!l?.length),
+                }
+              : null
+          );
+        } else {
+          setOperationGeometry(activeOperationId, {
+            faceIndices: existing?.faceIndices ?? [],
+            vertexIndices: existing?.vertexIndices ?? [],
+            holes: [...existingHoles, candidate],
+            loops: [...existingHoles.map((h) => h.loop).filter(Boolean), loop].filter(
+              (l): l is LoopPoint[] => !!l?.length
+            ),
+          });
+        }
+        return;
+      }
+
       if (existing && isGroupSelected(existing.faceIndices, group.faceIndices)) {
         const { faceIndices, loops } = removeGroupFromSelection(
           existing.faceIndices,
@@ -334,30 +396,10 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
           : existing?.loops;
       const vertexIndices = collectVertexIndices(meshIndexRef.current, faceIndices);
 
-      const hole =
-        group.holeId !== undefined
-          ? meshIndexRef.current.holes.find((h) => h.id === group.holeId)
-          : null;
-
-      let holeCenter = hole?.center;
-      let holeRadius = hole?.radius;
-      if ((!holeCenter || !holeRadius) && group.loops?.[0]?.length) {
-        const loop = group.loops[0];
-        holeCenter = loopCentroid(loop);
-        let rSum = 0;
-        for (const p of loop) {
-          rSum += Math.hypot(p.x - holeCenter.x, p.y - holeCenter.y);
-        }
-        holeRadius = rSum / loop.length;
-      }
-
       setOperationGeometry(activeOperationId, {
         faceIndices,
         vertexIndices,
         loops: loops && loops.length > 0 ? loops : group.loops,
-        holeCenter,
-        holeRadius,
-        holeId: hole?.id,
         entryPoint: existing?.entryPoint,
       });
     },

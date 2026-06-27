@@ -87,15 +87,22 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
         <p className="settings-hint">
           Toolpath runs at tool radius + additional offset from the part outline
           {operation.type === 'adaptive-outline' &&
-            '. Channel width is a multiple of tool diameter (min 1.25×) carved with trochoidal passes.'}
+            '. Channel width is a multiple of tool diameter (min 1.25×). Trochoidal path advances around the outline with circular loops clearing the slot.'}
         </p>
       )}
-      {operation.type === 'adaptive-outline' &&
-        (operation.settings.trochoidRadius === 0 || operation.settings.helixRadius === 0) && (
-          <p className="settings-hint">
-            Helix/trochoid radius 0 = auto from tool diameter. Entry point is set separately in stock.
-          </p>
-        )}
+          {operation.type === 'adaptive-outline' &&
+            (operation.settings.trochoidRadius === 0 || operation.settings.helixRadius === 0) && (
+              <p className="settings-hint">
+                Helix/trochoid radius 0 = auto from tool diameter and channel width. Entry point is
+                set separately in stock.
+              </p>
+            )}
+          {(operation.type === 'drill' || operation.type === 'helix') && (
+            <p className="settings-hint">
+              Click holes to add/remove. Multiple holes are drilled in selection order with rapid
+              moves between them.
+            </p>
+          )}
     </div>
   );
 }

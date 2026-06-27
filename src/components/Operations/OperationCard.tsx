@@ -1,7 +1,7 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { Operation } from '../../types/operations';
-import { OPERATION_COLORS, getSelectionStrategy } from '../../types/operations';
+import { OPERATION_COLORS, getSelectionStrategy, getSelectedHoles } from '../../types/operations';
 import { useAppStore } from '../../store/useAppStore';
 import { OperationSettings } from './OperationSettings';
 
@@ -13,8 +13,12 @@ function formatGeometrySummary(operation: Operation): string {
   const geo = operation.geometry;
   if (!geo) return 'None selected';
 
-  if (geo.holeCenter && geo.holeRadius) {
-    return `Hole ⌀${(geo.holeRadius * 2).toFixed(1)} mm`;
+  const holes = getSelectedHoles(geo);
+  if (holes.length > 0 && (operation.type === 'drill' || operation.type === 'helix')) {
+    if (holes.length === 1) {
+      return `Hole ⌀${(holes[0].radius * 2).toFixed(1)} mm`;
+    }
+    return `${holes.length} holes`;
   }
 
   if (operation.type === 'adaptive-outline') {
@@ -76,7 +80,7 @@ export function OperationCard({ operation }: OperationCardProps) {
   const hasGeometry =
     !!operation.geometry &&
     (operation.geometry.faceIndices.length > 0 ||
-      !!operation.geometry.holeCenter ||
+      getSelectedHoles(operation.geometry).length > 0 ||
       !!operation.geometry.entryPoint);
 
   const handleSelectGeometry = () => {
@@ -185,6 +189,11 @@ export function OperationCard({ operation }: OperationCardProps) {
                 {selectionSubMode === 'entry-point'
                   ? 'Click in stock above the part to place helix entry'
                   : 'Select top-facing part outline'}
+              </p>
+            )}
+            {isActive && selectionMode && (operation.type === 'drill' || operation.type === 'helix') && (
+              <p className="geometry-submode">
+                Click holes to add or remove — multiple holes supported
               </p>
             )}
           </div>

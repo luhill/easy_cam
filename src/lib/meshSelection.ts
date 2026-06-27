@@ -640,4 +640,17 @@ export function collectVertexIndices(meshIndex: MeshIndex, faceIndices: number[]
   return [...verts];
 }
 
+export function isHoleInSelection(
+  holes: Array<{ center: LoopPoint; holeId?: number }>,
+  candidate: { center: LoopPoint; holeId?: number },
+  epsilon = 0.5
+): boolean {
+  return holes.some((h) => {
+    if (h.holeId !== undefined && candidate.holeId !== undefined && h.holeId === candidate.holeId) {
+      return true;
+    }
+    return Math.hypot(h.center.x - candidate.center.x, h.center.y - candidate.center.y) < epsilon;
+  });
+}
+
 export { getFaceCount as getMeshFaceCount };
