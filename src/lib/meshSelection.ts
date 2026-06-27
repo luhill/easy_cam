@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { LoopPoint, OperationType, SelectionStrategy } from '../types/operations';
-import { loopArea2D, pointInPolygon2D, boundsFromGeometry } from './geometryProcessing';
+import { loopArea2D, pointInPolygon2D, boundsFromGeometry, type PartBounds } from './geometryProcessing';
 import {
   classifyRegionKind,
   effectiveOutlineLoop,
@@ -37,6 +37,7 @@ export interface SelectionRegion {
   faceIndices: number[];
   loops: LoopPoint[][];
   normal: { x: number; y: number; z: number };
+  centroid: LoopPoint;
   kind: RegionKind;
   outerLoop: LoopPoint[] | null;
   innerLoops: LoopPoint[][];
@@ -203,6 +204,7 @@ export class MeshIndex {
   readonly faceCount: number;
   readonly regions: SelectionRegion[];
   readonly holes: HoleFeature[];
+  readonly bounds: PartBounds;
   readonly faceToRegion: Int32Array;
   private readonly edgeToFaces: Map<string, number[]>;
   private readonly positions: THREE.BufferAttribute;
@@ -245,9 +247,11 @@ export class MeshIndex {
     }
 
     this.faceToRegion = new Int32Array(this.faceCount).fill(-1);
+    this.bounds = boundsFromGeometry(geometry);
+    const bounds = this.bounds;
+
     this.regions = [];
     const visited = new Uint8Array(this.faceCount);
-    const bounds = boundsFromGeometry(geometry);
 
     for (let startFace = 0; startFace < this.faceCount; startFace++) {
       if (visited[startFace]) continue;
@@ -269,6 +273,7 @@ export class MeshIndex {
         faceIndices,
         loops,
         normal: { x: normal.x, y: normal.y, z: normal.z },
+        centroid,
         kind,
         outerLoop,
         innerLoops,
@@ -389,6 +394,15 @@ export class MeshIndex {
     return nearest;
   }
 
+  getOutlineLoop(region: SelectionRegion): LoopPoint[] | null {
+    const existing = effectiveOutlineLoop(region);
+    if (existing) return existing;
+
+    const loops = this.computeBoundaryLoops(region.faceIndices);
+    if (loops.length === 0) return null;
+    return [...loops].sort((a, b) => loopArea2D(b) - loopArea2D(a))[0];
+  }
+
   resolveSelection(
     faceIndex: number,
     operationType: OperationType,
@@ -410,9 +424,9 @@ export class MeshIndex {
       };
     }
 
-    if (!isRegionSelectableForOperation(operationType, region)) return null;
+    if (!isRegionSelectableForOperation(operationType, region, this.bounds)) return null;
 
-    const outline = effectiveOutlineLoop(region);
+    const outline = this.getOutlineLoop(region);
     const loops =
       operationType === 'outline' || operationType === 'adaptive-outline'
         ? outline
@@ -434,10 +448,12 @@ export class MeshIndex {
   getSelectionGroup(faceIndex: number, strategy: SelectionStrategy): SelectionGroup {
     const region = this.getRegion(faceIndex);
     if (!region) return { faceIndices: [], loops: [] };
+    const outline = this.getOutlineLoop(region);
     return {
       faceIndices: region.faceIndices,
-      loops: strategy === 'outline-loop' && region.outerLoop ? [region.outerLoop] : region.loops,
-      outerLoop: region.outerLoop,
+      loops:
+        strategy === 'outline-loop' && outline ? [outline] : region.loops,
+      outerLoop: outline,
     };
   }
 

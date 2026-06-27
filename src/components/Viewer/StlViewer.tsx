@@ -1,5 +1,5 @@
 import { useRef, useEffect, useMemo, useCallback, useState, Suspense } from 'react';
-import { Canvas, useThree, useLoader } from '@react-three/fiber';
+import { Canvas, useThree, useLoader, useFrame } from '@react-three/fiber';
 import { OrbitControls, Grid, GizmoHelper, GizmoViewport } from '@react-three/drei';
 import { STLLoader } from 'three-stdlib';
 import * as THREE from 'three';
@@ -20,7 +20,7 @@ import {
   processStlGeometry,
   type ProcessedMesh,
 } from '../../lib/geometryProcessing';
-import { getSelectionHint } from '../../lib/selectionRules';
+import { getSelectionHint, isRegionSelectableForOperation } from '../../lib/selectionRules';
 import {
   clearMeshIndexCache,
   collectVertexIndices,
@@ -84,19 +84,27 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
     : '#3b82f6';
 
   const meshIndexRef = useRef<MeshIndex | null>(null);
+  const meshRef = useRef<THREE.Mesh>(null);
   const colorManagerRef = useRef<FaceColorManager | null>(null);
   const colorAttrRef = useRef<THREE.BufferAttribute | null>(null);
   const selectedFacesRef = useRef<Set<number>>(new Set());
   const hoveredRegionIdRef = useRef(-1);
   const prevHoveredFacesRef = useRef<number[]>([]);
-  const pendingFaceRef = useRef<number | null>(null);
-  const pendingPointRef = useRef<THREE.Vector3 | null>(null);
-  const rafHandleRef = useRef<number | null>(null);
   const selectedColorRef = useRef(selectedColor);
+  const prevSelectedRef = useRef<Set<number>>(new Set());
+  const selectionModeRef = useRef(selectionMode);
+  const selectionSubModeRef = useRef(selectionSubMode);
+  const activeOperationTypeRef = useRef(activeOperationType);
+
+  const { raycaster, pointer, camera } = useThree();
+  const pickScratch = useMemo(() => new THREE.Vector3(), []);
 
   const [hoveredLoops, setHoveredLoops] = useState<LoopPoint[][]>([]);
 
   selectedColorRef.current = selectedColor;
+  selectionModeRef.current = selectionMode;
+  selectionSubModeRef.current = selectionSubMode;
+  activeOperationTypeRef.current = activeOperationType;
 
   useEffect(() => {
     setPartBounds(partBounds);
@@ -126,30 +134,54 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
     if (!colorManager || !colorAttr) return;
 
     const nextSelected = new Set(activeGeometry?.faceIndices ?? []);
-    const hovered = selectionMode ? new Set(prevHoveredFacesRef.current) : new Set<number>();
+    const hovered = new Set(prevHoveredFacesRef.current);
     const hoverColor =
       selectionSubMode === 'bottom-face' ? FACE_COLORS.hoverBottom : FACE_COLORS.hover;
 
-    colorManager.syncAll(nextSelected, hovered, selectedColor, hoverColor);
+    colorManager.updateSelectionDiff(
+      prevSelectedRef.current,
+      nextSelected,
+      hovered,
+      selectedColor,
+      hoverColor
+    );
     colorAttr.needsUpdate = true;
+    prevSelectedRef.current = nextSelected;
     selectedFacesRef.current = nextSelected;
-  }, [activeGeometry, selectionMode, selectionSubMode, selectedColor]);
+  }, [activeGeometry?.faceIndices, selectedColor, selectionSubMode]);
+
+  useEffect(() => {
+    prevSelectedRef.current = new Set();
+    prevHoveredFacesRef.current = [];
+    lastHoverKeyRef.current = '';
+  }, [meshKey]);
 
   const resolveHoverGroup = useCallback(
     (faceIndex: number | null, point: THREE.Vector3 | null): SelectionGroup | null => {
       const meshIndex = meshIndexRef.current;
       if (!meshIndex || faceIndex === null) return null;
 
-      if (selectionSubMode === 'bottom-face') {
+      if (selectionSubModeRef.current === 'bottom-face') {
         const region = meshIndex.getRegion(faceIndex);
         if (!region) return null;
-        return { faceIndices: region.faceIndices, loops: region.loops, outerLoop: region.outerLoop };
+        return {
+          faceIndices: region.faceIndices,
+          loops: region.loops,
+          outerLoop: region.outerLoop,
+        };
       }
 
-      if (!activeOperationType) return null;
-      return meshIndex.resolveSelection(faceIndex, activeOperationType, point ?? undefined);
+      const opType = activeOperationTypeRef.current;
+      if (!opType) return null;
+
+      const region = meshIndex.getRegion(faceIndex);
+      if (!region || !isRegionSelectableForOperation(opType, region, meshIndex.bounds)) {
+        return null;
+      }
+
+      return meshIndex.resolveSelection(faceIndex, opType, point ?? undefined);
     },
-    [activeOperationType, selectionSubMode]
+    []
   );
 
   const lastHoverKeyRef = useRef('');
@@ -163,14 +195,16 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
 
       const group = resolveHoverGroup(faceIndex, point);
       const nextFaces = group?.faceIndices ?? [];
-      const hoverKey = `${faceIndex}:${nextFaces.length}:${selectionSubMode}`;
+      const hoverKey = `${faceIndex}:${nextFaces.length}:${selectionSubModeRef.current}`;
 
       if (hoverKey === lastHoverKeyRef.current) return;
       lastHoverKeyRef.current = hoverKey;
 
       const prevFaces = prevHoveredFacesRef.current;
       const hoverColor =
-        selectionSubMode === 'bottom-face' ? FACE_COLORS.hoverBottom : FACE_COLORS.hover;
+        selectionSubModeRef.current === 'bottom-face'
+          ? FACE_COLORS.hoverBottom
+          : FACE_COLORS.hover;
 
       colorManager.updateHoverRegion(
         prevFaces,
@@ -186,47 +220,48 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
 
       setHoveredLoops(group && group.loops.length > 0 ? group.loops : []);
     },
-    [resolveHoverGroup, selectionSubMode]
+    [resolveHoverGroup]
   );
-
-  const scheduleHover = useCallback(
-    (faceIndex: number | null, point: THREE.Vector3 | null) => {
-      pendingFaceRef.current = faceIndex;
-      pendingPointRef.current = point;
-      if (rafHandleRef.current !== null) return;
-
-      rafHandleRef.current = requestAnimationFrame(() => {
-        rafHandleRef.current = null;
-        applyHover(pendingFaceRef.current, pendingPointRef.current);
-      });
-    },
-    [applyHover]
-  );
-
-  useEffect(() => {
-    return () => {
-      if (rafHandleRef.current !== null) cancelAnimationFrame(rafHandleRef.current);
-    };
-  }, []);
 
   useEffect(() => {
     lastHoverKeyRef.current = '';
-    if (!selectionMode) scheduleHover(null, null);
-  }, [selectionSubMode, selectionMode, scheduleHover]);
+    if (!selectionMode) {
+      prevHoveredFacesRef.current = [];
+      applyHover(null, null);
+    }
+  }, [selectionSubMode, selectionMode, applyHover]);
+
+  useFrame(() => {
+    if (!selectionModeRef.current || selectionSubModeRef.current === 'entry-point') return;
+
+    const mesh = meshRef.current;
+    const meshIndex = meshIndexRef.current;
+    if (!mesh || !meshIndex) return;
+
+    raycaster.setFromCamera(pointer, camera);
+    const hits = raycaster.intersectObject(mesh, false);
+    if (hits.length > 0 && hits[0].faceIndex !== undefined && hits[0].faceIndex !== null) {
+      pickScratch.copy(hits[0].point);
+      applyHover(hits[0].faceIndex, pickScratch);
+      return;
+    }
+
+    applyHover(null, null);
+  });
 
   const handlePointerMove = useCallback(
     (event: { stopPropagation: () => void; faceIndex?: number; point: THREE.Vector3 }) => {
       if (!selectionMode || selectionSubMode === 'entry-point') return;
       event.stopPropagation();
-      scheduleHover(event.faceIndex ?? null, event.point);
+      applyHover(event.faceIndex ?? null, event.point);
     },
-    [selectionMode, selectionSubMode, scheduleHover]
+    [selectionMode, selectionSubMode, applyHover]
   );
 
   const handlePointerOut = useCallback(() => {
     if (!selectionMode || selectionSubMode === 'entry-point') return;
-    scheduleHover(null, null);
-  }, [selectionMode, selectionSubMode, scheduleHover]);
+    applyHover(null, null);
+  }, [selectionMode, selectionSubMode, applyHover]);
 
   const applyBottomFace = useCallback(
     (faceIndex: number) => {
@@ -362,6 +397,7 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
   return (
     <>
       <mesh
+        ref={meshRef}
         geometry={processedGeometry}
         onPointerMove={handlePointerMove}
         onPointerOut={handlePointerOut}
@@ -371,7 +407,7 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
           vertexColors
           metalness={0.25}
           roughness={0.55}
-          side={THREE.DoubleSide}
+          side={THREE.FrontSide}
         />
       </mesh>
 
@@ -487,13 +523,21 @@ function SceneContent({
         makeDefault
         enableDamping
         dampingFactor={0.1}
-        enableRotate={!selectionMode}
+        enableRotate
         enablePan={!selectionMode}
-        mouseButtons={{
-          LEFT: selectionMode ? undefined : THREE.MOUSE.ROTATE,
-          MIDDLE: THREE.MOUSE.DOLLY,
-          RIGHT: selectionMode ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN,
-        }}
+        mouseButtons={
+          selectionMode
+            ? {
+                LEFT: null as unknown as THREE.MOUSE,
+                MIDDLE: THREE.MOUSE.DOLLY,
+                RIGHT: THREE.MOUSE.ROTATE,
+              }
+            : {
+                LEFT: THREE.MOUSE.ROTATE,
+                MIDDLE: THREE.MOUSE.DOLLY,
+                RIGHT: THREE.MOUSE.PAN,
+              }
+        }
       />
       <GizmoHelper alignment="bottom-right" margin={[60, 60]}>
         <GizmoViewport axisColors={['#ef4444', '#22c55e', '#3b82f6']} labelColor="white" />

@@ -20,20 +20,29 @@ export function classifyRegionKind(
   return 'unknown';
 }
 
+/** Horizontal face on the upper half of the part (works with inverted STL normals). */
+export function isPhysicallyTopFace(
+  region: Pick<SelectionRegion, 'normal' | 'centroid'>,
+  bounds: PartBounds
+): boolean {
+  const absZ = Math.abs(region.normal.z);
+  if (absZ < HORIZONTAL_DOT) return false;
+  const midZ = (bounds.minZ + bounds.maxZ) * 0.5;
+  return region.centroid.z >= midZ - 1e-4;
+}
+
 export function isRegionSelectableForOperation(
   operationType: OperationType,
-  region: SelectionRegion
+  region: SelectionRegion,
+  bounds: PartBounds
 ): boolean {
-  const hasOutline = region.outerLoop !== null || region.loops.length > 0;
-
   switch (operationType) {
     case 'outline':
     case 'adaptive-outline':
-      return region.normal.z >= HORIZONTAL_DOT && hasOutline;
     case 'pocket':
-      return region.normal.z >= HORIZONTAL_DOT;
+      return isPhysicallyTopFace(region, bounds);
     case 'contour':
-      return region.kind === 'side';
+      return region.kind === 'side' || Math.abs(region.normal.z) <= 0.35;
     default:
       return false;
   }
