@@ -5,7 +5,6 @@ export function PartSetup() {
   const selectionMode = useAppStore((s) => s.selectionMode);
   const selectionSubMode = useAppStore((s) => s.selectionSubMode);
   const setSelectionMode = useAppStore((s) => s.setSelectionMode);
-  const setSelectionSubMode = useAppStore((s) => s.setSelectionSubMode);
   const setActiveOperation = useAppStore((s) => s.setActiveOperation);
 
   if (!stlUrl) return null;
@@ -14,13 +13,11 @@ export function PartSetup() {
 
   const startBottomFace = () => {
     setActiveOperation(null);
-    setSelectionSubMode('bottom-face');
-    setSelectionMode(true);
+    setSelectionMode(true, 'bottom-face');
   };
 
   const cancelBottomFace = () => {
     setSelectionMode(false);
-    setSelectionSubMode('geometry');
   };
 
   return (

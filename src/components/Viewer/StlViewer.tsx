@@ -10,6 +10,7 @@ import type { LoopPoint, OperationType } from '../../types/operations';
 import {
   createFaceColorAttribute,
   FaceColorManager,
+  FACE_COLORS,
   getFaceCount,
   hexToThreeColor,
 } from '../../lib/faceColors';
@@ -125,12 +126,14 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
     if (!colorManager || !colorAttr) return;
 
     const nextSelected = new Set(activeGeometry?.faceIndices ?? []);
-    const hovered = new Set(prevHoveredFacesRef.current);
+    const hovered = selectionMode ? new Set(prevHoveredFacesRef.current) : new Set<number>();
+    const hoverColor =
+      selectionSubMode === 'bottom-face' ? FACE_COLORS.hoverBottom : FACE_COLORS.hover;
 
-    colorManager.syncAll(nextSelected, selectionMode ? hovered : new Set(), selectedColor);
+    colorManager.syncAll(nextSelected, hovered, selectedColor, hoverColor);
     colorAttr.needsUpdate = true;
     selectedFacesRef.current = nextSelected;
-  }, [activeGeometry, selectionMode, selectedColor]);
+  }, [activeGeometry, selectionMode, selectionSubMode, selectedColor]);
 
   const resolveHoverGroup = useCallback(
     (faceIndex: number | null, point: THREE.Vector3 | null): SelectionGroup | null => {
@@ -166,12 +169,15 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
       lastHoverKeyRef.current = hoverKey;
 
       const prevFaces = prevHoveredFacesRef.current;
+      const hoverColor =
+        selectionSubMode === 'bottom-face' ? FACE_COLORS.hoverBottom : FACE_COLORS.hover;
 
       colorManager.updateHoverRegion(
         prevFaces,
         nextFaces,
         selectedFacesRef.current,
-        selectedColorRef.current
+        selectedColorRef.current,
+        hoverColor
       );
       colorAttr.needsUpdate = true;
 
@@ -204,8 +210,9 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
   }, []);
 
   useEffect(() => {
+    lastHoverKeyRef.current = '';
     if (!selectionMode) scheduleHover(null, null);
-  }, [selectionMode, scheduleHover]);
+  }, [selectionSubMode, selectionMode, scheduleHover]);
 
   const handlePointerMove = useCallback(
     (event: { stopPropagation: () => void; faceIndex?: number; point: THREE.Vector3 }) => {
@@ -238,16 +245,9 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
 
       onMeshUpdate(newMesh);
       setSelectionMode(false);
-      setSelectionSubMode('geometry');
       regenerateToolpaths();
     },
-    [
-      processedGeometry,
-      onMeshUpdate,
-      setSelectionMode,
-      setSelectionSubMode,
-      regenerateToolpaths,
-    ]
+    [processedGeometry, onMeshUpdate, setSelectionMode, regenerateToolpaths]
   );
 
   const applyGeometrySelection = useCallback(
@@ -383,7 +383,11 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
       />
 
       {selectionMode && hoveredLoops.length > 0 && (
-        <SelectionLoopLines loops={hoveredLoops} color="#93c5fd" opacity={0.85} />
+        <SelectionLoopLines
+          loops={hoveredLoops}
+          color={selectionSubMode === 'bottom-face' ? '#f59e0b' : '#93c5fd'}
+          opacity={0.85}
+        />
       )}
 
       {selectedLoops.length > 0 && (
@@ -483,6 +487,8 @@ function SceneContent({
         makeDefault
         enableDamping
         dampingFactor={0.1}
+        enableRotate={!selectionMode}
+        enablePan={!selectionMode}
         mouseButtons={{
           LEFT: selectionMode ? undefined : THREE.MOUSE.ROTATE,
           MIDDLE: THREE.MOUSE.DOLLY,

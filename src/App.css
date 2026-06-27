@@ -256,6 +256,14 @@ body {
 }
 
 /* Operation list */
+.operation-list-container {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .operation-list {
   flex: 1;
   min-height: 0;
@@ -347,6 +355,8 @@ body {
 .operation-body {
   padding: 0 12px 12px;
   border-top: 1px solid var(--border);
+  max-height: min(50vh, 420px);
+  overflow-y: auto;
 }
 
 /* Settings */

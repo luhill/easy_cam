@@ -35,7 +35,7 @@ interface AppState {
   ) => void;
   reorderOperations: (fromIndex: number, toIndex: number) => void;
   setActiveOperation: (id: string | null) => void;
-  setSelectionMode: (enabled: boolean) => void;
+  setSelectionMode: (enabled: boolean, subMode?: SelectionSubMode) => void;
   setSelectionSubMode: (mode: SelectionSubMode) => void;
   setOperationGeometry: (id: string, geometry: SelectedGeometry | null) => void;
   toggleOperationEnabled: (id: string) => void;
@@ -87,7 +87,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       geometry: null,
     };
     set((state) => ({
-      operations: [...state.operations, op],
+      operations: [
+        ...state.operations.map((o) => ({ ...o, collapsed: true })),
+        op,
+      ],
       activeOperationId: op.id,
     }));
     get().regenerateToolpaths();
@@ -132,8 +135,13 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setActiveOperation: (id) => set({ activeOperationId: id }),
 
-  setSelectionMode: (enabled) =>
-    set({ selectionMode: enabled, selectionSubMode: 'geometry' }),
+  setSelectionMode: (enabled, subMode) =>
+    set((state) => ({
+      selectionMode: enabled,
+      selectionSubMode: enabled
+        ? (subMode ?? state.selectionSubMode)
+        : 'geometry',
+    })),
 
   setSelectionSubMode: (mode) => set({ selectionSubMode: mode }),
 
@@ -164,11 +172,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   toggleOperationCollapsed: (id) => {
-    set((state) => ({
-      operations: state.operations.map((o) =>
-        o.id === id ? { ...o, collapsed: !o.collapsed } : o
-      ),
-    }));
+    set((state) => {
+      const target = state.operations.find((o) => o.id === id);
+      if (!target) return state;
+      const willExpand = target.collapsed;
+      return {
+        operations: state.operations.map((o) => {
+          if (o.id === id) return { ...o, collapsed: !o.collapsed };
+          if (willExpand) return { ...o, collapsed: true };
+          return o;
+        }),
+      };
+    });
   },
 
   setPartBounds: (bounds) => set({ partBounds: bounds }),

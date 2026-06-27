@@ -44,13 +44,15 @@ export function OperationList() {
 
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-      <SortableContext items={operations.map((o) => o.id)} strategy={verticalListSortingStrategy}>
-        <div className="operation-list">
-          {operations.map((op) => (
-            <OperationCard key={op.id} operation={op} />
-          ))}
-        </div>
-      </SortableContext>
+      <div className="operation-list-container">
+        <SortableContext items={operations.map((o) => o.id)} strategy={verticalListSortingStrategy}>
+          <div className="operation-list">
+            {operations.map((op) => (
+              <OperationCard key={op.id} operation={op} />
+            ))}
+          </div>
+        </SortableContext>
+      </div>
     </DndContext>
   );
 }

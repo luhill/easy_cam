@@ -6,14 +6,13 @@ const HORIZONTAL_DOT = 0.65;
 
 export function classifyRegionKind(
   normal: { x: number; y: number; z: number },
-  centroid: { x: number; y: number; z: number },
-  bounds: PartBounds
+  _centroid: { x: number; y: number; z: number },
+  _bounds: PartBounds
 ): RegionKind {
   const absZ = Math.abs(normal.z);
 
   if (absZ >= HORIZONTAL_DOT) {
-    const midZ = (bounds.minZ + bounds.maxZ) * 0.5;
-    return centroid.z >= midZ ? 'top' : 'bottom';
+    return normal.z >= 0 ? 'top' : 'bottom';
   }
 
   if (absZ <= 0.35) return 'side';
@@ -30,9 +29,9 @@ export function isRegionSelectableForOperation(
   switch (operationType) {
     case 'outline':
     case 'adaptive-outline':
-      return region.kind === 'top' && hasOutline;
+      return region.normal.z >= HORIZONTAL_DOT && hasOutline;
     case 'pocket':
-      return region.kind === 'top';
+      return region.normal.z >= HORIZONTAL_DOT;
     case 'contour':
       return region.kind === 'side';
     default:

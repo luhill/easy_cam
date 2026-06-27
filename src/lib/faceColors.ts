@@ -3,6 +3,7 @@ import * as THREE from 'three';
 export const FACE_COLORS = {
   base: new THREE.Color('#6b7a8d'),
   hover: new THREE.Color('#93c5fd'),
+  hoverBottom: new THREE.Color('#f59e0b'),
   hoverSelected: new THREE.Color('#fbbf24'),
   selected: new THREE.Color('#3b82f6'),
 };
@@ -47,10 +48,14 @@ export function paintFace(
   }
 }
 
-function colorForState(state: number, selectedColor: THREE.Color): THREE.Color {
+function colorForState(
+  state: number,
+  selectedColor: THREE.Color,
+  hoverColor: THREE.Color = FACE_COLORS.hover
+): THREE.Color {
   switch (state) {
     case STATE_HOVER:
-      return FACE_COLORS.hover;
+      return hoverColor;
     case STATE_SELECTED:
       return selectedColor;
     case STATE_HOVER_SELECTED:
@@ -84,10 +89,16 @@ export class FaceColorManager {
   syncAll(
     selected: ReadonlySet<number>,
     hovered: ReadonlySet<number>,
-    selectedColor: THREE.Color = FACE_COLORS.selected
+    selectedColor: THREE.Color = FACE_COLORS.selected,
+    hoverColor: THREE.Color = FACE_COLORS.hover
   ): void {
     for (let faceIndex = 0; faceIndex < this.faceCount; faceIndex++) {
-      this.applyState(faceIndex, resolveState(faceIndex, selected, hovered), selectedColor);
+      this.applyState(
+        faceIndex,
+        resolveState(faceIndex, selected, hovered),
+        selectedColor,
+        hoverColor
+      );
     }
   }
 
@@ -96,13 +107,14 @@ export class FaceColorManager {
     prevFaces: readonly number[],
     nextFaces: readonly number[],
     selected: ReadonlySet<number>,
-    selectedColor: THREE.Color = FACE_COLORS.selected
+    selectedColor: THREE.Color = FACE_COLORS.selected,
+    hoverColor: THREE.Color = FACE_COLORS.hover
   ): void {
     const nextSet = new Set(nextFaces);
 
     for (const face of prevFaces) {
       if (!nextSet.has(face)) {
-        this.applyState(face, selected.has(face) ? STATE_SELECTED : STATE_BASE, selectedColor);
+        this.applyState(face, selected.has(face) ? STATE_SELECTED : STATE_BASE, selectedColor, hoverColor);
       }
     }
 
@@ -110,7 +122,8 @@ export class FaceColorManager {
       this.applyState(
         face,
         selected.has(face) ? STATE_HOVER_SELECTED : STATE_HOVER,
-        selectedColor
+        selectedColor,
+        hoverColor
       );
     }
   }
@@ -120,24 +133,30 @@ export class FaceColorManager {
     prevSelected: ReadonlySet<number>,
     nextSelected: ReadonlySet<number>,
     hovered: ReadonlySet<number>,
-    selectedColor: THREE.Color = FACE_COLORS.selected
+    selectedColor: THREE.Color = FACE_COLORS.selected,
+    hoverColor: THREE.Color = FACE_COLORS.hover
   ): void {
     for (const face of prevSelected) {
       if (!nextSelected.has(face)) {
-        this.applyState(face, hovered.has(face) ? STATE_HOVER : STATE_BASE, selectedColor);
+        this.applyState(face, hovered.has(face) ? STATE_HOVER : STATE_BASE, selectedColor, hoverColor);
       }
     }
     for (const face of nextSelected) {
       if (!prevSelected.has(face)) {
-        this.applyState(face, resolveState(face, nextSelected, hovered), selectedColor);
+        this.applyState(face, resolveState(face, nextSelected, hovered), selectedColor, hoverColor);
       }
     }
   }
 
-  private applyState(faceIndex: number, state: number, selectedColor: THREE.Color): void {
+  private applyState(
+    faceIndex: number,
+    state: number,
+    selectedColor: THREE.Color,
+    hoverColor: THREE.Color = FACE_COLORS.hover
+  ): void {
     if (this.displayState[faceIndex] === state) return;
     this.displayState[faceIndex] = state;
-    paintFace(this.colors, faceIndex, colorForState(state, selectedColor));
+    paintFace(this.colors, faceIndex, colorForState(state, selectedColor, hoverColor));
   }
 }
 

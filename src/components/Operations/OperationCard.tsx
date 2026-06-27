@@ -49,7 +49,6 @@ export function OperationCard({ operation }: OperationCardProps) {
     toggleOperationCollapsed,
     setActiveOperation,
     setSelectionMode,
-    setSelectionSubMode,
     removeOperation,
     activeOperationId,
     selectionMode,
@@ -82,14 +81,12 @@ export function OperationCard({ operation }: OperationCardProps) {
 
   const handleSelectGeometry = () => {
     setActiveOperation(operation.id);
-    setSelectionSubMode('geometry');
-    setSelectionMode(true);
+    setSelectionMode(true, 'geometry');
   };
 
   const handleSelectEntry = () => {
     setActiveOperation(operation.id);
-    setSelectionSubMode('entry-point');
-    setSelectionMode(true);
+    setSelectionMode(true, 'entry-point');
   };
 
   const handleStopSelection = () => {
