@@ -19,6 +19,8 @@ import {
   orientFaceToBottom,
   processStlGeometry,
   loopCentroid,
+  partDimensionsFromBounds,
+  type PartBounds,
   type ProcessedMesh,
 } from '../../lib/geometryProcessing';
 import { getSelectionHint, isHoleSelectableForOperation, isRegionSelectableForOperation } from '../../lib/selectionRules';
@@ -46,6 +48,28 @@ import { SelectionLoopLines } from './SelectionLoopLines';
 import { ToolOriginMarker } from './ToolOriginMarker';
 import { EntryPointMarker, StockTopPlane } from './EntryPointMarker';
 import { resolveAdaptiveEntryPoint } from '../../lib/adaptiveOutline';
+
+function fitCameraToPartBounds(camera: THREE.PerspectiveCamera, bounds: PartBounds | null): void {
+  if (!bounds) {
+    camera.position.set(60, -60, 60);
+    camera.up.set(0, 0, 1);
+    camera.lookAt(0, 0, 0);
+    camera.far = 1000;
+    camera.updateProjectionMatrix();
+    return;
+  }
+
+  const dims = partDimensionsFromBounds(bounds);
+  const maxDim = Math.max(dims.width, dims.depth, dims.height, 1);
+  const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+  const distance = maxDim * 2.2;
+
+  camera.position.set(distance, -distance, centerZ + distance * 0.75);
+  camera.up.set(0, 0, 1);
+  camera.lookAt(0, 0, centerZ);
+  camera.far = Math.max(1000, distance * 8);
+  camera.updateProjectionMatrix();
+}
 
 interface StlMeshProps {
   processedMesh: ProcessedMesh;
@@ -582,10 +606,8 @@ function SceneContent({
   simulationDistanceRef.current = simulationDistance;
 
   useEffect(() => {
-    camera.position.set(60, -60, 60);
-    camera.up.set(0, 0, 1);
-    camera.lookAt(0, 0, 0);
-  }, [camera, stlUrl]);
+    fitCameraToPartBounds(camera as THREE.PerspectiveCamera, partBounds);
+  }, [camera, stlUrl, partBounds]);
 
   const visiblePaths = useMemo(() => {
     const visibleIds = new Set(

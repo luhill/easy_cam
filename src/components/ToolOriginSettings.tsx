@@ -38,8 +38,9 @@ export function ToolOriginSettings() {
         ))}
       </div>
       <p className="settings-hint" style={{ marginTop: '0.5rem' }}>
-        WCS zero sits at the tool origin. Auto mode places XY at the part center and Z at 10 mm
-        above stock top (CAM Z=0 is the top surface).
+        WCS zero sits at the tool origin. XY is in world mm. Z is relative to the stock top (CAM
+        Z=0): use −6 to place WCS at the bottom of a 6 mm tall part. Auto mode centers XY and
+        sets Z to 10 mm above stock top.
       </p>
     </div>
   );

@@ -64,20 +64,23 @@ export function finalizePartPlacement(geometry: THREE.BufferGeometry): Processed
   return { geometry: geo, bounds, defaultToolOrigin };
 }
 
-/** Scale to fit, then bottom at Z=0 (Z+ up, part sits on build plate). */
+/** Import STL coordinates as millimeters, then bottom at Z=0 (Z+ up, part on build plate). */
 export function processStlGeometry(source: THREE.BufferGeometry): ProcessedMesh {
   const geo = source.clone();
   geo.computeVertexNormals();
-  geo.computeBoundingBox();
-
-  const box = geo.boundingBox!;
-  const size = new THREE.Vector3();
-  box.getSize(size);
-  const maxDim = Math.max(size.x, size.y, size.z);
-  const scale = maxDim > 0 ? 50 / maxDim : 1;
-  geo.scale(scale, scale, scale);
-
   return finalizePartPlacement(geo);
+}
+
+export function partDimensionsFromBounds(bounds: PartBounds): {
+  width: number;
+  depth: number;
+  height: number;
+} {
+  return {
+    width: Math.max(bounds.maxX - bounds.minX, 0),
+    depth: Math.max(bounds.maxY - bounds.minY, 0),
+    height: Math.max(bounds.maxZ - bounds.minZ, 0),
+  };
 }
 
 /**
