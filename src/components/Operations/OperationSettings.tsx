@@ -1,25 +1,27 @@
 import type { Operation } from '../../types/operations';
 import { useAppStore } from '../../store/useAppStore';
+import { SETTING_LIMITS, clampSettingValue } from '../../lib/settingLimits';
 
 interface OperationSettingsProps {
   operation: Operation;
 }
 
+type SettingKey = keyof Operation['settings'];
+
 const BASE_FIELDS: {
-  key: keyof Operation['settings'];
+  key: SettingKey;
   label: string;
   unit: string;
   step: number;
-  min?: number;
 }[] = [
-  { key: 'toolDiameter', label: 'Tool Diameter', unit: 'mm', step: 0.1, min: 0.1 },
-  { key: 'feedRate', label: 'Feed Rate', unit: 'mm/min', step: 50, min: 1 },
-  { key: 'plungeRate', label: 'Plunge Rate', unit: 'mm/min', step: 25, min: 1 },
-  { key: 'stepDown', label: 'Step Down', unit: 'mm', step: 0.1, min: 0.05 },
-  { key: 'stepover', label: 'Stepover', unit: '%', step: 5, min: 1 },
-  { key: 'spindleSpeed', label: 'Spindle Speed', unit: 'RPM', step: 500, min: 100 },
-  { key: 'clearance', label: 'Clearance', unit: 'mm', step: 1, min: 0 },
-  { key: 'depth', label: 'Cut Depth', unit: 'mm', step: 0.5, min: 0.1 },
+  { key: 'toolDiameter', label: 'Tool Diameter', unit: 'mm', step: 0.1 },
+  { key: 'feedRate', label: 'Feed Rate', unit: 'mm/min', step: 50 },
+  { key: 'plungeRate', label: 'Plunge Rate', unit: 'mm/min', step: 25 },
+  { key: 'stepDown', label: 'Step Down', unit: 'mm', step: 0.1 },
+  { key: 'stepover', label: 'Stepover', unit: '%', step: 5 },
+  { key: 'spindleSpeed', label: 'Spindle Speed', unit: 'RPM', step: 500 },
+  { key: 'clearance', label: 'Clearance', unit: 'mm', step: 1 },
+  { key: 'depth', label: 'Cut Depth', unit: 'mm', step: 0.5 },
 ];
 
 const OUTLINE_FIELDS: typeof BASE_FIELDS = [
@@ -28,20 +30,14 @@ const OUTLINE_FIELDS: typeof BASE_FIELDS = [
 
 const ADAPTIVE_FIELDS: typeof BASE_FIELDS = [
   { key: 'radialOffset', label: 'Additional Offset', unit: 'mm', step: 0.1 },
-  { key: 'slotWidthPercent', label: 'Slot Width', unit: '% of tool ⌀', step: 5, min: 125 },
-  { key: 'liftAmount', label: 'Pass Lift', unit: 'mm', step: 0.1, min: 0 },
+  { key: 'slotWidthPercent', label: 'Slot Width', unit: '% of tool ⌀', step: 5 },
+  { key: 'liftAmount', label: 'Pass Lift', unit: 'mm', step: 0.1 },
+  { key: 'helixDiameterPercent', label: 'Helix Diameter', unit: '% of tool ⌀', step: 5 },
+  { key: 'helixAngleDeg', label: 'Helix Angle', unit: '°', step: 0.1 },
+  { key: 'helixFeedRate', label: 'Helix Feed Rate', unit: 'mm/min', step: 25 },
 ];
 
-function clampSetting(key: keyof Operation['settings'], value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  if (key === 'stepDown') return Math.max(value, 0.05);
-  if (key === 'slotWidthPercent') return Math.max(value, 125);
-  if (key === 'liftAmount') return Math.max(value, 0);
-  if (key === 'toolDiameter') return Math.max(value, 0.1);
-  return value;
-}
-
-function fieldLabel(operation: Operation, key: keyof Operation['settings'], fallback: string): string {
+function fieldLabel(operation: Operation, key: SettingKey, fallback: string): string {
   if (operation.type === 'adaptive-outline' && key === 'stepover') {
     return 'Pass Advance (Stepover)';
   }
@@ -70,29 +66,33 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
         />
       </div>
       <div className="settings-grid">
-        {fields.map(({ key, label, unit, step, min }) => (
-          <div className="setting-row" key={key}>
-            <label>
-              {fieldLabel(operation, key, label)} <span className="unit">({unit})</span>
-            </label>
-            <input
-              type="number"
-              value={operation.settings[key]}
-              min={min}
-              step={step}
-              onChange={(e) =>
-                updateOperationSettings(operation.id, {
-                  [key]: clampSetting(key, parseFloat(e.target.value)),
-                })
-              }
-            />
-          </div>
-        ))}
+        {fields.map(({ key, label, unit, step }) => {
+          const limits = SETTING_LIMITS[key];
+          return (
+            <div className="setting-row" key={key}>
+              <label>
+                {fieldLabel(operation, key, label)} <span className="unit">({unit})</span>
+              </label>
+              <input
+                type="number"
+                value={operation.settings[key]}
+                min={limits.min}
+                max={limits.max}
+                step={step}
+                onChange={(e) =>
+                  updateOperationSettings(operation.id, {
+                    [key]: clampSettingValue(key, parseFloat(e.target.value)),
+                  })
+                }
+              />
+            </div>
+          );
+        })}
       </div>
       {(operation.type === 'outline' || operation.type === 'adaptive-outline') && (
         <p className="settings-hint">
           {operation.type === 'adaptive-outline'
-            ? 'Circular trochoid loops advance forward each orbit (pass advance = stepover). Pass lift raises Z gradually on the return half of each loop, peaking at mid-return (0 = flat).'
+            ? 'Helix bores at the entry, then a toroidal arc connects to the nearest outline point before trochoid loops begin. Pass lift raises Z gradually on the return half of each loop (0 = flat).'
             : 'Toolpath runs at tool radius + additional offset from the part outline.'}
         </p>
       )}

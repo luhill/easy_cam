@@ -12,6 +12,7 @@ import {
   DEFAULT_SETTINGS,
   getOperationLabel,
 } from '../types/operations';
+import { clampOperationSettings } from '../lib/settingLimits';
 import { generateToolpaths } from '../lib/toolpaths';
 
 interface AppState {
@@ -129,7 +130,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   updateOperationSettings: (id, settings) => {
     set((state) => ({
       operations: state.operations.map((o) =>
-        o.id === id ? { ...o, settings: { ...o.settings, ...settings } } : o
+        o.id === id
+          ? {
+              ...o,
+              settings: clampOperationSettings({ ...DEFAULT_SETTINGS, ...o.settings, ...settings }),
+            }
+          : o
       ),
     }));
     get().regenerateToolpaths();

@@ -17,10 +17,16 @@ export interface OperationDefaults {
   depth: number;
   /** Additional radial stock offset beyond tool radius (mm); negative allows finishing inside the line */
   radialOffset: number;
-  /** Adaptive outline: slot width as % of tool diameter (min 125%) */
+  /** Adaptive outline: slot width as % of tool diameter (125–200%) */
   slotWidthPercent: number;
   /** Adaptive outline: micro-retract / Z lift between trochoid passes (mm); 0 = no lift */
   liftAmount: number;
+  /** Adaptive outline: helix / lead-in circle diameter as % of tool diameter */
+  helixDiameterPercent: number;
+  /** Adaptive outline: helix ramp angle (degrees) */
+  helixAngleDeg: number;
+  /** Adaptive outline: feed rate for helix bore and toroidal lead-in (mm/min) */
+  helixFeedRate: number;
 }
 
 export interface LoopPoint {
@@ -76,6 +82,8 @@ export interface ToolpathPoint {
   y: number;
   z: number;
   rapid?: boolean;
+  /** Override feed for this segment (mm/min). */
+  feedRate?: number;
 }
 
 export interface ToolpathSegment {
@@ -124,17 +132,20 @@ export const OPERATION_TEMPLATES: OperationTemplate[] = [
 ];
 
 export const DEFAULT_SETTINGS: OperationDefaults = {
-  toolDiameter: 6.35,
-  feedRate: 1200,
+  toolDiameter: 4,
+  feedRate: 700,
   plungeRate: 300,
   stepDown: 2,
   stepover: 40,
-  spindleSpeed: 12000,
+  spindleSpeed: 10000,
   clearance: 5,
   depth: 10,
   radialOffset: 0,
   slotWidthPercent: 150,
   liftAmount: 0,
+  helixDiameterPercent: 150,
+  helixAngleDeg: 1.5,
+  helixFeedRate: 350,
 };
 
 export type SelectionSubMode = 'geometry' | 'entry-point' | 'bottom-face';

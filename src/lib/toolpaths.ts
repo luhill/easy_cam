@@ -1,10 +1,18 @@
 import type { Operation, ToolpathPoint, ToolpathSegment } from '../types/operations';
 import type { LoopPoint } from '../types/operations';
+import { DEFAULT_SETTINGS } from '../types/operations';
 import type { PartBounds } from './geometryProcessing';
 import { offsetLoop2D, offsetLoop2DMinkowski } from './geometryProcessing';
 import { OPERATION_COLORS, getSelectedHoles } from '../types/operations';
+import { clampOperationSettings } from './settingLimits';
 import { resolveAdaptiveEntryPoint, resolveAdaptiveSlotGeometry } from './adaptiveOutline';
 import { generateFourZoneAdaptivePath } from './adaptiveFourZone';
+import {
+  closestPointIndexOnPath,
+  generateToroidalLeadIn,
+  helixPitchFromAngle,
+  resolveHelixRadius,
+} from './entryPath';
 
 const MIN_STEP_DOWN = 0.05;
 const MAX_Z_LAYERS = 500;
@@ -140,8 +148,9 @@ function generateHelixBore(
   topZ: number,
   targetZ: number
 ): ToolpathPoint[] {
-  const helixR = toolRadius(settings);
-  const pitch = safeStepDown(settings.stepDown);
+  const helixR = resolveHelixRadius(settings);
+  const pitch = helixPitchFromAngle(settings);
+  const feedRate = settings.helixFeedRate;
   const segments = 24;
   const points: ToolpathPoint[] = [];
 
@@ -158,6 +167,7 @@ function generateHelixBore(
         x: entry.x + Math.cos(angle) * helixR,
         y: entry.y + Math.sin(angle) * helixR,
         z,
+        feedRate,
       });
       iterations++;
     }
@@ -196,19 +206,40 @@ function generateAdaptiveOutlinePath(op: Operation, topZ: number): ToolpathPoint
   const cutZ = Math.max(topZ - settings.depth, 0);
   const clearance = topZ + settings.clearance;
   const points: ToolpathPoint[] = [];
+  const layers = computeZLayers(topZ, cutZ, settings.stepDown);
+  const helixR = resolveHelixRadius(settings);
+  const helixFeed = settings.helixFeedRate;
 
   points.push({ x: entry.x, y: entry.y, z: clearance, rapid: true });
   points.push({ x: entry.x, y: entry.y, z: topZ });
 
-  appendPoints(points, generateHelixBore(entry, settings, topZ, cutZ));
+  const helixTarget = layers.length > 0 ? layers[0] : cutZ;
+  appendPoints(points, generateHelixBore(entry, settings, topZ, helixTarget));
 
-  const layers = computeZLayers(topZ, cutZ, settings.stepDown);
-  for (const layerZ of layers) {
+  for (let li = 0; li < layers.length; li++) {
+    const layerZ = layers[li];
     const troch = generateAdaptiveTrochoidalPath(loop, settings, layerZ);
-    if (troch.length > 0) {
-      if (!appendPoints(points, [{ ...troch[0], rapid: true }])) break;
-      if (!appendPoints(points, troch)) break;
+    if (troch.length === 0) continue;
+
+    const joinIdx = closestPointIndexOnPath(troch, entry);
+    const joinPt = troch[joinIdx];
+
+    if (li > 0) {
+      if (!appendPoints(points, [{ x: entry.x, y: entry.y, z: layerZ, rapid: true }])) break;
+    } else if (Math.abs(layerZ - helixTarget) > 1e-4) {
+      if (!appendPoints(points, [{ x: entry.x, y: entry.y, z: layerZ, feedRate: helixFeed }])) break;
     }
+
+    const leadDist = Math.hypot(joinPt.x - entry.x, joinPt.y - entry.y);
+    if (leadDist > 0.05) {
+      const leadIn = generateToroidalLeadIn(entry, joinPt, helixR, layerZ, loop, helixFeed);
+      if (!appendPoints(points, leadIn)) break;
+    } else if (!appendPoints(points, [{ ...joinPt, feedRate: helixFeed }])) {
+      break;
+    }
+
+    const pathFromJoin = troch.slice(joinIdx + 1);
+    if (!appendPoints(points, pathFromJoin)) break;
   }
 
   points.push({ x: entry.x, y: entry.y, z: clearance, rapid: true });
@@ -395,20 +426,27 @@ function generateContourPath(op: Operation, topZ: number): ToolpathPoint[] {
   return points;
 }
 
+function normalizedSettings(settings: Operation['settings']): Operation['settings'] {
+  return clampOperationSettings({ ...DEFAULT_SETTINGS, ...settings });
+}
+
 function generatePathForOperation(op: Operation, topZ: number): ToolpathPoint[] {
-  switch (op.type) {
+  const settings = normalizedSettings(op.settings);
+  const operation = { ...op, settings };
+
+  switch (operation.type) {
     case 'outline':
-      return generateOutlinePath(op, topZ);
+      return generateOutlinePath(operation, topZ);
     case 'adaptive-outline':
-      return generateAdaptiveOutlinePath(op, topZ);
+      return generateAdaptiveOutlinePath(operation, topZ);
     case 'drill':
-      return generateDrillPath(op, topZ);
+      return generateDrillPath(operation, topZ);
     case 'helix':
-      return generateHelixPath(op, topZ);
+      return generateHelixPath(operation, topZ);
     case 'pocket':
-      return generatePocketPath(op, topZ);
+      return generatePocketPath(operation, topZ);
     case 'contour':
-      return generateContourPath(op, topZ);
+      return generateContourPath(operation, topZ);
     default:
       return [];
   }

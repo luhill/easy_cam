@@ -1,7 +1,8 @@
 import type { LoopPoint } from '../types/operations';
 import type { OperationDefaults } from '../types/operations';
-import { offsetLoop2DMinkowski, signedLoopArea2D } from './geometryProcessing';
+import { offsetLoop2DMinkowski, distanceToLoop2D, closestPointOnLoop2D } from './geometryProcessing';
 import { adaptiveForwardIncrement } from './trochoidalPath';
+import { ensureEntryOutsidePart, minimumEntryStandoff } from './entryPath';
 
 export interface AdaptiveSlotGeometry {
   toolDiameter: number;
@@ -26,7 +27,7 @@ export function resolveAdaptiveSlotGeometry(settings: OperationDefaults): Adapti
   const toolDiameter = Math.max(settings.toolDiameter, 0.1);
   const toolRadius = toolDiameter / 2;
   const radialOffset = settings.radialOffset ?? 0;
-  const slotWidthPercent = Math.max(settings.slotWidthPercent ?? 150, 125);
+  const slotWidthPercent = Math.min(Math.max(settings.slotWidthPercent ?? 150, 125), 200);
   const slotWidth = toolDiameter * (slotWidthPercent / 100);
   const slotClearance = Math.max(slotWidth - toolDiameter, toolDiameter * 0.05);
   const trochoidRadius = slotClearance / 2;
@@ -60,19 +61,28 @@ export function computeDefaultEntryPoint(
 
   const slot = resolveAdaptiveSlotGeometry(settings);
   const guide = offsetLoop2DMinkowski(partLoop, slot.slotCenterOffset);
-  const p0 = guide[0];
-  const p1 = guide[1];
-  const dx = p1.x - p0.x;
-  const dy = p1.y - p0.y;
-  const len = Math.hypot(dx, dy) || 1;
-  const tx = dx / len;
-  const ty = dy / len;
-  const ccw = signedLoopArea2D(partLoop) >= 0;
-  const nx = ccw ? ty : -ty;
-  const ny = ccw ? -tx : tx;
-  const dist = slot.slotWidth * 0.75 + Math.max(settings.clearance, 2);
+  const minStandoff = minimumEntryStandoff(settings);
 
-  return { x: p0.x + nx * dist, y: p0.y + ny * dist };
+  let bestGuide = guide[0];
+  let bestDist = -Infinity;
+  for (const p of guide) {
+    const d = distanceToLoop2D(p.x, p.y, partLoop);
+    if (d > bestDist) {
+      bestDist = d;
+      bestGuide = p;
+    }
+  }
+
+  const outward = closestPointOnLoop2D(bestGuide.x, bestGuide.y, partLoop);
+  const extra = Math.max(settings.clearance, 2);
+  return ensureEntryOutsidePart(
+    partLoop,
+    {
+      x: bestGuide.x + outward.outX * extra,
+      y: bestGuide.y + outward.outY * extra,
+    },
+    minStandoff
+  );
 }
 
 export function resolveAdaptiveEntryPoint(
@@ -80,6 +90,9 @@ export function resolveAdaptiveEntryPoint(
   settings: OperationDefaults,
   entry?: { x: number; y: number } | null
 ): { x: number; y: number } {
-  if (entry) return entry;
+  const minStandoff = minimumEntryStandoff(settings);
+  if (entry) {
+    return ensureEntryOutsidePart(partLoop, entry, minStandoff);
+  }
   return computeDefaultEntryPoint(partLoop, settings);
 }
