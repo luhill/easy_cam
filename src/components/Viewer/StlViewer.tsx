@@ -34,6 +34,14 @@ import {
   type SelectionGroup,
 } from '../../lib/meshSelection';
 import { ToolpathLines } from './ToolpathLines';
+import { ToolPreview, ToolSimulationDriver } from './ToolPreview';
+import { ToolSimulationControls } from './ToolSimulationControls';
+import {
+  buildSimulationTimeline,
+  sampleSimulationTimeline,
+  pickPreviewToolDiameter,
+  PREVIEW_RAPID_FEED,
+} from '../../lib/toolpathSimulation';
 import { SelectionLoopLines } from './SelectionLoopLines';
 import { ToolOriginMarker } from './ToolOriginMarker';
 import { EntryPointMarker, StockTopPlane } from './EntryPointMarker';
@@ -562,8 +570,16 @@ function SceneContent({
   const toolpaths = useAppStore((s) => s.toolpaths);
   const operations = useAppStore((s) => s.operations);
   const selectionMode = useAppStore((s) => s.selectionMode);
+  const simulationDistance = useAppStore((s) => s.simulationDistance);
+  const simulationPlaying = useAppStore((s) => s.simulationPlaying);
+  const simulationSpeed = useAppStore((s) => s.simulationSpeed);
+  const setSimulationDistance = useAppStore((s) => s.setSimulationDistance);
+  const setSimulationPlaying = useAppStore((s) => s.setSimulationPlaying);
+  const activeOperationId = useAppStore((s) => s.activeOperationId);
   const toolOrigin = useSettingsStore((s) => s.toolOrigin);
   const { camera } = useThree();
+  const simulationDistanceRef = useRef(simulationDistance);
+  simulationDistanceRef.current = simulationDistance;
 
   useEffect(() => {
     camera.position.set(60, -60, 60);
@@ -577,6 +593,28 @@ function SceneContent({
     );
     return toolpaths.filter((tp) => visibleIds.has(tp.operationId));
   }, [toolpaths, operations]);
+
+  const simulationTimeline = useMemo(
+    () => buildSimulationTimeline(visiblePaths),
+    [visiblePaths]
+  );
+
+  const simulationSample = useMemo(
+    () => sampleSimulationTimeline(simulationTimeline, simulationDistance),
+    [simulationTimeline, simulationDistance]
+  );
+
+  const previewToolDiameter = useMemo(
+    () => pickPreviewToolDiameter(operations, visiblePaths),
+    [operations, visiblePaths]
+  );
+
+  const previewFeedRate = useMemo(() => {
+    const visible = operations.filter((o) => o.visible);
+    if (visible.length === 0) return 1200;
+    const op = visible.find((o) => o.id === activeOperationId) ?? visible[0];
+    return op.settings.feedRate;
+  }, [operations, activeOperationId]);
 
   return (
     <>
@@ -601,6 +639,22 @@ function SceneContent({
         </Suspense>
       )}
       <ToolpathLines segments={visiblePaths} />
+      <ToolPreview sample={simulationSample} toolDiameter={previewToolDiameter} />
+      <ToolSimulationDriver
+        playing={simulationPlaying}
+        speed={simulationSpeed}
+        feedRate={previewFeedRate}
+        rapidFeedRate={PREVIEW_RAPID_FEED}
+        timeline={simulationTimeline}
+        timelineLength={simulationTimeline.totalDistance}
+        onDistanceChange={(distance) => {
+          setSimulationDistance(distance);
+          if (distance >= simulationTimeline.totalDistance) {
+            setSimulationPlaying(false);
+          }
+        }}
+        getDistance={() => simulationDistanceRef.current}
+      />
       <ToolOriginMarker origin={toolOrigin} />
       <OrbitControls
         makeDefault
@@ -671,6 +725,7 @@ export function StlViewer() {
       {selectionMode && indexStatus.ready && (
         <div className="selection-hint">{selectionHint} — right-drag to orbit</div>
       )}
+      <ToolSimulationControls />
     </div>
   );
 }

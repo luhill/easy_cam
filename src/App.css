@@ -532,6 +532,82 @@ body {
   pointer-events: none;
 }
 
+.tool-simulation-controls {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  right: 16px;
+  max-width: 420px;
+  background: rgba(26, 29, 35, 0.92);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  z-index: 2;
+  backdrop-filter: blur(6px);
+}
+
+.tool-simulation-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.tool-simulation-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+
+.tool-simulation-mode {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.tool-simulation-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.tool-simulation-speed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-left: auto;
+}
+
+.tool-simulation-speed select {
+  padding: 4px 6px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.tool-simulation-scrubber {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.tool-simulation-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.stl-viewer.selection-active .tool-simulation-controls {
+  bottom: 52px;
+}
+
 /* G-code panel */
 .gcode-panel {
   display: flex;

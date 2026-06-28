@@ -180,7 +180,6 @@ function generateAdaptiveTrochoidalPath(
     z,
     partLoop,
     minCenterDist: slot.minCenterDist,
-    maxCenterDist: slot.maxCenterDist,
   });
 }
 

@@ -256,19 +256,18 @@ export function closestPointOnLoop2D(
   return { x: bestPx, y: bestPy, dist: bestDist, outX: bestOutX, outY: bestOutY };
 }
 
-/** Keep tool center in the exterior band: toolRadius+offset … offset+slotWidth-toolRadius from part. */
-export function clampToolCenterToExteriorBand(
+/** Push tool center outward if it violates minimum standoff from the part outline. */
+export function clampToolCenterMinDistanceFromPart(
   partLoop: LoopPoint[],
   x: number,
   y: number,
-  minDist: number,
-  maxDist: number
+  minDist: number
 ): { x: number; y: number } {
   const closest = closestPointOnLoop2D(x, y, partLoop);
-  const clampedDist = Math.max(minDist, Math.min(maxDist, closest.dist));
+  if (closest.dist >= minDist) return { x, y };
   return {
-    x: closest.x + closest.outX * clampedDist,
-    y: closest.y + closest.outY * clampedDist,
+    x: closest.x + closest.outX * minDist,
+    y: closest.y + closest.outY * minDist,
   };
 }
 

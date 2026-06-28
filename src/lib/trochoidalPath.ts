@@ -1,18 +1,17 @@
 import type { LoopPoint } from '../types/operations';
 import type { ToolpathPoint } from '../types/operations';
-import { clampToolCenterToExteriorBand, signedLoopArea2D } from './geometryProcessing';
+import { clampToolCenterMinDistanceFromPart, signedLoopArea2D } from './geometryProcessing';
 
 export interface TrochoidalParams {
-  /** Forward advance along guide path per full 2π rotation (mm). */
+  /** Forward advance along guide path per full tool orbit (mm). */
   forwardIncrement: number;
   /** Max outward tool-center excursion from inner guide (mm) = slotWidth − toolDiameter. */
   slotClearance: number;
   z: number;
   maxAngleStep?: number;
-  /** Part outline for clamping tool center to the allowed exterior band. */
+  /** Part outline — only minimum standoff is enforced (never max, to preserve slot width at corners). */
   partLoop?: LoopPoint[];
   minCenterDist?: number;
-  maxCenterDist?: number;
 }
 
 export interface ArcLengthGuide {
@@ -29,21 +28,6 @@ export interface GuideFrame {
   nx: number;
   ny: number;
   s: number;
-}
-
-/**
- * Outward-only trochoid in slot coordinates (+X forward, +Y outward normal).
- * Lateral motion stays in [0, slotClearance] so the tool never swings toward the part.
- */
-export function trochoidPointInSlot(
-  angleRad: number,
-  forwardScale: number,
-  slotClearance: number
-): [number, number] {
-  const b = slotClearance / 2;
-  const x = forwardScale * angleRad - forwardScale * Math.PI;
-  const y = b * (1 - Math.cos(angleRad));
-  return [x, y];
 }
 
 function densifyLoop(loop: LoopPoint[], maxSegmentLen: number): LoopPoint[] {
@@ -165,8 +149,9 @@ export function sampleGuideAtS(guide: ArcLengthGuide, s: number): GuideFrame {
 }
 
 /**
- * Constant-engagement trochoidal path in a slot beside the part outline.
- * Forward motion is uniform in arc length; lateral motion fills the slot outward only.
+ * Fusion-style trochoidal slot: each pass is a full circular orbit while the
+ * center advances smoothly forward along the inner guide. Slot width stays
+ * constant in the local frame (full width at convex corners).
  */
 export function generateConstantEngagementTrochoid(
   innerGuideLoop: LoopPoint[],
@@ -175,57 +160,62 @@ export function generateConstantEngagementTrochoid(
   const { forwardIncrement: increment, slotClearance, z } = params;
   if (innerGuideLoop.length < 3 || increment <= 0 || slotClearance <= 0) return [];
 
-  const maxAngleStep = params.maxAngleStep ?? (3 * Math.PI) / 180;
-  const sampleSpacing = Math.min(increment / 3, slotClearance / 4, 0.5);
+  const trochoidR = slotClearance / 2;
+  const maxAngleStep = params.maxAngleStep ?? (4 * Math.PI) / 180;
+  const sampleSpacing = Math.min(increment / 4, trochoidR / 2, 0.5);
   const arcGuide = buildArcLengthGuide(innerGuideLoop, sampleSpacing);
   const { totalLength } = arcGuide;
   if (totalLength <= 0) return [];
 
-  const forwardScale = increment / (2 * Math.PI);
+  const ccwGuide = signedLoopArea2D(innerGuideLoop) >= 0;
+  /** Consistent tool rotation: CW when guide is CCW (conventional exterior clearing). */
+  const rotSign = ccwGuide ? -1 : 1;
   const numCycles = Math.ceil(totalLength / increment);
-  const totalAngle = 2 * Math.PI * numCycles;
   const points: ToolpathPoint[] = [];
-  const clamp =
-    params.partLoop &&
-    params.minCenterDist !== undefined &&
-    params.maxCenterDist !== undefined;
+  const enforceMin =
+    params.partLoop && params.minCenterDist !== undefined;
 
-  for (let ang = 0; ang <= totalAngle + 1e-9; ang += maxAngleStep) {
-    const cycleIndex = Math.floor(ang / (2 * Math.PI));
-    const phase = ang - cycleIndex * 2 * Math.PI;
-    const sAlong = cycleIndex * increment + (phase / (2 * Math.PI)) * increment;
+  for (let cycle = 0; cycle < numCycles; cycle++) {
+    const sStart = cycle * increment;
+    const steps = Math.max(2, Math.ceil((2 * Math.PI) / maxAngleStep));
 
-    if (sAlong > totalLength + increment * 0.01) break;
+    for (let i = 0; i <= steps; i++) {
+      const phase = i / steps;
+      const sAlong = sStart + phase * increment;
+      if (sAlong > totalLength + increment * 0.01) break;
 
-    const frame = sampleGuideAtS(arcGuide, sAlong);
-    let tx = frame.tx;
-    let ty = frame.ty;
-    let nx = frame.nx;
-    let ny = frame.ny;
-    const nlen = Math.hypot(nx, ny) || 1;
-    nx /= nlen;
-    ny /= nlen;
-    const tlen = Math.hypot(tx, ty) || 1;
-    tx /= tlen;
-    ty /= tlen;
+      const theta = -Math.PI / 2 + rotSign * phase * 2 * Math.PI;
+      const frame = sampleGuideAtS(arcGuide, sAlong);
 
-    const [lx, ly] = trochoidPointInSlot(phase, forwardScale, slotClearance);
-    let px = frame.x + lx * tx + ly * nx;
-    let py = frame.y + lx * ty + ly * ny;
+      let tx = frame.tx;
+      let ty = frame.ty;
+      let nx = frame.nx;
+      let ny = frame.ny;
+      const nlen = Math.hypot(nx, ny) || 1;
+      nx /= nlen;
+      ny /= nlen;
+      const tlen = Math.hypot(tx, ty) || 1;
+      tx /= tlen;
+      ty /= tlen;
 
-    if (clamp) {
-      const clamped = clampToolCenterToExteriorBand(
-        params.partLoop!,
-        px,
-        py,
-        params.minCenterDist!,
-        params.maxCenterDist!
-      );
-      px = clamped.x;
-      py = clamped.y;
+      const cx = frame.x + nx * trochoidR;
+      const cy = frame.y + ny * trochoidR;
+      let px = cx + trochoidR * (Math.cos(theta) * tx + Math.sin(theta) * nx);
+      let py = cy + trochoidR * (Math.cos(theta) * ty + Math.sin(theta) * ny);
+
+      if (enforceMin) {
+        const clamped = clampToolCenterMinDistanceFromPart(
+          params.partLoop!,
+          px,
+          py,
+          params.minCenterDist!
+        );
+        px = clamped.x;
+        py = clamped.y;
+      }
+
+      points.push({ x: px, y: py, z });
     }
-
-    points.push({ x: px, y: py, z });
   }
 
   return points;

@@ -23,6 +23,9 @@ interface AppState {
   selectionSubMode: SelectionSubMode;
   partBounds: PartBounds | null;
   toolpaths: ToolpathSegment[];
+  simulationDistance: number;
+  simulationPlaying: boolean;
+  simulationSpeed: number;
 
   setStlFile: (file: File) => void;
   clearStl: () => void;
@@ -43,6 +46,10 @@ interface AppState {
   toggleOperationCollapsed: (id: string) => void;
   setPartBounds: (bounds: PartBounds | null) => void;
   regenerateToolpaths: () => void;
+  setSimulationDistance: (distance: number) => void;
+  setSimulationPlaying: (playing: boolean) => void;
+  setSimulationSpeed: (speed: number) => void;
+  resetSimulation: () => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -54,12 +61,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectionSubMode: 'geometry',
   partBounds: null,
   toolpaths: [],
+  simulationDistance: 0,
+  simulationPlaying: false,
+  simulationSpeed: 1,
 
   setStlFile: (file) => {
     const prev = get().stlUrl;
     if (prev) URL.revokeObjectURL(prev);
     const url = URL.createObjectURL(file);
-    set({ stlFile: file, stlUrl: url, operations: [], toolpaths: [], partBounds: null });
+    set({ stlFile: file, stlUrl: url, operations: [], toolpaths: [], partBounds: null, simulationDistance: 0, simulationPlaying: false });
   },
 
   clearStl: () => {
@@ -72,6 +82,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       toolpaths: [],
       partBounds: null,
       activeOperationId: null,
+      simulationDistance: 0,
+      simulationPlaying: false,
     });
   },
 
@@ -191,6 +203,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   regenerateToolpaths: () => {
     const { operations, partBounds } = get();
     const toolpaths = generateToolpaths(operations, partBounds);
-    set({ toolpaths });
+    set({ toolpaths, simulationDistance: 0, simulationPlaying: false });
   },
+
+  setSimulationDistance: (distance) =>
+    set({ simulationDistance: Math.max(0, distance) }),
+
+  setSimulationPlaying: (playing) => set({ simulationPlaying: playing }),
+
+  setSimulationSpeed: (speed) => set({ simulationSpeed: speed }),
+
+  resetSimulation: () => set({ simulationDistance: 0, simulationPlaying: false }),
 }));
