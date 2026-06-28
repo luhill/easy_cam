@@ -1,374 +1,271 @@
-import type { ToolpathPoint } from '../types/operations';
-import type { ArcLengthGuide, GuideFrame, TrochoidalParams } from './trochoidalPath';
-import {
-  buildArcLengthGuide,
-  sampleGuideAtS,
-} from './trochoidalPath';
-import type { LoopPoint } from '../types/operations';
-import { clampToolCenterMinDistanceFromPart, signedLoopArea2D } from './geometryProcessing';
+/**
+ * Four-zone adaptive trochoidal path generator.
+ *
+ * Each cycle produces exactly one forward step (stepover) along the slot:
+ *
+ *   Zone 1 – Cutting arc :  inner[s] ─────────────→ outer[s + step]
+ *                           (sweeps outward while advancing – engages material)
+ *
+ *   Zone 2 – Exit / lift :  vertical Z-lift at outer[s + step]
+ *                           (bypassed when liftAmount === 0)
+ *
+ *   Zone 3 – Flat return :  outer[s + step] ←────────── outer[s]
+ *                           (straight rapid backward along outer boundary,
+ *                            runs through already-cleared material,
+ *                            NEVER backtracks over the cut path)
+ *
+ *   Zone 4 – Lead-in arc :  outer[s] ─────────────→ inner[s + step]
+ *                           (smooth inward sweep, forward + inward,
+ *                            tangentially re-engages next cutting arc start)
+ *
+ * The outer boundary is always on the far (open-stock) side of the slot,
+ * so Zones 3 & 4 never conflict with the cut path of Zone 1.
+ */
 
-/** Micro-retract / lift between trochoid passes (mm). 0 = bypass exit lift entirely. */
-export type LiftAmount = number;
+import type { LoopPoint, ToolpathPoint } from '../types/operations';
+import type { ArcLengthGuide } from './trochoidalPath';
+import { buildArcLengthGuide, sampleGuideAtS } from './trochoidalPath';
+import { clampToolCenterMinDistanceFromPart } from './geometryProcessing';
 
-export interface FourZoneParams extends TrochoidalParams {
-  liftAmount: LiftAmount;
-}
-
-interface PlanarFrame {
-  x: number;
-  y: number;
+export interface FourZoneParams {
+  /** Forward advance per cycle (mm). Maps to stepover setting. */
+  forwardIncrement: number;
+  /** Slot clearance = slotWidth − toolDiameter (mm). Drives outward sweep amplitude. */
+  slotClearance: number;
+  /** Z cutting depth for this layer. */
   z: number;
-  tx: number;
-  ty: number;
-  nx: number;
-  ny: number;
+  /** Z micro-lift at exit (mm). 0 = bypass exit/lift zone entirely. */
+  liftAmount?: number;
+  /** Part outline — minimum standoff is enforced on cutting zones. */
+  partLoop?: LoopPoint[];
+  /** Minimum allowed tool-center distance from part (= toolRadius + radialOffset). */
+  minCenterDist?: number;
 }
 
-const RETURN_STEP_MM = 2.5;
-const ENTRY_ARC_STEPS = 10;
-const EXIT_LIFT_STEPS = 4;
+// ─── Resolution constants ─────────────────────────────────────────────────────
+/** Points on the cutting arc (Zone 1). */
+const CUT_STEPS = 24;
+/** Points on the lift / descent transitions (Zone 2 & descent part of Zone 4). */
+const LIFT_STEPS = 4;
+/** Points on the flat return (Zone 3). */
+const RETURN_STEPS = 8;
+/** Points on the lead-in arc (Zone 4). */
+const LEADIN_STEPS = 24;
 
-function normalizeFrame(frame: GuideFrame): PlanarFrame {
-  let tx = frame.tx;
-  let ty = frame.ty;
-  let nx = frame.nx;
-  let ny = frame.ny;
-  const nlen = Math.hypot(nx, ny) || 1;
-  nx /= nlen;
-  ny /= nlen;
-  const tlen = Math.hypot(tx, ty) || 1;
-  tx /= tlen;
-  ty /= tlen;
-  return { x: frame.x, y: frame.y, z: frame.z, tx, ty, nx, ny };
-}
+// ─── Geometry helpers ─────────────────────────────────────────────────────────
 
-function trochoidCutPoint(
-  frame: PlanarFrame,
-  trochoidR: number,
-  theta: number
+/**
+ * Sample a point on the slot band.
+ * @param s     Arc-length position along the inner guide.
+ * @param outward  Distance outward from the inner guide (0 = part side, slotClearance = open side).
+ */
+function slotPoint(
+  guide: ArcLengthGuide,
+  s: number,
+  outward: number,
+  z: number
 ): ToolpathPoint {
-  const cx = frame.x + frame.nx * trochoidR;
-  const cy = frame.y + frame.ny * trochoidR;
-  return {
-    x: cx + trochoidR * (Math.cos(theta) * frame.tx + Math.sin(theta) * frame.nx),
-    y: cy + trochoidR * (Math.cos(theta) * frame.ty + Math.sin(theta) * frame.ny),
-    z: frame.z,
-  };
+  const f = sampleGuideAtS(guide, s);
+  return { x: f.x + f.nx * outward, y: f.y + f.ny * outward, z };
 }
 
-function maybeClampCut(
-  point: ToolpathPoint,
+function applyMinStandoff(
+  pt: ToolpathPoint,
   partLoop: LoopPoint[] | undefined,
-  minCenterDist: number | undefined
+  minDist: number | undefined
 ): ToolpathPoint {
-  if (!partLoop || minCenterDist === undefined) return point;
-  const clamped = clampToolCenterMinDistanceFromPart(
-    partLoop,
-    point.x,
-    point.y,
-    minCenterDist
-  );
-  return { ...point, x: clamped.x, y: clamped.y };
+  if (!partLoop || minDist === undefined) return pt;
+  const c = clampToolCenterMinDistanceFromPart(partLoop, pt.x, pt.y, minDist);
+  return { ...pt, x: c.x, y: c.y };
 }
 
-function blendLength(
-  liftAmount: number,
-  forwardIncrement: number,
-  span: number,
-  trochoidR: number
-): number {
-  if (liftAmount > 0) return Math.max(liftAmount, trochoidR * 0.25);
-  return Math.min(forwardIncrement * 0.4, span * 0.35, Math.max(trochoidR, 0.5));
-}
+// ─── Zone 1: Cutting arc ──────────────────────────────────────────────────────
 
-function pushPoints(target: ToolpathPoint[], zone: ToolpathPoint[], skipFirst = false): void {
-  for (let i = 0; i < zone.length; i++) {
-    if (skipFirst && i === 0) continue;
-    target.push(zone[i]);
-  }
-}
-
-// ─── Zone 1: Cutting ───────────────────────────────────────────────────────
-
-function generateCuttingZone(
-  arcGuide: ArcLengthGuide,
-  cycle: number,
-  increment: number,
-  trochoidR: number,
-  rotSign: number,
+/**
+ * Sweeps the tool from the inner guide (part side, outward = 0) to the outer
+ * boundary (open-stock side, outward = slotClearance) while advancing forward
+ * from s_n to s_n + stepover. Uses a cosine ease-in/out for a smooth arc shape.
+ *
+ * Path: inner[s_n] ──arc──▶ outer[s_n + stepover]
+ */
+function buildCuttingArc(
+  guide: ArcLengthGuide,
+  s_n: number,
+  stepover: number,
+  slotClearance: number,
   z: number,
-  maxAngleStep: number,
   partLoop: LoopPoint[] | undefined,
-  minCenterDist: number | undefined
-): { points: ToolpathPoint[]; exitPoint: ToolpathPoint; exitFrame: PlanarFrame } {
-  const sStart = cycle * increment;
-  const steps = Math.max(2, Math.ceil((2 * Math.PI) / maxAngleStep));
-  const points: ToolpathPoint[] = [];
-  let exitPoint: ToolpathPoint = { x: 0, y: 0, z };
-  let exitFrame: PlanarFrame = { x: 0, y: 0, z, tx: 1, ty: 0, nx: 0, ny: 1 };
+  minDist: number | undefined
+): ToolpathPoint[] {
+  const pts: ToolpathPoint[] = [];
 
-  for (let i = 0; i <= steps; i++) {
-    const phase = i / steps;
-    const sAlong = sStart + phase * increment;
-    if (sAlong > arcGuide.totalLength + increment * 0.01) break;
-
-    const theta = -Math.PI / 2 + rotSign * phase * 2 * Math.PI;
-    const frame = normalizeFrame(sampleGuideAtS(arcGuide, sAlong));
-    frame.z = z;
-
-    let cut = trochoidCutPoint(frame, trochoidR, theta);
-    cut = maybeClampCut(cut, partLoop, minCenterDist);
-    points.push(cut);
-
-    if (i === steps) {
-      exitPoint = cut;
-      exitFrame = frame;
-    }
+  for (let i = 0; i <= CUT_STEPS; i++) {
+    const t = i / CUT_STEPS;
+    // Cosine ease gives a smooth, arc-like outward sweep (slow–fast–slow)
+    const outward = 0.5 * (1 - Math.cos(Math.PI * t)) * slotClearance;
+    const s = s_n + t * stepover;
+    pts.push(applyMinStandoff(slotPoint(guide, s, outward, z), partLoop, minDist));
   }
 
-  return { points, exitPoint, exitFrame };
+  return pts;
 }
 
-// ─── Zone 2: Exit & lift ─────────────────────────────────────────────────────
+// ─── Zone 2: Exit / lift ──────────────────────────────────────────────────────
 
-function generateExitLiftZone(
-  cutEnd: ToolpathPoint,
-  frame: PlanarFrame,
-  liftAmount: LiftAmount
-): ToolpathPoint[] {
+/**
+ * Vertical Z-lift at the exact exit point (outer boundary).
+ * Returns an empty array when liftAmount === 0 — zone is completely bypassed.
+ */
+function buildExitLift(exitPt: ToolpathPoint, liftAmount: number): ToolpathPoint[] {
   if (liftAmount <= 0) return [];
 
-  const points: ToolpathPoint[] = [];
-  for (let i = 1; i <= EXIT_LIFT_STEPS; i++) {
-    const t = i / EXIT_LIFT_STEPS;
-    points.push({
-      x: cutEnd.x + frame.nx * liftAmount * t,
-      y: cutEnd.y + frame.ny * liftAmount * t,
-      z: cutEnd.z + liftAmount * t,
-    });
+  const pts: ToolpathPoint[] = [];
+  for (let i = 1; i <= LIFT_STEPS; i++) {
+    const t = i / LIFT_STEPS;
+    pts.push({ x: exitPt.x, y: exitPt.y, z: exitPt.z + liftAmount * t });
   }
-  return points;
+  return pts;
 }
 
-function liftedPosition(
-  cutEnd: ToolpathPoint,
-  frame: PlanarFrame,
-  liftAmount: LiftAmount
-): ToolpathPoint {
-  if (liftAmount <= 0) return cutEnd;
-  return {
-    x: cutEnd.x + frame.nx * liftAmount,
-    y: cutEnd.y + frame.ny * liftAmount,
-    z: cutEnd.z + liftAmount,
-  };
-}
+// ─── Zone 3: Flat return ──────────────────────────────────────────────────────
 
-// ─── Zone 3: Return (high-feed non-cutting) ──────────────────────────────────
-
-function generateReturnZone(from: ToolpathPoint, to: ToolpathPoint): ToolpathPoint[] {
+/**
+ * Straight-line rapid traverse backward along the outer boundary:
+ *   outer[s_n + stepover] ──rapid──▶ outer[s_n]
+ *
+ * Travels entirely in already-cleared material (the outer side of the slot was
+ * opened by the current cycle's cutting arc). Never crosses the cut path.
+ */
+function buildFlatReturn(from: ToolpathPoint, to: ToolpathPoint): ToolpathPoint[] {
+  const pts: ToolpathPoint[] = [];
   const dx = to.x - from.x;
   const dy = to.y - from.y;
   const dz = to.z - from.z;
-  const len = Math.hypot(dx, dy, dz);
-  if (len < 1e-6) return [];
 
-  const steps = Math.max(2, Math.ceil(len / RETURN_STEP_MM));
-  const points: ToolpathPoint[] = [];
-
-  for (let i = 1; i <= steps; i++) {
-    const t = i / steps;
-    points.push({
-      x: from.x + dx * t,
-      y: from.y + dy * t,
-      z: from.z + dz * t,
-      rapid: true,
-    });
+  for (let i = 1; i <= RETURN_STEPS; i++) {
+    const t = i / RETURN_STEPS;
+    pts.push({ x: from.x + dx * t, y: from.y + dy * t, z: from.z + dz * t, rapid: true });
   }
-  return points;
+  return pts;
 }
 
-// ─── Zone 4: Entry (tangential blend) ────────────────────────────────────────
-
-function cubicHermitePoint(
-  p0: ToolpathPoint,
-  m0x: number,
-  m0y: number,
-  m0z: number,
-  p1: ToolpathPoint,
-  m1x: number,
-  m1y: number,
-  m1z: number,
-  t: number
-): ToolpathPoint {
-  const t2 = t * t;
-  const t3 = t2 * t;
-  const h00 = 2 * t3 - 3 * t2 + 1;
-  const h10 = t3 - 2 * t2 + t;
-  const h01 = -2 * t3 + 3 * t2;
-  const h11 = t3 - t2;
-
-  return {
-    x: h00 * p0.x + h10 * m0x + h01 * p1.x + h11 * m1x,
-    y: h00 * p0.y + h10 * m0y + h01 * p1.y + h11 * m1y,
-    z: h00 * p0.z + h10 * m0z + h01 * p1.z + h11 * m1z,
-  };
-}
-
-function generateEntryZone(
-  approach: ToolpathPoint,
-  cutStart: ToolpathPoint,
-  returnDirX: number,
-  returnDirY: number,
-  cutTangentX: number,
-  cutTangentY: number,
-  chord: number
-): ToolpathPoint[] {
-  const scale = chord * 0.35;
-  const m0x = returnDirX * scale;
-  const m0y = returnDirY * scale;
-  const m0z = 0;
-  const m1x = cutTangentX * scale;
-  const m1y = cutTangentY * scale;
-  const m1z = 0;
-
-  const points: ToolpathPoint[] = [];
-  for (let i = 1; i <= ENTRY_ARC_STEPS; i++) {
-    const t = i / ENTRY_ARC_STEPS;
-    points.push(cubicHermitePoint(approach, m0x, m0y, m0z, cutStart, m1x, m1y, m1z, t));
-  }
-  return points;
-}
-
-function nextCycleCutStart(
-  arcGuide: ArcLengthGuide,
-  cycle: number,
-  increment: number,
-  trochoidR: number,
-  z: number,
-  partLoop: LoopPoint[] | undefined,
-  minCenterDist: number | undefined
-): { cutStart: ToolpathPoint; frame: PlanarFrame } {
-  const frame = normalizeFrame(sampleGuideAtS(arcGuide, cycle * increment));
-  frame.z = z;
-  const theta = -Math.PI / 2;
-  let cutStart = trochoidCutPoint(frame, trochoidR, theta);
-  cutStart = maybeClampCut(cutStart, partLoop, minCenterDist);
-  return { cutStart, frame };
-}
-
-function computeApproachPoint(
-  cutStart: ToolpathPoint,
-  frame: PlanarFrame,
-  liftAmount: LiftAmount,
-  blendLen: number,
-  returnFrom: ToolpathPoint
-): ToolpathPoint {
-  if (liftAmount > 0) {
-    return {
-      x: cutStart.x + frame.nx * liftAmount,
-      y: cutStart.y + frame.ny * liftAmount,
-      z: cutStart.z + liftAmount,
-    };
-  }
-
-  const dx = cutStart.x - returnFrom.x;
-  const dy = cutStart.y - returnFrom.y;
-  const len = Math.hypot(dx, dy) || 1;
-  const dist = Math.min(blendLen, len * 0.9);
-  return {
-    x: cutStart.x - (dx / len) * dist,
-    y: cutStart.y - (dy / len) * dist,
-    z: cutStart.z,
-  };
-}
-
-// ─── Orchestrator ────────────────────────────────────────────────────────────
+// ─── Zone 4: Lead-in arc ──────────────────────────────────────────────────────
 
 /**
- * Four-zone adaptive trochoidal pattern per pass:
- * 1. Cutting — rolling trochoid orbit
- * 2. Exit & lift — optional micro-retract (liftAmount == 0 skips this zone)
- * 3. Return — straight rapid traverse
- * 4. Entry — tangential Hermite blend into the next cut
+ * Smooth inward arc from outer[s_n] to inner[s_n + stepover], re-engaging
+ * the part tangentially for the next cutting arc.
+ *
+ * If lifted, a rapid descent to cut depth is prepended first.
+ * Mirror of the cutting arc: advances forward while sweeping inward.
+ */
+function buildLeadIn(
+  guide: ArcLengthGuide,
+  s_n: number,
+  stepover: number,
+  slotClearance: number,
+  liftAmount: number,
+  z_cut: number,
+  partLoop: LoopPoint[] | undefined,
+  minDist: number | undefined
+): ToolpathPoint[] {
+  const pts: ToolpathPoint[] = [];
+
+  // Rapid descent back to cut depth (only when lifted)
+  if (liftAmount > 0) {
+    const outerPt = slotPoint(guide, s_n, slotClearance, z_cut);
+    for (let i = 1; i <= LIFT_STEPS; i++) {
+      const t = i / LIFT_STEPS;
+      pts.push({ x: outerPt.x, y: outerPt.y, z: z_cut + liftAmount * (1 - t) });
+    }
+  }
+
+  // Inward arc: outer[s_n] → inner[s_n + stepover]
+  // Cosine ease mirrors the cutting arc, creating a symmetric slot profile.
+  for (let i = 1; i <= LEADIN_STEPS; i++) {
+    const t = i / LEADIN_STEPS;
+    const outward = 0.5 * (1 + Math.cos(Math.PI * t)) * slotClearance;
+    const s = s_n + t * stepover;
+    pts.push(applyMinStandoff(slotPoint(guide, s, outward, z_cut), partLoop, minDist));
+  }
+
+  return pts;
+}
+
+// ─── Orchestrator ─────────────────────────────────────────────────────────────
+
+/**
+ * Generate the complete four-zone adaptive path for one Z layer.
+ *
+ * Cycle geometry (slot cross-section view, part to the left):
+ *
+ *   inner (part side) │  outer (open stock)
+ *   ──────────────────┼──────────────────────────────
+ *         s_n ●       │         Zone 3 ←←←←← ●
+ *              \      │                       |
+ *        Zone 1 \     │               Zone 4  |
+ *         (cut)  \    │              (lead-in) |
+ *                 \   │                       |
+ *                  ●──┘ Zone 2 (lift)         |
+ *                s_n+step                     |
+ *   s_n+step ●───────────────────────────────┘
+ *
+ * Each cycle is self-contained and advances the slot centerline by stepover.
  */
 export function generateFourZoneAdaptivePath(
   innerGuideLoop: LoopPoint[],
   params: FourZoneParams
 ): ToolpathPoint[] {
-  const { forwardIncrement: increment, slotClearance, z, liftAmount } = params;
-  if (innerGuideLoop.length < 3 || increment <= 0 || slotClearance <= 0) return [];
+  const { forwardIncrement: stepover, slotClearance, z, liftAmount = 0 } = params;
 
-  const trochoidR = slotClearance / 2;
-  const maxAngleStep = params.maxAngleStep ?? (4 * Math.PI) / 180;
-  const sampleSpacing = Math.min(increment / 4, trochoidR / 2, 0.5);
-  const arcGuide = buildArcLengthGuide(innerGuideLoop, sampleSpacing);
-  const { totalLength } = arcGuide;
-  if (totalLength <= 0) return [];
+  if (innerGuideLoop.length < 3 || stepover <= 0 || slotClearance <= 0) return [];
 
-  const ccwGuide = signedLoopArea2D(innerGuideLoop) >= 0;
-  const rotSign = ccwGuide ? -1 : 1;
-  const numCycles = Math.ceil(totalLength / increment);
-  const points: ToolpathPoint[] = [];
-  const partLoop = params.partLoop;
-  const minCenterDist = params.minCenterDist;
+  const sampleSpacing = Math.min(stepover / 6, slotClearance / 4, 0.5);
+  const guide = buildArcLengthGuide(innerGuideLoop, sampleSpacing);
+  if (guide.totalLength <= 0) return [];
+
+  const numCycles = Math.ceil(guide.totalLength / stepover);
+  const pts: ToolpathPoint[] = [];
+  const { partLoop, minCenterDist } = params;
 
   for (let cycle = 0; cycle < numCycles; cycle++) {
-    const { points: cutPoints, exitPoint, exitFrame } = generateCuttingZone(
-      arcGuide,
-      cycle,
-      increment,
-      trochoidR,
-      rotSign,
-      z,
-      maxAngleStep,
-      partLoop,
-      minCenterDist
-    );
+    const s_n = cycle * stepover;
 
-    pushPoints(points, cutPoints, points.length > 0);
+    // ── Zone 1: Cutting arc ─────────────────────────────────────────────────
+    // inner[s_n] → outer[s_n1]
+    const cutArc = buildCuttingArc(guide, s_n, stepover, slotClearance, z, partLoop, minCenterDist);
 
-    if (cycle >= numCycles - 1) continue;
+    if (cycle === 0) {
+      // First cycle: include the path start (inner[0])
+      pts.push(...cutArc);
+    } else {
+      // Subsequent cycles: Zone 4 of the previous cycle already placed inner[s_n];
+      // skip the duplicate first point.
+      pts.push(...cutArc.slice(1));
+    }
 
-    const { cutStart: nextStart, frame: nextFrame } = nextCycleCutStart(
-      arcGuide,
-      cycle + 1,
-      increment,
-      trochoidR,
-      z,
-      partLoop,
-      minCenterDist
-    );
+    // Exit point = outer[s_n1]
+    const exitPt = pts[pts.length - 1];
 
-    const retracted = liftedPosition(exitPoint, exitFrame, liftAmount);
-    const exitLift = generateExitLiftZone(exitPoint, exitFrame, liftAmount);
-    pushPoints(points, exitLift, true);
+    // ── Zone 2: Exit / lift ─────────────────────────────────────────────────
+    // Pure vertical Z lift. Empty when liftAmount === 0.
+    const liftPts = buildExitLift(exitPt, liftAmount);
+    pts.push(...liftPts);
+    const postLiftPt = liftPts.length > 0 ? liftPts[liftPts.length - 1] : exitPt;
 
-    const span = Math.hypot(nextStart.x - retracted.x, nextStart.y - retracted.y);
-    const blendLen = blendLength(liftAmount, increment, span, trochoidR);
-    const approach = computeApproachPoint(nextStart, nextFrame, liftAmount, blendLen, retracted);
+    // ── Zone 3: Flat return ─────────────────────────────────────────────────
+    // outer[s_n1] (lifted) → outer[s_n] (lifted)
+    // Backward along the outer boundary — entirely in cleared material.
+    const outerAtStart = slotPoint(guide, s_n, slotClearance, z);
+    const returnTarget: ToolpathPoint = { ...outerAtStart, z: z + liftAmount };
+    pts.push(...buildFlatReturn(postLiftPt, returnTarget));
 
-    const returnMove = generateReturnZone(
-      exitLift.length > 0 ? exitLift[exitLift.length - 1] : retracted,
-      approach
-    );
-    pushPoints(points, returnMove, true);
-
-    const rdx = approach.x - retracted.x;
-    const rdy = approach.y - retracted.y;
-    const rlen = Math.hypot(rdx, rdy) || 1;
-    const entryArc = generateEntryZone(
-      approach,
-      nextStart,
-      rdx / rlen,
-      rdy / rlen,
-      nextFrame.tx,
-      nextFrame.ty,
-      Math.max(span, blendLen)
-    );
-    pushPoints(points, entryArc, true);
+    // ── Zone 4: Lead-in arc ─────────────────────────────────────────────────
+    // outer[s_n] → inner[s_n1]  (descent + smooth inward arc)
+    // Ends at inner[s_n1] which is the start of the next cycle's cutting arc.
+    pts.push(...buildLeadIn(guide, s_n, stepover, slotClearance, liftAmount, z, partLoop, minCenterDist));
   }
 
-  return points;
+  return pts;
 }
 
 export function generateConstantEngagementTrochoid(
@@ -376,11 +273,4 @@ export function generateConstantEngagementTrochoid(
   params: FourZoneParams
 ): ToolpathPoint[] {
   return generateFourZoneAdaptivePath(innerGuideLoop, params);
-}
-
-export function generateTrochoidalOutlinePath(
-  guideLoop: LoopPoint[],
-  params: FourZoneParams
-): ToolpathPoint[] {
-  return generateFourZoneAdaptivePath(guideLoop, params);
 }
