@@ -1,257 +1,76 @@
 /**
- * Four-zone adaptive slot path — carved from solid stock outside the part outline.
+ * Constant circular-loop adaptive trochoid.
  *
- * Context (same as a simple outline, but channel wider than the tool):
+ * Each pass is one full orbit while the circle center advances forward along
+ * the inner guide by `forwardIncrement` (stepover). The first half of the
+ * orbit engages material; the second half is the return stroke through cleared
+ * space with optional gradual Z lift (peaks at the midpoint of the return half).
  *
- *   Part wall │ inner guide (0) │──── slot / stock ────│ outer (slotClearance)
- *
- *   • Material lives OUTWARD of the inner guide.
- *   • The "safe zone" is BEHIND the tool along the travel direction — already cleared.
- *   • Cutting pushes inner → outer while advancing forward (engaging stock).
- *   • Return crosses the SLOT CENTER (away from both edges), moving backward in travel
- *     through the safe / cleared zone — never along the outer (stock) edge.
- *   • Motions are rounded (O-with-flat-bottom feel) — no sharp corner reversals.
- *   • Lift (if liftAmount > 0) ramps up during return, peaks at slot-center / mid-return,
- *     then ramps down before the next cut. liftAmount === 0 skips all Z motion.
+ *   phase 0.0 → 0.5   cutting half  (at cut depth)
+ *   phase 0.5 → 1.0   return half   (rapid; liftAmount × sin(πt) when lift > 0)
  */
 
 import type { LoopPoint, ToolpathPoint } from '../types/operations';
-import type { ArcLengthGuide } from './trochoidalPath';
 import { buildArcLengthGuide, sampleGuideAtS } from './trochoidalPath';
 import { clampToolCenterMinDistanceFromPart, signedLoopArea2D } from './geometryProcessing';
 
 export interface FourZoneParams {
-  /** Net forward advance per cycle along the outline (mm) — stepover. */
+  /** Forward advance per full orbit (mm) — stepover. */
   forwardIncrement: number;
-  /** Tool-center lateral range inside slot = slotWidth − toolDiameter (mm). */
+  /** Lateral orbit diameter component = slotWidth − toolDiameter (mm). */
   slotClearance: number;
   z: number;
-  /** Peak Z lift during return (mm). 0 = remain at cut depth throughout. */
+  /** Peak Z lift at the middle of the return half (mm). 0 = flat throughout. */
   liftAmount?: number;
   partLoop?: LoopPoint[];
   minCenterDist?: number;
 }
 
-// ─── Cycle layout (fractions of one loop parameter u ∈ [0, 1]) ───────────────
-const CUT_END = 0.38;       // Zone 1 ends — forward cutting arc
-const EXIT_END = 0.46;      // Zone 2 ends — smooth fillet off the cut (still at depth)
-// Zone 3: RETURN_END — backward stroke through slot center with lift
-const RETURN_END = 0.9;     // Zone 4: final blend down to inner / next cut start
+const ANGLE_STEP = (4 * Math.PI) / 180;
 
-const CUT_STEPS = 28;
-const EXIT_STEPS = 6;
-const RETURN_STEPS = 24;
-const LEADIN_STEPS = 8;
-
-/** Smooth 0→1 step (C¹ at ends). */
-function smoothstep(t: number): number {
-  const x = Math.max(0, Math.min(1, t));
-  return x * x * (3 - 2 * x);
+function normalizeFrame(frame: ReturnType<typeof sampleGuideAtS>) {
+  let tx = frame.tx;
+  let ty = frame.ty;
+  let nx = frame.nx;
+  let ny = frame.ny;
+  const nlen = Math.hypot(nx, ny) || 1;
+  nx /= nlen;
+  ny /= nlen;
+  const tlen = Math.hypot(tx, ty) || 1;
+  tx /= tlen;
+  ty /= tlen;
+  return { x: frame.x, y: frame.y, tx, ty, nx, ny };
 }
 
-function slotPoint(guide: ArcLengthGuide, s: number, outward: number, z: number): ToolpathPoint {
-  const f = sampleGuideAtS(guide, s);
-  return { x: f.x + f.nx * outward, y: f.y + f.ny * outward, z };
-}
-
-function clampCut(
-  pt: ToolpathPoint,
-  partLoop: LoopPoint[] | undefined,
-  minDist: number | undefined
+function orbitPoint(
+  frame: ReturnType<typeof normalizeFrame>,
+  trochoidR: number,
+  theta: number,
+  z: number
 ): ToolpathPoint {
-  if (!partLoop || minDist === undefined) return pt;
-  const c = clampToolCenterMinDistanceFromPart(partLoop, pt.x, pt.y, minDist);
-  return { ...pt, x: c.x, y: c.y };
+  const cx = frame.x + frame.nx * trochoidR;
+  const cy = frame.y + frame.ny * trochoidR;
+  return {
+    x: cx + trochoidR * (Math.cos(theta) * frame.tx + Math.sin(theta) * frame.nx),
+    y: cy + trochoidR * (Math.cos(theta) * frame.ty + Math.sin(theta) * frame.ny),
+    z,
+  };
 }
 
-/** Forward arc length during the cut — overshoots stepover so return can move backward. */
-function forwardSpan(slotClearance: number, stepover: number): number {
-  return Math.max(stepover * 1.75, slotClearance * 1.1, stepover + slotClearance * 0.5);
-}
-
-// ─── Shared kinematics for one cycle (local outline frame) ───────────────────
-
-interface CyclePose {
-  s: number;
-  outward: number;
-  z: number;
-  /** true = non-cutting traverse (return / lead-in). */
-  nonCutting: boolean;
-}
-
-/**
- * Map loop parameter u ∈ [0,1] to tool pose for cycle starting at s_n.
- *
- * outward = 0   → inner guide (part side, cleared)
- * outward = slotClearance → outer slot wall (stock contact side)
- * outward = slotClearance/2 → slot center (safe return corridor)
- */
-function cyclePose(
-  s_n: number,
-  u: number,
-  stepover: number,
-  span: number,
-  slotClearance: number,
+/** Z and rapid flag for a point on the orbit (phase ∈ [0, 1] within one loop). */
+function returnHalfProfile(
+  phase: number,
   zCut: number,
   liftAmount: number
-): CyclePose {
-  const half = slotClearance / 2;
-
-  // ── Zone 1: Forward cutting arc (inner → outer, advancing along outline) ──
-  if (u <= CUT_END) {
-    const t = u / CUT_END;
-    const s = s_n + span * smoothstep(t);
-    // Flattened-bottom O: ease out to full depth, hold, soft handoff to exit fillet
-    let outward: number;
-    if (t < 0.55) {
-      const p = smoothstep(t / 0.55);
-      outward = slotClearance * (1 - Math.cos((Math.PI * p) / 2));
-    } else {
-      const p = (t - 0.55) / 0.45;
-      outward = slotClearance * (1 - 0.04 * smoothstep(p));
-    }
-    return { s, outward, z: zCut, nonCutting: false };
+): { z: number; rapid: boolean } {
+  if (phase <= 0.5) {
+    return { z: zCut, rapid: false };
   }
-
-  // ── Zone 2: Exit fillet — round the corner off the cut, still at cut depth ──
-  if (u <= EXIT_END) {
-    const t = (u - CUT_END) / (EXIT_END - CUT_END);
-    const s = s_n + span - t * span * 0.06;
-    const outward = slotClearance * (1 - 0.12 * smoothstep(t));
-    return { s, outward, z: zCut, nonCutting: false };
-  }
-
-  // ── Zone 3: Return through slot center, backward in travel (safe zone) ─────
-  if (u <= RETURN_END) {
-    const t = (u - EXIT_END) / (RETURN_END - EXIT_END);
-    const backDist = span - stepover;
-    const s = s_n + span - t * backDist * 0.82;
-    const outward = half + half * Math.cos(Math.PI * smoothstep(t));
-    const zLift = liftAmount > 0 ? liftAmount * Math.sin(Math.PI * smoothstep(t)) : 0;
-    return { s, outward, z: zCut + zLift, nonCutting: true };
-  }
-
-  // ── Zone 4: Lead-in — finish backward travel, descend, land on inner guide ───
-  const t = (u - RETURN_END) / (1 - RETURN_END);
-  const backDist = span - stepover;
-  const s = s_n + span - backDist * (0.82 + 0.18 * smoothstep(t));
-  const outward = half * (1 - smoothstep(t));
-  const zLift = liftAmount > 0 ? liftAmount * (1 - smoothstep(t)) : 0;
-  return { s, outward, z: zCut + zLift, nonCutting: t < 0.35 };
+  const t = (phase - 0.5) / 0.5;
+  const z =
+    liftAmount > 0 ? zCut + liftAmount * Math.sin(Math.PI * t) : zCut;
+  return { z, rapid: true };
 }
-
-function sampleZone(
-  guide: ArcLengthGuide,
-  s_n: number,
-  u0: number,
-  u1: number,
-  steps: number,
-  stepover: number,
-  span: number,
-  slotClearance: number,
-  zCut: number,
-  liftAmount: number,
-  partLoop: LoopPoint[] | undefined,
-  minDist: number | undefined,
-  clampStandoff: boolean
-): ToolpathPoint[] {
-  const pts: ToolpathPoint[] = [];
-  for (let i = 0; i <= steps; i++) {
-    const u = u0 + (u1 - u0) * (i / steps);
-    const pose = cyclePose(s_n, u, stepover, span, slotClearance, zCut, liftAmount);
-    let pt = slotPoint(guide, pose.s, pose.outward, pose.z);
-    if (clampStandoff) pt = clampCut(pt, partLoop, minDist);
-    if (pose.nonCutting) pt = { ...pt, rapid: true };
-    pts.push(pt);
-  }
-  return pts;
-}
-
-// ─── Zone builders (explicit phases) ───────────────────────────────────────
-
-/** Zone 1 — forward cutting arc: inner guide → outer slot wall, advancing in travel. */
-function buildCuttingArcZone(
-  guide: ArcLengthGuide,
-  s_n: number,
-  stepover: number,
-  span: number,
-  slotClearance: number,
-  zCut: number,
-  partLoop: LoopPoint[] | undefined,
-  minDist: number | undefined
-): ToolpathPoint[] {
-  return sampleZone(
-    guide, s_n, 0, CUT_END, CUT_STEPS,
-    stepover, span, slotClearance, zCut, 0,
-    partLoop, minDist, true
-  );
-}
-
-/** Zone 2 — exit fillet: smooth rounded transition off the cut (no sharp reversal). */
-function buildExitFilletZone(
-  guide: ArcLengthGuide,
-  s_n: number,
-  stepover: number,
-  span: number,
-  slotClearance: number,
-  zCut: number,
-  partLoop: LoopPoint[] | undefined,
-  minDist: number | undefined
-): ToolpathPoint[] {
-  return sampleZone(
-    guide, s_n, CUT_END, EXIT_END, EXIT_STEPS,
-    stepover, span, slotClearance, zCut, 0,
-    partLoop, minDist, true
-  );
-}
-
-/**
- * Zone 3 — return stroke: backward in travel through slot center (cleared safe corridor).
- * Lift ramps up to liftAmount at the middle of this zone when liftAmount > 0.
- */
-function buildReturnThroughSlotZone(
-  guide: ArcLengthGuide,
-  s_n: number,
-  stepover: number,
-  span: number,
-  slotClearance: number,
-  zCut: number,
-  liftAmount: number
-): ToolpathPoint[] {
-  return sampleZone(
-    guide, s_n, EXIT_END, RETURN_END, RETURN_STEPS,
-    stepover, span, slotClearance, zCut, liftAmount,
-    undefined, undefined, false
-  );
-}
-
-/**
- * Zone 4 — lead-in: complete backward travel to s_n+stepover on inner guide,
- * gradual descent to cut depth, tangential re-engagement for the next cut arc.
- */
-function buildLeadInZone(
-  guide: ArcLengthGuide,
-  s_n: number,
-  stepover: number,
-  span: number,
-  slotClearance: number,
-  zCut: number,
-  liftAmount: number,
-  partLoop: LoopPoint[] | undefined,
-  minDist: number | undefined
-): ToolpathPoint[] {
-  return sampleZone(
-    guide, s_n, RETURN_END, 1, LEADIN_STEPS,
-    stepover, span, slotClearance, zCut, liftAmount,
-    partLoop, minDist, true
-  );
-}
-
-function appendZone(target: ToolpathPoint[], zone: ToolpathPoint[], skipFirst: boolean): void {
-  for (let i = skipFirst ? 1 : 0; i < zone.length; i++) target.push(zone[i]);
-}
-
-// ─── Orchestrator ────────────────────────────────────────────────────────────
 
 export function generateFourZoneAdaptivePath(
   innerGuideLoop: LoopPoint[],
@@ -262,40 +81,48 @@ export function generateFourZoneAdaptivePath(
 
   if (innerGuideLoop.length < 3 || stepover <= 0 || slotClearance <= 0) return [];
 
-  const span = forwardSpan(slotClearance, stepover);
-  const spacing = Math.min(stepover / 8, slotClearance / 6, 0.4);
-  const guide = buildArcLengthGuide(innerGuideLoop, spacing);
+  const trochoidR = slotClearance / 2;
+  const sampleSpacing = Math.min(stepover / 4, trochoidR / 2, 0.5);
+  const guide = buildArcLengthGuide(innerGuideLoop, sampleSpacing);
   if (guide.totalLength <= 0) return [];
 
-  void signedLoopArea2D(innerGuideLoop);
-
+  const ccwGuide = signedLoopArea2D(innerGuideLoop) >= 0;
+  const rotSign = ccwGuide ? -1 : 1;
   const numCycles = Math.ceil(guide.totalLength / stepover);
-  const pts: ToolpathPoint[] = [];
+  const steps = Math.max(2, Math.ceil((2 * Math.PI) / ANGLE_STEP));
+  const points: ToolpathPoint[] = [];
   const { partLoop, minCenterDist } = params;
 
   for (let cycle = 0; cycle < numCycles; cycle++) {
-    const s_n = cycle * stepover;
+    const sStart = cycle * stepover;
 
-    const zone1 = buildCuttingArcZone(
-      guide, s_n, stepover, span, slotClearance, zCut, partLoop, minCenterDist
-    );
-    const zone2 = buildExitFilletZone(
-      guide, s_n, stepover, span, slotClearance, zCut, partLoop, minCenterDist
-    );
-    const zone3 = buildReturnThroughSlotZone(
-      guide, s_n, stepover, span, slotClearance, zCut, liftAmount
-    );
-    const zone4 = buildLeadInZone(
-      guide, s_n, stepover, span, slotClearance, zCut, liftAmount, partLoop, minCenterDist
-    );
+    for (let i = 0; i <= steps; i++) {
+      const phase = i / steps;
+      const sAlong = sStart + phase * stepover;
+      if (sAlong > guide.totalLength + stepover * 0.01) break;
 
-    appendZone(pts, zone1, cycle > 0);
-    appendZone(pts, zone2, true);
-    appendZone(pts, zone3, true);
-    appendZone(pts, zone4, true);
+      const theta = -Math.PI / 2 + rotSign * phase * 2 * Math.PI;
+      const frame = normalizeFrame(sampleGuideAtS(guide, sAlong));
+      const { z, rapid } = returnHalfProfile(phase, zCut, liftAmount);
+
+      let pt = orbitPoint(frame, trochoidR, theta, z);
+      if (partLoop && minCenterDist !== undefined) {
+        const c = clampToolCenterMinDistanceFromPart(
+          partLoop,
+          pt.x,
+          pt.y,
+          minCenterDist
+        );
+        pt = { ...pt, x: c.x, y: c.y };
+      }
+      if (rapid) pt = { ...pt, rapid: true };
+
+      if (cycle > 0 && i === 0) continue;
+      points.push(pt);
+    }
   }
 
-  return pts;
+  return points;
 }
 
 export function generateConstantEngagementTrochoid(

@@ -92,7 +92,7 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
       {(operation.type === 'outline' || operation.type === 'adaptive-outline') && (
         <p className="settings-hint">
           {operation.type === 'adaptive-outline'
-            ? 'Adaptive slot clears stock outside the part (wider than the tool). Pass advance (stepover) is forward motion per loop. Pass lift peaks at slot center during the return stroke (0 = no lift).'
+            ? 'Circular trochoid loops advance forward each orbit (pass advance = stepover). Pass lift raises Z gradually on the return half of each loop, peaking at mid-return (0 = flat).'
             : 'Toolpath runs at tool radius + additional offset from the part outline.'}
         </p>
       )}
