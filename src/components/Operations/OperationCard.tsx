@@ -2,6 +2,7 @@ import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { Operation } from '../../types/operations';
 import { OPERATION_COLORS, getSelectionStrategy, getSelectedHoles } from '../../types/operations';
+import { computeDefaultEntryPoint } from '../../lib/adaptiveOutline';
 import { useAppStore } from '../../store/useAppStore';
 import { OperationSettings } from './OperationSettings';
 
@@ -23,12 +24,13 @@ function formatGeometrySummary(operation: Operation): string {
 
   if (operation.type === 'adaptive-outline') {
     const hasOutline = geo.loops && geo.loops.length > 0;
-    const hasEntry = !!geo.entryPoint;
-    if (!hasOutline && !hasEntry) return 'None selected';
-    const parts: string[] = [];
-    if (hasOutline) parts.push('outline');
-    if (hasEntry) {
-      parts.push(`entry (${geo.entryPoint!.x.toFixed(1)}, ${geo.entryPoint!.y.toFixed(1)})`);
+    if (!hasOutline) return 'None selected';
+    const parts: string[] = ['outline'];
+    if (geo.entryPoint) {
+      parts.push(`entry (${geo.entryPoint.x.toFixed(1)}, ${geo.entryPoint.y.toFixed(1)})`);
+    } else {
+      const auto = computeDefaultEntryPoint(geo.loops![0], operation.settings);
+      parts.push(`auto entry (${auto.x.toFixed(1)}, ${auto.y.toFixed(1)})`);
     }
     return parts.join(', ');
   }
@@ -81,7 +83,10 @@ export function OperationCard({ operation }: OperationCardProps) {
     !!operation.geometry &&
     (operation.geometry.faceIndices.length > 0 ||
       getSelectedHoles(operation.geometry).length > 0 ||
-      !!operation.geometry.entryPoint);
+      !!operation.geometry.entryPoint ||
+      (operation.type === 'adaptive-outline' &&
+        !!operation.geometry.loops &&
+        operation.geometry.loops.length > 0));
 
   const handleSelectGeometry = () => {
     setActiveOperation(operation.id);
@@ -187,8 +192,8 @@ export function OperationCard({ operation }: OperationCardProps) {
             {isActive && selectionMode && operation.type === 'adaptive-outline' && (
               <p className="geometry-submode">
                 {selectionSubMode === 'entry-point'
-                  ? 'Click in stock above the part to place helix entry'
-                  : 'Select top-facing part outline'}
+                  ? 'Click in stock above the part to override helix entry (optional)'
+                  : 'Select top-facing part outline — entry is placed automatically in stock'}
               </p>
             )}
             {isActive && selectionMode && (operation.type === 'drill' || operation.type === 'helix') && (

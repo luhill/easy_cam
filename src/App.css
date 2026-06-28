@@ -291,6 +291,7 @@ body {
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
   border-radius: var(--radius);
+  flex-shrink: 0;
   overflow: hidden;
   transition: opacity 0.15s;
 }
@@ -355,8 +356,6 @@ body {
 .operation-body {
   padding: 0 12px 12px;
   border-top: 1px solid var(--border);
-  max-height: min(50vh, 420px);
-  overflow-y: auto;
 }
 
 /* Settings */

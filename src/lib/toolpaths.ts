@@ -3,9 +3,11 @@ import type { LoopPoint } from '../types/operations';
 import type { PartBounds } from './geometryProcessing';
 import { offsetLoop2D } from './geometryProcessing';
 import { OPERATION_COLORS, getSelectedHoles } from '../types/operations';
+import { resolveAdaptiveEntryPoint } from './adaptiveOutline';
 import {
   defaultTrochoidRadius,
-  generateTrochoidalOutlinePath,
+  generateConstantEngagementTrochoid,
+  adaptiveForwardIncrement,
 } from './trochoidalPath';
 
 const MIN_STEP_DOWN = 0.05;
@@ -181,7 +183,7 @@ function generateAdaptiveTrochoidalPath(
 ): ToolpathPoint[] {
   const toolD = Math.max(settings.toolDiameter, 0.1);
   const slotW = channelWidth(settings);
-  const forwardIncrement = Math.max(toolD * (settings.stepover / 100), toolD * 0.05);
+  const forwardIncrement = adaptiveForwardIncrement(toolD, settings.stepover);
   const trochoidR =
     settings.trochoidRadius > 0
       ? settings.trochoidRadius
@@ -189,7 +191,7 @@ function generateAdaptiveTrochoidalPath(
 
   const guideLoop = offsetLoop2D(partLoop, toolCenterlineOffset(settings));
 
-  return generateTrochoidalOutlinePath(guideLoop, {
+  return generateConstantEngagementTrochoid(guideLoop, {
     trochoidRadius: trochoidR,
     forwardIncrement,
     z,
@@ -199,12 +201,12 @@ function generateAdaptiveTrochoidalPath(
 function generateAdaptiveOutlinePath(op: Operation, topZ: number): ToolpathPoint[] {
   const { settings, geometry } = op;
   const loop = geometry?.loops?.[0];
-  const entry = geometry?.entryPoint;
 
-  if (!loop || !entry) {
+  if (!loop) {
     return generateOutlinePath(op, topZ);
   }
 
+  const entry = resolveAdaptiveEntryPoint(loop, settings, geometry?.entryPoint);
   const cutZ = Math.max(topZ - settings.depth, 0);
   const clearance = topZ + settings.clearance;
   const points: ToolpathPoint[] = [];

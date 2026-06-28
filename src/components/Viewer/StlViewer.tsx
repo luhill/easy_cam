@@ -37,6 +37,7 @@ import { ToolpathLines } from './ToolpathLines';
 import { SelectionLoopLines } from './SelectionLoopLines';
 import { ToolOriginMarker } from './ToolOriginMarker';
 import { EntryPointMarker, StockTopPlane } from './EntryPointMarker';
+import { computeDefaultEntryPoint } from '../../lib/adaptiveOutline';
 
 interface StlMeshProps {
   processedMesh: ProcessedMesh;
@@ -63,6 +64,10 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
     if (!s.activeOperationId) return null;
     return s.operations.find((o) => o.id === s.activeOperationId)?.type ?? null;
   });
+  const activeOperationSettings = useAppStore((s) => {
+    if (!s.activeOperationId) return null;
+    return s.operations.find((o) => o.id === s.activeOperationId)?.settings ?? null;
+  });
   const setOperationGeometry = useAppStore((s) => s.setOperationGeometry);
   const updateOperation = useAppStore((s) => s.updateOperation);
 
@@ -88,7 +93,15 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
     }
     return loops;
   }, [activeGeometry, activeOperationType]);
-  const entryPoint = activeGeometry?.entryPoint;
+  const entryPoint = useMemo(() => {
+    if (activeOperationType !== 'adaptive-outline') return null;
+    if (activeGeometry?.entryPoint) return activeGeometry.entryPoint;
+    const loop = activeGeometry?.loops?.[0];
+    if (!loop || loop.length < 2 || !activeOperationSettings) return null;
+    return computeDefaultEntryPoint(loop, activeOperationSettings);
+  }, [activeOperationType, activeGeometry, activeOperationSettings]);
+  const entryPointIsAuto =
+    activeOperationType === 'adaptive-outline' && !activeGeometry?.entryPoint && !!entryPoint;
   const accentColor = activeOperationType
     ? OPERATION_COLORS[activeOperationType]
     : '#3b82f6';
@@ -494,7 +507,13 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
         <SelectionLoopLines loops={selectedLoops} color={accentColor} opacity={1} />
       )}
 
-      {entryPoint && <EntryPointMarker point={entryPoint} topZ={partBounds.maxZ} />}
+      {entryPoint && (
+        <EntryPointMarker
+          point={entryPoint}
+          topZ={partBounds.maxZ}
+          color={entryPointIsAuto ? '#94a3b8' : '#f59e0b'}
+        />
+      )}
     </>
   );
 }
