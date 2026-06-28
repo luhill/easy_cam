@@ -238,13 +238,14 @@ function generateAdaptiveTrochoidalPath(
   settings: Operation['settings'],
   z: number,
   roughing = true,
-  startS?: number
+  startS?: number,
+  skipArcLength?: number
 ): ToolpathPoint[] {
   const slot = resolveAdaptiveSlotGeometry(settings, { roughing });
   const slotCenterGuide = offsetLoop2DMinkowski(partLoop, slot.slotCenterOffset);
   return generateFourZoneAdaptivePath(
     slotCenterGuide,
-    { ...trochoidParams(partLoop, settings, slotCenterGuide, z, roughing), startS }
+    { ...trochoidParams(partLoop, settings, slotCenterGuide, z, roughing), startS, skipArcLength }
   );
 }
 
@@ -431,7 +432,15 @@ function generateAdaptiveOutlinePath(op: Operation, topZ: number): ToolpathPoint
     }
 
     const startS = join.s;
-    const troch = generateAdaptiveTrochoidalPath(loop, settings, layerZ, true, startS);
+    const skipArc = li === 0 ? roughSlot.forwardIncrement : 0;
+    const troch = generateAdaptiveTrochoidalPath(
+      loop,
+      settings,
+      layerZ,
+      true,
+      startS,
+      skipArc
+    );
     if (troch.length === 0) continue;
 
     if (!appendGeneratedPath(points, troch)) break;

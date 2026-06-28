@@ -81,13 +81,12 @@ export function closestPointIndexOnPath(
   return bestIdx;
 }
 
-/** Open guide from entry to the join point on the slot-center loop.
- *  The final segment arrives at join tangent-aligned with closed-loop traverse (climb/conventional). */
+/** Shortest open guide: straight entry to the join on the slot-center loop. */
 export function buildEntryConnectorGuide(
   entry: { x: number; y: number },
   slotCenterGuide: LoopPoint[],
   joinS: number,
-  guideTraverseSign: number,
+  _guideTraverseSign: number,
   sampleSpacing = 0.4
 ): LoopPoint[] {
   const guide = buildArcLengthGuide(slotCenterGuide, sampleSpacing);
@@ -95,27 +94,25 @@ export function buildEntryConnectorGuide(
     return [{ x: entry.x, y: entry.y, z: 0 }];
   }
 
-  const totalLength = guide.totalLength;
   const joinPt = sampleGuideAtS(guide, joinS);
   const span = Math.hypot(joinPt.x - entry.x, joinPt.y - entry.y);
-  const approachLen = Math.max(span * 1.15, 2);
-
-  const slotPts: LoopPoint[] = [joinPt];
-  let s = joinS;
-  let covered = 0;
-  const maxSteps = Math.ceil(approachLen / sampleSpacing) + 4;
-
-  for (let step = 0; step < maxSteps && covered < approachLen; step++) {
-    s =
-      guideTraverseSign >= 0
-        ? ((s - sampleSpacing) % totalLength + totalLength) % totalLength
-        : (s + sampleSpacing) % totalLength;
-    covered += sampleSpacing;
-    const f = sampleGuideAtS(guide, s);
-    slotPts.unshift({ x: f.x, y: f.y, z: f.z });
+  if (span <= sampleSpacing * 1.5) {
+    return [
+      { x: entry.x, y: entry.y, z: joinPt.z },
+      { x: joinPt.x, y: joinPt.y, z: joinPt.z },
+    ];
   }
 
-  const points: LoopPoint[] = [{ x: entry.x, y: entry.y, z: joinPt.z }, ...slotPts];
+  const points: LoopPoint[] = [{ x: entry.x, y: entry.y, z: joinPt.z }];
+  const steps = Math.max(1, Math.ceil(span / sampleSpacing));
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    points.push({
+      x: entry.x + (joinPt.x - entry.x) * t,
+      y: entry.y + (joinPt.y - entry.y) * t,
+      z: joinPt.z,
+    });
+  }
   return points;
 }
 

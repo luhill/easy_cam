@@ -24,6 +24,8 @@ export interface FourZoneParams {
   guideSign?: number;
   /** Arc-length on closed guide where the first cut cycle begins. */
   startS?: number;
+  /** Skip this much arc length before cutting (e.g. connector already cleared join). */
+  skipArcLength?: number;
   feedRate?: number;
 }
 
@@ -103,13 +105,53 @@ function generateTrochoidAlongGuide(
   if (totalLength <= 0 || stepover <= 0 || slotClearance <= 0) return [];
 
   const trochoidR = slotClearance / 2;
-  const numCycles = Math.ceil(totalLength / stepover);
   const steps = Math.max(2, Math.ceil((2 * Math.PI) / ANGLE_STEP));
   const points: ToolpathPoint[] = [];
   const { partLoop, minCenterDist } = params;
   const defaultStartS = guideSign >= 0 ? 0 : totalLength;
   const startS = params.startS ?? defaultStartS;
 
+  const emitOrbit = (sAlong: number, phase: number, skipDuplicate: boolean) => {
+    const sSample = guideSign >= 0 ? startS + sAlong : startS - sAlong;
+    const theta = -Math.PI / 2 + rotSign * (1 - phase) * 2 * Math.PI;
+    const frame = normalizeFrame(sampleAtS(sSample));
+    const { z, rapid } = orbitZProfile(phase, zCut, liftAmount);
+
+    let pt = orbitPoint(frame, trochoidR, theta, z);
+    if (partLoop && minCenterDist !== undefined) {
+      const c = clampToolCenterMinDistanceFromPart(partLoop, pt.x, pt.y, minCenterDist);
+      pt = { ...pt, x: c.x, y: c.y };
+    }
+    if (rapid) pt = { ...pt, rapid: true };
+    if (feedRate !== undefined && !rapid) pt = { ...pt, feedRate };
+
+    if (skipDuplicate) return;
+    points.push(pt);
+  };
+
+  if (closed) {
+    const skip = Math.max(params.skipArcLength ?? 0, 0);
+    let arcProgress = skip;
+    const arcTarget = skip + totalLength;
+    let cycle = 0;
+
+    while (arcProgress < arcTarget - 1e-5) {
+      const segEnd = Math.min(arcProgress + stepover, arcTarget);
+      const segLen = segEnd - arcProgress;
+
+      for (let i = 0; i <= steps; i++) {
+        const phase = i / steps;
+        const sAlong = arcProgress + phase * segLen;
+        emitOrbit(sAlong, phase, cycle > 0 && i === 0);
+      }
+
+      arcProgress = segEnd;
+      cycle++;
+    }
+    return points;
+  }
+
+  const numCycles = Math.ceil(totalLength / stepover);
   for (let cycle = 0; cycle < numCycles; cycle++) {
     const sStart = cycle * stepover;
 
@@ -117,25 +159,10 @@ function generateTrochoidAlongGuide(
       const phase = i / steps;
       const sAlong = sStart + phase * stepover;
       if (sAlong > totalLength + stepover * 0.01) break;
-
-      const sSample = guideSign >= 0 ? startS + sAlong : startS - sAlong;
-      const theta = -Math.PI / 2 + rotSign * (1 - phase) * 2 * Math.PI;
-      const frame = normalizeFrame(sampleAtS(sSample));
-      const { z, rapid } = orbitZProfile(phase, zCut, liftAmount);
-
-      let pt = orbitPoint(frame, trochoidR, theta, z);
-      if (partLoop && minCenterDist !== undefined) {
-        const c = clampToolCenterMinDistanceFromPart(partLoop, pt.x, pt.y, minCenterDist);
-        pt = { ...pt, x: c.x, y: c.y };
-      }
-      if (rapid) pt = { ...pt, rapid: true };
-      if (feedRate !== undefined && !rapid) pt = { ...pt, feedRate };
-
-      if (cycle > 0 && i === 0) continue;
-      points.push(pt);
+      emitOrbit(sAlong, phase, cycle > 0 && i === 0);
     }
 
-    if (!closed && sStart + stepover >= totalLength - 1e-6) break;
+    if (sStart + stepover >= totalLength - 1e-6) break;
   }
 
   return points;
