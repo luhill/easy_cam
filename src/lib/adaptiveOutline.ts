@@ -1,6 +1,51 @@
 import type { LoopPoint } from '../types/operations';
 import type { OperationDefaults } from '../types/operations';
 import { offsetLoop2D, signedLoopArea2D } from './geometryProcessing';
+import { adaptiveForwardIncrement } from './trochoidalPath';
+
+export interface AdaptiveSlotGeometry {
+  toolDiameter: number;
+  toolRadius: number;
+  radialOffset: number;
+  /** Tool-center offset from part outline (tool radius + additional offset). */
+  innerCenterOffset: number;
+  /** Full slot width in stock (mm). */
+  slotWidth: number;
+  /** Lateral tool-center excursion outward from inner guide. */
+  slotClearance: number;
+  /** Auto trochoid radius derived from slot clearance. */
+  trochoidRadius: number;
+  forwardIncrement: number;
+  minCenterDist: number;
+  maxCenterDist: number;
+}
+
+export function resolveAdaptiveSlotGeometry(settings: OperationDefaults): AdaptiveSlotGeometry {
+  const toolDiameter = Math.max(settings.toolDiameter, 0.1);
+  const toolRadius = toolDiameter / 2;
+  const radialOffset = settings.radialOffset ?? 0;
+  const slotWidthPercent = Math.max(settings.slotWidthPercent ?? 150, 125);
+  const slotWidth = toolDiameter * (slotWidthPercent / 100);
+  const slotClearance = Math.max(slotWidth - toolDiameter, toolDiameter * 0.05);
+  const trochoidRadius = slotClearance / 2;
+  const forwardIncrement = adaptiveForwardIncrement(toolDiameter, settings.stepover);
+  const innerCenterOffset = toolRadius + radialOffset;
+  const minCenterDist = innerCenterOffset;
+  const maxCenterDist = radialOffset + slotWidth - toolRadius;
+
+  return {
+    toolDiameter,
+    toolRadius,
+    radialOffset,
+    innerCenterOffset,
+    slotWidth,
+    slotClearance,
+    trochoidRadius,
+    forwardIncrement,
+    minCenterDist,
+    maxCenterDist,
+  };
+}
 
 /** Default helix entry in stock outside the adaptive slot (when user has not picked one). */
 export function computeDefaultEntryPoint(
@@ -9,12 +54,8 @@ export function computeDefaultEntryPoint(
 ): { x: number; y: number } {
   if (partLoop.length < 2) return { x: 0, y: 0 };
 
-  const toolD = Math.max(settings.toolDiameter, 0.1);
-  const toolR = toolD / 2;
-  const radial = toolR + Math.max(settings.radialOffset ?? 0, 0);
-  const slotW = Math.max(settings.channelWidthMultiple ?? 1.5, 1.25) * toolD;
-
-  const guide = offsetLoop2D(partLoop, radial);
+  const slot = resolveAdaptiveSlotGeometry(settings);
+  const guide = offsetLoop2D(partLoop, slot.innerCenterOffset);
   const p0 = guide[0];
   const p1 = guide[1];
   const dx = p1.x - p0.x;
@@ -25,7 +66,7 @@ export function computeDefaultEntryPoint(
   const ccw = signedLoopArea2D(partLoop) >= 0;
   const nx = ccw ? ty : -ty;
   const ny = ccw ? -tx : tx;
-  const dist = slotW * 0.75 + Math.max(settings.clearance, 2);
+  const dist = slot.slotWidth * 0.75 + Math.max(settings.clearance, 2);
 
   return { x: p0.x + nx * dist, y: p0.y + ny * dist };
 }

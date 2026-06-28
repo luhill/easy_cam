@@ -15,16 +15,10 @@ export interface OperationDefaults {
   spindleSpeed: number;
   clearance: number;
   depth: number;
-  /** Additional radial stock offset beyond tool radius (mm) */
+  /** Additional radial stock offset beyond tool radius (mm); negative allows finishing inside the line */
   radialOffset: number;
-  /** Adaptive outline: channel width as multiple of tool diameter (min 1.25) */
-  channelWidthMultiple: number;
-  /** Adaptive outline: trochoidal arc radius (mm), 0 = auto */
-  trochoidRadius: number;
-  /** Adaptive outline: helix bore radius (mm), 0 = tool radius */
-  helixRadius: number;
-  /** Adaptive outline: helix pitch per revolution (mm) */
-  helixPitch: number;
+  /** Adaptive outline: slot width as % of tool diameter (min 125%) */
+  slotWidthPercent: number;
 }
 
 export interface LoopPoint {
@@ -137,10 +131,7 @@ export const DEFAULT_SETTINGS: OperationDefaults = {
   clearance: 5,
   depth: 10,
   radialOffset: 0,
-  channelWidthMultiple: 1.5,
-  trochoidRadius: 0,
-  helixRadius: 0,
-  helixPitch: 2,
+  slotWidthPercent: 150,
 };
 
 export type SelectionSubMode = 'geometry' | 'entry-point' | 'bottom-face';

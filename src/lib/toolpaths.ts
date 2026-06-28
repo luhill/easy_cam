@@ -3,12 +3,8 @@ import type { LoopPoint } from '../types/operations';
 import type { PartBounds } from './geometryProcessing';
 import { offsetLoop2D } from './geometryProcessing';
 import { OPERATION_COLORS, getSelectedHoles } from '../types/operations';
-import { resolveAdaptiveEntryPoint } from './adaptiveOutline';
-import {
-  defaultTrochoidRadius,
-  generateConstantEngagementTrochoid,
-  adaptiveForwardIncrement,
-} from './trochoidalPath';
+import { resolveAdaptiveEntryPoint, resolveAdaptiveSlotGeometry } from './adaptiveOutline';
+import { generateConstantEngagementTrochoid } from './trochoidalPath';
 
 const MIN_STEP_DOWN = 0.05;
 const MAX_Z_LAYERS = 500;
@@ -41,13 +37,7 @@ function toolRadius(settings: Operation['settings']): number {
 }
 
 function toolCenterlineOffset(settings: Operation['settings']): number {
-  return toolRadius(settings) + Math.max(settings.radialOffset ?? 0, 0);
-}
-
-function channelWidth(settings: Operation['settings']): number {
-  const toolD = Math.max(settings.toolDiameter, 0.1);
-  const multiple = Math.max(settings.channelWidthMultiple ?? 1.5, 1.25);
-  return multiple * toolD;
+  return toolRadius(settings) + (settings.radialOffset ?? 0);
 }
 
 function getBounds(geometry: Operation['geometry']): {
@@ -150,8 +140,8 @@ function generateHelixBore(
   topZ: number,
   targetZ: number
 ): ToolpathPoint[] {
-  const helixR = settings.helixRadius > 0 ? settings.helixRadius : toolRadius(settings);
-  const pitch = Math.max(settings.helixPitch, MIN_STEP_DOWN);
+  const helixR = toolRadius(settings);
+  const pitch = safeStepDown(settings.stepDown);
   const segments = 24;
   const points: ToolpathPoint[] = [];
 
@@ -181,20 +171,16 @@ function generateAdaptiveTrochoidalPath(
   settings: Operation['settings'],
   z: number
 ): ToolpathPoint[] {
-  const toolD = Math.max(settings.toolDiameter, 0.1);
-  const slotW = channelWidth(settings);
-  const forwardIncrement = adaptiveForwardIncrement(toolD, settings.stepover);
-  const trochoidR =
-    settings.trochoidRadius > 0
-      ? settings.trochoidRadius
-      : defaultTrochoidRadius(slotW, toolD);
+  const slot = resolveAdaptiveSlotGeometry(settings);
+  const innerGuide = offsetLoop2D(partLoop, slot.innerCenterOffset);
 
-  const guideLoop = offsetLoop2D(partLoop, toolCenterlineOffset(settings));
-
-  return generateConstantEngagementTrochoid(guideLoop, {
-    trochoidRadius: trochoidR,
-    forwardIncrement,
+  return generateConstantEngagementTrochoid(innerGuide, {
+    forwardIncrement: slot.forwardIncrement,
+    slotClearance: slot.slotClearance,
     z,
+    partLoop,
+    minCenterDist: slot.minCenterDist,
+    maxCenterDist: slot.maxCenterDist,
   });
 }
 

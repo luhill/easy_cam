@@ -1,14 +1,18 @@
 import type { LoopPoint } from '../types/operations';
 import type { ToolpathPoint } from '../types/operations';
-import { signedLoopArea2D } from './geometryProcessing';
+import { clampToolCenterToExteriorBand, signedLoopArea2D } from './geometryProcessing';
 
 export interface TrochoidalParams {
-  /** Trochoid circle radius (mm) — chip thinning / slot half-width component */
-  trochoidRadius: number;
-  /** Forward advance along guide path per full 2π rotation (mm) — constant engagement step */
+  /** Forward advance along guide path per full 2π rotation (mm). */
   forwardIncrement: number;
+  /** Max outward tool-center excursion from inner guide (mm) = slotWidth − toolDiameter. */
+  slotClearance: number;
   z: number;
   maxAngleStep?: number;
+  /** Part outline for clamping tool center to the allowed exterior band. */
+  partLoop?: LoopPoint[];
+  minCenterDist?: number;
+  maxCenterDist?: number;
 }
 
 export interface ArcLengthGuide {
@@ -28,11 +32,17 @@ export interface GuideFrame {
 }
 
 /**
- * Local trochoid (LinuxCNC). +X = forward along tangent, +Y = outward normal.
+ * Outward-only trochoid in slot coordinates (+X forward, +Y outward normal).
+ * Lateral motion stays in [0, slotClearance] so the tool never swings toward the part.
  */
-export function trochoidPointLocal(angleRad: number, a: number, b: number): [number, number] {
-  const x = a * angleRad - b * Math.sin(angleRad) - a * Math.PI;
-  const y = b - b * Math.cos(angleRad) - 2 * b;
+export function trochoidPointInSlot(
+  angleRad: number,
+  forwardScale: number,
+  slotClearance: number
+): [number, number] {
+  const b = slotClearance / 2;
+  const x = forwardScale * angleRad - forwardScale * Math.PI;
+  const y = b * (1 - Math.cos(angleRad));
   return [x, y];
 }
 
@@ -155,26 +165,30 @@ export function sampleGuideAtS(guide: ArcLengthGuide, s: number): GuideFrame {
 }
 
 /**
- * Constant-engagement trochoidal path along a closed guide (Fusion-style adaptive slot).
- * Forward motion is uniform in arc length so spacing is equal on convex and concave regions.
+ * Constant-engagement trochoidal path in a slot beside the part outline.
+ * Forward motion is uniform in arc length; lateral motion fills the slot outward only.
  */
 export function generateConstantEngagementTrochoid(
-  guideLoop: LoopPoint[],
+  innerGuideLoop: LoopPoint[],
   params: TrochoidalParams
 ): ToolpathPoint[] {
-  const { trochoidRadius: b, forwardIncrement: increment, z } = params;
-  if (guideLoop.length < 3 || increment <= 0 || b <= 0) return [];
+  const { forwardIncrement: increment, slotClearance, z } = params;
+  if (innerGuideLoop.length < 3 || increment <= 0 || slotClearance <= 0) return [];
 
   const maxAngleStep = params.maxAngleStep ?? (3 * Math.PI) / 180;
-  const sampleSpacing = Math.min(increment / 3, b / 2, 0.5);
-  const arcGuide = buildArcLengthGuide(guideLoop, sampleSpacing);
+  const sampleSpacing = Math.min(increment / 3, slotClearance / 4, 0.5);
+  const arcGuide = buildArcLengthGuide(innerGuideLoop, sampleSpacing);
   const { totalLength } = arcGuide;
   if (totalLength <= 0) return [];
 
-  const a = increment / (2 * Math.PI);
+  const forwardScale = increment / (2 * Math.PI);
   const numCycles = Math.ceil(totalLength / increment);
   const totalAngle = 2 * Math.PI * numCycles;
   const points: ToolpathPoint[] = [];
+  const clamp =
+    params.partLoop &&
+    params.minCenterDist !== undefined &&
+    params.maxCenterDist !== undefined;
 
   for (let ang = 0; ang <= totalAngle + 1e-9; ang += maxAngleStep) {
     const cycleIndex = Math.floor(ang / (2 * Math.PI));
@@ -195,12 +209,23 @@ export function generateConstantEngagementTrochoid(
     tx /= tlen;
     ty /= tlen;
 
-    const [lx, ly] = trochoidPointLocal(phase, a, b);
-    points.push({
-      x: frame.x + lx * tx + ly * nx,
-      y: frame.y + lx * ty + ly * ny,
-      z,
-    });
+    const [lx, ly] = trochoidPointInSlot(phase, forwardScale, slotClearance);
+    let px = frame.x + lx * tx + ly * nx;
+    let py = frame.y + lx * ty + ly * ny;
+
+    if (clamp) {
+      const clamped = clampToolCenterToExteriorBand(
+        params.partLoop!,
+        px,
+        py,
+        params.minCenterDist!,
+        params.maxCenterDist!
+      );
+      px = clamped.x;
+      py = clamped.y;
+    }
+
+    points.push({ x: px, y: py, z });
   }
 
   return points;
@@ -213,15 +238,9 @@ export function generateTrochoidalOutlinePath(
   return generateConstantEngagementTrochoid(guideLoop, params);
 }
 
-export function defaultTrochoidRadius(slotWidth: number, toolDiameter: number): number {
-  const toolR = toolDiameter / 2;
-  const excess = Math.max(slotWidth - toolDiameter, 0);
-  return Math.max(toolR * 0.35, excess / 2 + toolR * 0.15);
-}
-
-/** Optimal forward increment for constant tool load (~10–15% of tool diameter). */
+/** Forward pass advance from stepover % of tool diameter. */
 export function adaptiveForwardIncrement(toolDiameter: number, stepoverPercent: number): number {
   const toolD = Math.max(toolDiameter, 0.1);
   const ae = toolD * (stepoverPercent / 100);
-  return Math.max(ae, toolD * 0.08);
+  return Math.max(ae, toolD * 0.05);
 }

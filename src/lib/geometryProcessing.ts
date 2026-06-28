@@ -209,6 +209,69 @@ export function offsetLoop2D(loop: LoopPoint[], offset: number): LoopPoint[] {
   return result;
 }
 
+export function closestPointOnLoop2D(
+  x: number,
+  y: number,
+  loop: LoopPoint[]
+): { x: number; y: number; dist: number; outX: number; outY: number } {
+  if (loop.length === 0) return { x, y, dist: 0, outX: 1, outY: 0 };
+
+  let bestPx = loop[0].x;
+  let bestPy = loop[0].y;
+  let bestDist = Infinity;
+  let bestOutX = 1;
+  let bestOutY = 0;
+
+  const ccw = signedLoopArea2D(loop) >= 0;
+  const side = ccw ? 1 : -1;
+
+  for (let i = 0; i < loop.length; i++) {
+    const a = loop[i];
+    const b = loop[(i + 1) % loop.length];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const lenSq = dx * dx + dy * dy;
+    const t =
+      lenSq > 0 ? Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / lenSq)) : 0;
+    const px = a.x + t * dx;
+    const py = a.y + t * dy;
+    const dist = Math.hypot(x - px, y - py);
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestPx = px;
+      bestPy = py;
+      const elen = Math.hypot(dx, dy) || 1;
+      bestOutX = side * (dy / elen);
+      bestOutY = side * (-dx / elen);
+    }
+  }
+
+  if (bestDist > 1e-9) {
+    bestOutX = (x - bestPx) / bestDist;
+    bestOutY = (y - bestPy) / bestDist;
+  } else if (pointInPolygon2D(x, y, loop)) {
+    bestDist = 0;
+  }
+
+  return { x: bestPx, y: bestPy, dist: bestDist, outX: bestOutX, outY: bestOutY };
+}
+
+/** Keep tool center in the exterior band: toolRadius+offset … offset+slotWidth-toolRadius from part. */
+export function clampToolCenterToExteriorBand(
+  partLoop: LoopPoint[],
+  x: number,
+  y: number,
+  minDist: number,
+  maxDist: number
+): { x: number; y: number } {
+  const closest = closestPointOnLoop2D(x, y, partLoop);
+  const clampedDist = Math.max(minDist, Math.min(maxDist, closest.dist));
+  return {
+    x: closest.x + closest.outX * clampedDist,
+    y: closest.y + closest.outY * clampedDist,
+  };
+}
+
 export function distanceToLoop2D(x: number, y: number, loop: LoopPoint[]): number {
   if (loop.length === 0) return Infinity;
   if (pointInPolygon2D(x, y, loop)) return 0;
