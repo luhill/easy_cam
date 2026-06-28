@@ -29,12 +29,14 @@ const OUTLINE_FIELDS: typeof BASE_FIELDS = [
 const ADAPTIVE_FIELDS: typeof BASE_FIELDS = [
   { key: 'radialOffset', label: 'Additional Offset', unit: 'mm', step: 0.1 },
   { key: 'slotWidthPercent', label: 'Slot Width', unit: '% of tool ⌀', step: 5, min: 125 },
+  { key: 'liftAmount', label: 'Pass Lift', unit: 'mm', step: 0.1, min: 0 },
 ];
 
 function clampSetting(key: keyof Operation['settings'], value: number): number {
   if (!Number.isFinite(value)) return 0;
   if (key === 'stepDown') return Math.max(value, 0.05);
   if (key === 'slotWidthPercent') return Math.max(value, 125);
+  if (key === 'liftAmount') return Math.max(value, 0);
   if (key === 'toolDiameter') return Math.max(value, 0.1);
   return value;
 }
@@ -90,7 +92,7 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
       {(operation.type === 'outline' || operation.type === 'adaptive-outline') && (
         <p className="settings-hint">
           {operation.type === 'adaptive-outline'
-            ? 'Toolpath stays at least tool radius from the part unless additional offset is negative. Slot width sets the clearing channel; trochoid size is derived automatically. Pass advance (stepover %) sets forward motion per loop.'
+            ? 'Toolpath stays at least tool radius from the part unless additional offset is negative. Slot width sets the clearing channel; trochoid size is derived automatically. Pass advance (stepover %) sets forward motion per loop. Pass lift retracts radially and in Z between loops (0 = direct link).'
             : 'Toolpath runs at tool radius + additional offset from the part outline.'}
         </p>
       )}

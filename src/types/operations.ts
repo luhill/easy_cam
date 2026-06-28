@@ -19,6 +19,8 @@ export interface OperationDefaults {
   radialOffset: number;
   /** Adaptive outline: slot width as % of tool diameter (min 125%) */
   slotWidthPercent: number;
+  /** Adaptive outline: micro-retract / Z lift between trochoid passes (mm); 0 = no lift */
+  liftAmount: number;
 }
 
 export interface LoopPoint {
@@ -132,6 +134,7 @@ export const DEFAULT_SETTINGS: OperationDefaults = {
   depth: 10,
   radialOffset: 0,
   slotWidthPercent: 150,
+  liftAmount: 0,
 };
 
 export type SelectionSubMode = 'geometry' | 'entry-point' | 'bottom-face';

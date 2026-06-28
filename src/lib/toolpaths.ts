@@ -4,7 +4,7 @@ import type { PartBounds } from './geometryProcessing';
 import { offsetLoop2D } from './geometryProcessing';
 import { OPERATION_COLORS, getSelectedHoles } from '../types/operations';
 import { resolveAdaptiveEntryPoint, resolveAdaptiveSlotGeometry } from './adaptiveOutline';
-import { generateConstantEngagementTrochoid } from './trochoidalPath';
+import { generateFourZoneAdaptivePath } from './adaptiveFourZone';
 
 const MIN_STEP_DOWN = 0.05;
 const MAX_Z_LAYERS = 500;
@@ -174,10 +174,11 @@ function generateAdaptiveTrochoidalPath(
   const slot = resolveAdaptiveSlotGeometry(settings);
   const innerGuide = offsetLoop2D(partLoop, slot.innerCenterOffset);
 
-  return generateConstantEngagementTrochoid(innerGuide, {
+  return generateFourZoneAdaptivePath(innerGuide, {
     forwardIncrement: slot.forwardIncrement,
     slotClearance: slot.slotClearance,
     z,
+    liftAmount: Math.max(settings.liftAmount ?? 0, 0),
     partLoop,
     minCenterDist: slot.minCenterDist,
   });
