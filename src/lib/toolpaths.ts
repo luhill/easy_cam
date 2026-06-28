@@ -181,6 +181,7 @@ function generateAdaptiveTrochoidalPath(
     liftAmount: Math.max(settings.liftAmount ?? 0, 0),
     partLoop,
     minCenterDist: slot.minCenterDist,
+    maxCenterDist: slot.maxCenterDist,
   });
 }
 
