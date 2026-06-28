@@ -72,7 +72,7 @@ export function computeDefaultEntryPoint(
 ): { x: number; y: number } {
   if (partLoop.length < 2) return { x: 0, y: 0 };
 
-  const slot = resolveAdaptiveSlotGeometry(settings);
+  const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
   const guide = offsetLoop2DMinkowski(partLoop, slot.slotCenterOffset);
   const minStandoff = minimumEntryStandoff(settings);
 

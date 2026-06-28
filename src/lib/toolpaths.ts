@@ -31,7 +31,7 @@ import { buildArcLengthGuide, findClosestSOnGuide, sampleGuideAtS } from './troc
 
 const MIN_STEP_DOWN = 0.05;
 const MAX_Z_LAYERS = 500;
-const MAX_TOOLPATH_POINTS = 120_000;
+const MAX_TOOLPATH_POINTS = 500_000;
 
 function partTopZ(bounds: PartBounds | null): number {
   return bounds?.maxZ ?? 10;
@@ -237,30 +237,55 @@ function generateAdaptiveTrochoidalPath(
   partLoop: LoopPoint[],
   settings: Operation['settings'],
   z: number,
-  roughing = true
+  roughing = true,
+  startS?: number
 ): ToolpathPoint[] {
   const slot = resolveAdaptiveSlotGeometry(settings, { roughing });
   const slotCenterGuide = offsetLoop2DMinkowski(partLoop, slot.slotCenterOffset);
   return generateFourZoneAdaptivePath(
     slotCenterGuide,
-    trochoidParams(partLoop, settings, slotCenterGuide, z, roughing)
+    { ...trochoidParams(partLoop, settings, slotCenterGuide, z, roughing), startS }
   );
 }
 
-function appendFullTrochoidLoop(
+function appendGeneratedPath(
   target: ToolpathPoint[],
-  troch: ToolpathPoint[],
-  from: { x: number; y: number }
+  generated: ToolpathPoint[]
 ): boolean {
-  if (troch.length === 0) return true;
-  const joinIdx = closestPointIndexOnPath(troch, from);
-  const loop = wrapPathFromIndex(troch, joinIdx);
-  if (loop.length <= 1) return appendPoints(target, loop);
-
+  if (generated.length === 0) return true;
   const last = target[target.length - 1];
   const start =
-    last && Math.hypot(loop[0].x - last.x, loop[0].y - last.y) < 0.12 ? 1 : 0;
+    last && Math.hypot(generated[0].x - last.x, generated[0].y - last.y) < 0.12 ? 1 : 0;
+  return appendPoints(target, generated.slice(start));
+}
+
+function appendPathFromGuideS(
+  target: ToolpathPoint[],
+  path: ToolpathPoint[],
+  guide: ReturnType<typeof buildArcLengthGuide>,
+  from: { x: number; y: number }
+): boolean {
+  if (path.length === 0) return true;
+  const { s } = findClosestSOnGuide(guide, from);
+  const joinIdx = closestPointIndexOnPath(path, sampleGuideAtS(guide, s));
+  const loop = wrapPathFromIndex(path, joinIdx);
+  const last = target[target.length - 1];
+  const start =
+    last && loop.length > 0 && Math.hypot(loop[0].x - last.x, loop[0].y - last.y) < 0.12 ? 1 : 0;
   return appendPoints(target, loop.slice(start));
+}
+
+function appendReturnToSlotCenter(
+  target: ToolpathPoint[],
+  guide: ReturnType<typeof buildArcLengthGuide>,
+  joinS: number,
+  z: number
+): boolean {
+  const center = sampleGuideAtS(guide, joinS);
+  const last = lastPathPoint(target);
+  if (!last) return true;
+  if (Math.hypot(last.x - center.x, last.y - center.y) < 0.08) return true;
+  return appendPoints(target, [{ x: center.x, y: center.y, z, rapid: true }]);
 }
 
 function generateFinishingOutline(
@@ -293,12 +318,6 @@ function generateFinishingOutline(
     if (closest.dist < finishSlot.minCenterDist - 0.02) {
       x = closest.x + closest.outX * finishSlot.minCenterDist;
       y = closest.y + closest.outY * finishSlot.minCenterDist;
-    }
-
-    const atPart = closestPointOnLoop2D(x, y, partLoop);
-    if (atPart.dist < roughSlot.minCenterDist - 0.02) {
-      x = atPart.x + atPart.outX * roughSlot.minCenterDist;
-      y = atPart.y + atPart.outY * roughSlot.minCenterDist;
     }
 
     if (roughCenterGuide.length >= 3) {
@@ -351,13 +370,14 @@ function generateAdaptiveOutlinePath(op: Operation, topZ: number): ToolpathPoint
   const points: ToolpathPoint[] = [];
   const layers = computeZLayers(topZ, cutZ, settings.stepDown);
   const helixFeed = settings.helixFeedRate;
-  const slot = resolveAdaptiveSlotGeometry(settings, { roughing: true });
-  const slotCenterGuide = offsetLoop2DMinkowski(loop, slot.slotCenterOffset);
+  const roughSlot = resolveAdaptiveSlotGeometry(settings, { roughing: true });
+  const slotCenterGuide = offsetLoop2DMinkowski(loop, roughSlot.slotCenterOffset);
   const arcGuide = buildArcLengthGuide(slotCenterGuide, 0.4);
   const join = findClosestSOnGuide(arcGuide, entry);
   const connectorGuide = buildEntryConnectorGuide(entry, slotCenterGuide, join.s);
   const outwardCCW = isGuideOutwardCCW(loop);
   const rotParams = trochoidParams(loop, settings, slotCenterGuide, 0, true, helixFeed);
+  const slotHelixR = resolveSlotHelixRadius(roughSlot.slotClearance);
 
   points.push({ x: entry.x, y: entry.y, z: clearance, rapid: true });
   points.push({ x: entry.x, y: entry.y, z: topZ });
@@ -370,17 +390,15 @@ function generateAdaptiveOutlinePath(op: Operation, topZ: number): ToolpathPoint
     const prevZ = li > 0 ? layers[li - 1] : helixTarget;
 
     if (li > 0) {
-      const boreCenter = lastPathPoint(points);
-      if (boreCenter) {
-        const slotHelixR = resolveSlotHelixRadius(slot.slotClearance);
-        if (
-          !appendPoints(
-            points,
-            generateHelixBoreAt(boreCenter, settings, prevZ, layerZ, slotHelixR)
-          )
-        ) {
-          break;
-        }
+      if (!appendReturnToSlotCenter(points, arcGuide, join.s, prevZ)) break;
+      const slotCenter = sampleGuideAtS(arcGuide, join.s);
+      if (
+        !appendPoints(
+          points,
+          generateHelixBoreAt(slotCenter, settings, prevZ, layerZ, slotHelixR)
+        )
+      ) {
+        break;
       }
     } else if (Math.abs(layerZ - helixTarget) > 1e-4) {
       if (
@@ -400,24 +418,27 @@ function generateAdaptiveOutlinePath(op: Operation, topZ: number): ToolpathPoint
         outwardCCW
       );
       if (connectorTroch.length > 0) {
-        if (!appendPoints(points, connectorTroch)) break;
+        if (!appendGeneratedPath(points, connectorTroch)) break;
       }
     }
 
-    const troch = generateAdaptiveTrochoidalPath(loop, settings, layerZ, true);
+    const startS = join.s;
+    const troch = generateAdaptiveTrochoidalPath(loop, settings, layerZ, true, startS);
     if (troch.length === 0) continue;
 
-    const at = lastPathPoint(points);
-    if (!at || !appendFullTrochoidLoop(points, troch, at)) break;
+    if (!appendGeneratedPath(points, troch)) break;
   }
 
   if (settings.finishingPass) {
     const finishZ = layers.length > 0 ? layers[layers.length - 1] : cutZ;
     const finishPath = generateFinishingOutline(loop, settings, finishZ);
     if (finishPath.length > 0) {
+      const finishSlot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
+      const finishGuide = offsetLoop2DMinkowski(loop, finishSlot.innerCenterOffset);
+      const finishArcGuide = buildArcLengthGuide(finishGuide, 0.4);
       const at = lastPathPoint(points);
       if (at) {
-        if (!appendFullTrochoidLoop(points, finishPath, at)) {
+        if (!appendPathFromGuideS(points, finishPath, finishArcGuide, at)) {
           appendVerticalRetract(points, clearance);
           return points;
         }

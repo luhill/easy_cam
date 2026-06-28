@@ -22,6 +22,8 @@ export interface FourZoneParams {
   rotSign?: number;
   /** Progression along guide (+1 forward / −1 reverse for climb). */
   guideSign?: number;
+  /** Arc-length on closed guide where the first cut cycle begins. */
+  startS?: number;
   feedRate?: number;
 }
 
@@ -105,6 +107,8 @@ function generateTrochoidAlongGuide(
   const steps = Math.max(2, Math.ceil((2 * Math.PI) / ANGLE_STEP));
   const points: ToolpathPoint[] = [];
   const { partLoop, minCenterDist } = params;
+  const defaultStartS = guideSign >= 0 ? 0 : totalLength;
+  const startS = params.startS ?? defaultStartS;
 
   for (let cycle = 0; cycle < numCycles; cycle++) {
     const sStart = cycle * stepover;
@@ -114,10 +118,7 @@ function generateTrochoidAlongGuide(
       const sAlong = sStart + phase * stepover;
       if (sAlong > totalLength + stepover * 0.01) break;
 
-      const sSample =
-        guideSign >= 0
-          ? Math.min(sAlong, totalLength)
-          : Math.max(totalLength - sAlong, 0);
+      const sSample = guideSign >= 0 ? startS + sAlong : startS - sAlong;
       const theta = -Math.PI / 2 + rotSign * (1 - phase) * 2 * Math.PI;
       const frame = normalizeFrame(sampleAtS(sSample));
       const { z, rapid } = orbitZProfile(phase, zCut, liftAmount);

@@ -114,9 +114,7 @@ export function buildEntryConnectorGuide(
 
 export function minimumEntryStandoff(settings: OperationDefaults): number {
   const toolR = Math.max(settings.toolDiameter, 0.1) / 2;
-  const stock =
-    settings.finishingPass ? 0.1 : 0;
-  const radialOffset = (settings.radialOffset ?? 0) + stock;
+  const radialOffset = settings.radialOffset ?? 0;
   const slotWidthPercent = Math.min(Math.max(settings.slotWidthPercent ?? 150, 125), 200);
   const slotWidth = settings.toolDiameter * (slotWidthPercent / 100);
   const maxCenterDist = radialOffset + slotWidth - toolR;
