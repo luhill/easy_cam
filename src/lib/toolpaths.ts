@@ -314,21 +314,23 @@ function generateFinishingOutline(
     let x = f.x;
     let y = f.y;
 
-    const closest = closestPointOnLoop2D(x, y, partLoop);
-    if (closest.dist < finishSlot.minCenterDist - 0.02) {
-      x = closest.x + closest.outX * finishSlot.minCenterDist;
-      y = closest.y + closest.outY * finishSlot.minCenterDist;
-    }
+    const finishTarget = finishSlot.minCenterDist;
+    let atFinish = closestPointOnLoop2D(x, y, partLoop);
 
     if (roughCenterGuide.length >= 3) {
       const onRoughGuide = closestPointOnLoop2D(x, y, roughCenterGuide);
       const partAtGuide = closestPointOnLoop2D(onRoughGuide.x, onRoughGuide.y, partLoop);
       const roughEnvelope = partAtGuide.dist - roughSlot.trochoidRadius;
-      const atFinish = closestPointOnLoop2D(x, y, partLoop);
-      if (atFinish.dist < roughEnvelope - 0.02) {
+      if (roughEnvelope < finishTarget - 0.02 && atFinish.dist < roughEnvelope - 0.02) {
         x = partAtGuide.x + partAtGuide.outX * roughEnvelope;
         y = partAtGuide.y + partAtGuide.outY * roughEnvelope;
+        atFinish = closestPointOnLoop2D(x, y, partLoop);
       }
+    }
+
+    if (atFinish.dist < finishTarget - 0.02) {
+      x = atFinish.x + atFinish.outX * finishTarget;
+      y = atFinish.y + atFinish.outY * finishTarget;
     }
 
     pts.push({ x, y, z: layerZ });
@@ -374,7 +376,13 @@ function generateAdaptiveOutlinePath(op: Operation, topZ: number): ToolpathPoint
   const slotCenterGuide = offsetLoop2DMinkowski(loop, roughSlot.slotCenterOffset);
   const arcGuide = buildArcLengthGuide(slotCenterGuide, 0.4);
   const join = findClosestSOnGuide(arcGuide, entry);
-  const connectorGuide = buildEntryConnectorGuide(entry, slotCenterGuide, join.s);
+  const guideTraverseSign = resolveGuideTraverseSign(slotCenterGuide, settings.climbMilling);
+  const connectorGuide = buildEntryConnectorGuide(
+    entry,
+    slotCenterGuide,
+    join.s,
+    guideTraverseSign
+  );
   const outwardCCW = isGuideOutwardCCW(loop);
   const rotParams = trochoidParams(loop, settings, slotCenterGuide, 0, true, helixFeed);
   const slotHelixR = resolveSlotHelixRadius(roughSlot.slotClearance);
