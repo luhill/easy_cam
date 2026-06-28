@@ -13,11 +13,21 @@ export function resolveHelixRadius(settings: OperationDefaults): number {
   return (settings.helixDiameterPercent / 100) * toolD / 2;
 }
 
+/** Pitch from helix angle for an arbitrary helix radius. */
+export function helixPitchForRadius(helixR: number, angleDeg: number): number {
+  const r = Math.max(helixR, 0.05);
+  const angleRad = (angleDeg * Math.PI) / 180;
+  return Math.max(2 * Math.PI * r * Math.tan(angleRad), 0.05);
+}
+
 /** One revolution Z drop from helix lead angle (degrees). */
 export function helixPitchFromAngle(settings: OperationDefaults): number {
-  const helixR = Math.max(resolveHelixRadius(settings), 0.05);
-  const angleRad = (settings.helixAngleDeg * Math.PI) / 180;
-  return Math.max(2 * Math.PI * helixR * Math.tan(angleRad), 0.05);
+  return helixPitchForRadius(resolveHelixRadius(settings), settings.helixAngleDeg);
+}
+
+/** Layer-step helix radius — bore diameter equals slot width (slot clearance). */
+export function resolveSlotHelixRadius(slotClearance: number): number {
+  return Math.max(slotClearance / 2, 0.05);
 }
 
 /** +1 = CCW helix, −1 = CW helix (climb external default). */

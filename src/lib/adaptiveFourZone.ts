@@ -18,8 +18,10 @@ export interface FourZoneParams {
   liftAmount?: number;
   partLoop?: LoopPoint[];
   minCenterDist?: number;
-  /** +1 = clockwise orbit, −1 = counter-clockwise (external climb default). */
+  /** Orbit micro-loop direction (+1 CCW / −1 CW within each station). */
   rotSign?: number;
+  /** Progression along guide (+1 forward / −1 reverse for climb). */
+  guideSign?: number;
   feedRate?: number;
 }
 
@@ -77,10 +79,14 @@ function orbitZProfile(
   return { z: zCut + liftAmount * Math.sin(Math.PI * u), rapid: true };
 }
 
-/** Climb milling on external CCW loops → clockwise tool motion. */
-export function resolveOrbitRotSign(guideLoop: LoopPoint[], climbMilling: boolean): number {
+/** Climb milling on external CCW loops → clockwise tool motion around the part. */
+export function resolveGuideTraverseSign(guideLoop: LoopPoint[], climbMilling: boolean): number {
   const ccw = signedLoopArea2D(guideLoop) >= 0;
   return climbMilling ? (ccw ? -1 : 1) : ccw ? 1 : -1;
+}
+
+export function resolveOrbitRotSign(guideLoop: LoopPoint[], climbMilling: boolean): number {
+  return resolveGuideTraverseSign(guideLoop, climbMilling);
 }
 
 function generateTrochoidAlongGuide(
@@ -90,7 +96,7 @@ function generateTrochoidAlongGuide(
   params: FourZoneParams
 ): ToolpathPoint[] {
   const stepover = params.forwardIncrement;
-  const { slotClearance, z: zCut, liftAmount = 0, rotSign = -1, feedRate } = params;
+  const { slotClearance, z: zCut, liftAmount = 0, rotSign = -1, guideSign = 1, feedRate } = params;
 
   if (totalLength <= 0 || stepover <= 0 || slotClearance <= 0) return [];
 
@@ -108,8 +114,12 @@ function generateTrochoidAlongGuide(
       const sAlong = sStart + phase * stepover;
       if (sAlong > totalLength + stepover * 0.01) break;
 
+      const sSample =
+        guideSign >= 0
+          ? Math.min(sAlong, totalLength)
+          : Math.max(totalLength - sAlong, 0);
       const theta = -Math.PI / 2 + rotSign * (1 - phase) * 2 * Math.PI;
-      const frame = normalizeFrame(sampleAtS(sAlong));
+      const frame = normalizeFrame(sampleAtS(sSample));
       const { z, rapid } = orbitZProfile(phase, zCut, liftAmount);
 
       let pt = orbitPoint(frame, trochoidR, theta, z);

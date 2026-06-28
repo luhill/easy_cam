@@ -9,18 +9,20 @@ import { resolveAdaptiveEntryPoint, resolveAdaptiveSlotGeometry } from './adapti
 import {
   generateFourZoneAdaptivePath,
   generateOpenTrochoidPath,
+  resolveGuideTraverseSign,
   resolveOrbitRotSign,
   wrapPathFromIndex,
 } from './adaptiveFourZone';
 import {
   buildEntryConnectorGuide,
   closestPointIndexOnPath,
-  helixPitchFromAngle,
+  helixPitchForRadius,
   isGuideOutwardCCW,
   resolveHelixRadius,
   resolveHelixRotationDir,
+  resolveSlotHelixRadius,
 } from './entryPath';
-import { buildArcLengthGuide, findClosestSOnGuide } from './trochoidalPath';
+import { buildArcLengthGuide, findClosestSOnGuide, sampleGuideAtS } from './trochoidalPath';
 
 const MIN_STEP_DOWN = 0.05;
 const MAX_Z_LAYERS = 500;
@@ -153,20 +155,20 @@ function generateOutlinePath(op: Operation, topZ: number): ToolpathPoint[] {
   return loopToToolpathPoints(fallbackLoop, settings, topZ);
 }
 
-function generateHelixBore(
-  entry: { x: number; y: number },
+function generateHelixBoreAt(
+  center: { x: number; y: number },
   settings: Operation['settings'],
-  topZ: number,
-  targetZ: number
+  startZ: number,
+  targetZ: number,
+  helixR: number
 ): ToolpathPoint[] {
-  const helixR = resolveHelixRadius(settings);
-  const pitch = helixPitchFromAngle(settings);
+  const pitch = helixPitchForRadius(helixR, settings.helixAngleDeg);
   const feedRate = settings.helixFeedRate;
   const rotDir = resolveHelixRotationDir(settings.climbMilling);
   const segments = 24;
   const points: ToolpathPoint[] = [];
 
-  let z = topZ;
+  let z = startZ;
   let angle = 0;
   let iterations = 0;
   const maxIterations = MAX_Z_LAYERS * segments;
@@ -176,8 +178,8 @@ function generateHelixBore(
       angle += rotDir * ((Math.PI * 2) / segments);
       z = Math.max(z - pitch / segments, targetZ);
       points.push({
-        x: entry.x + Math.cos(angle) * helixR,
-        y: entry.y + Math.sin(angle) * helixR,
+        x: center.x + Math.cos(angle) * helixR,
+        y: center.y + Math.sin(angle) * helixR,
         z,
         feedRate,
       });
@@ -186,6 +188,21 @@ function generateHelixBore(
   }
 
   return points;
+}
+
+function generateHelixBore(
+  entry: { x: number; y: number },
+  settings: Operation['settings'],
+  topZ: number,
+  targetZ: number
+): ToolpathPoint[] {
+  return generateHelixBoreAt(
+    entry,
+    settings,
+    topZ,
+    targetZ,
+    resolveHelixRadius(settings)
+  );
 }
 
 function trochoidParams(
@@ -197,6 +214,7 @@ function trochoidParams(
   feedRate?: number
 ) {
   const slot = resolveAdaptiveSlotGeometry(settings, { roughing });
+  const guideSign = resolveGuideTraverseSign(slotCenterGuide, settings.climbMilling);
   return {
     forwardIncrement: slot.forwardIncrement,
     slotClearance: slot.slotClearance,
@@ -205,6 +223,7 @@ function trochoidParams(
     partLoop,
     minCenterDist: slot.minCenterDist,
     rotSign: resolveOrbitRotSign(slotCenterGuide, settings.climbMilling),
+    guideSign,
     feedRate,
   };
 }
@@ -229,15 +248,37 @@ function generateFinishingOutline(
   layerZ: number
 ): ToolpathPoint[] {
   const offset = toolRadius(settings) + (settings.radialOffset ?? 0);
-  const toolLoop = offsetLoop2D(partLoop, offset);
-  const ccw = signedLoopArea2D(partLoop) >= 0;
-  const reverse = settings.climbMilling ? ccw : !ccw;
-  const traverse = reverse ? [...toolLoop].reverse() : toolLoop;
-  const pts = traverse.map((p) => ({ x: p.x, y: p.y, z: layerZ }));
+  const finishGuide = offsetLoop2DMinkowski(partLoop, offset);
+  if (finishGuide.length < 3) return [];
+
+  const sampleSpacing = 0.4;
+  const arcGuide = buildArcLengthGuide(finishGuide, sampleSpacing);
+  if (arcGuide.totalLength <= 0) return [];
+
+  const guideSign = resolveGuideTraverseSign(finishGuide, settings.climbMilling);
+  const steps = Math.max(
+    2,
+    Math.ceil(arcGuide.totalLength / sampleSpacing)
+  );
+  const pts: ToolpathPoint[] = [];
+
+  for (let i = 0; i <= steps; i++) {
+    const s = (i / steps) * arcGuide.totalLength;
+    const sSample = guideSign >= 0 ? s : arcGuide.totalLength - s;
+    const f = sampleGuideAtS(arcGuide, sSample);
+    pts.push({ x: f.x, y: f.y, z: layerZ });
+  }
+
   if (pts.length > 1) {
     pts.push({ ...pts[0] });
   }
   return pts;
+}
+
+function lastPathPoint(points: ToolpathPoint[]): { x: number; y: number; z: number } | null {
+  if (points.length === 0) return null;
+  const p = points[points.length - 1];
+  return { x: p.x, y: p.y, z: p.z };
 }
 
 function appendTrochoidPathFromJoin(
@@ -286,29 +327,53 @@ function generateAdaptiveOutlinePath(op: Operation, topZ: number): ToolpathPoint
 
   for (let li = 0; li < layers.length; li++) {
     const layerZ = layers[li];
+    const prevZ = li > 0 ? layers[li - 1] : helixTarget;
 
     if (li > 0) {
-      if (!appendPoints(points, [{ x: entry.x, y: entry.y, z: layerZ, rapid: true }])) break;
+      const boreCenter = lastPathPoint(points);
+      if (boreCenter) {
+        const slotHelixR = resolveSlotHelixRadius(slot.slotClearance);
+        if (
+          !appendPoints(
+            points,
+            generateHelixBoreAt(boreCenter, settings, prevZ, layerZ, slotHelixR)
+          )
+        ) {
+          break;
+        }
+      }
     } else if (Math.abs(layerZ - helixTarget) > 1e-4) {
-      if (!appendPoints(points, [{ x: entry.x, y: entry.y, z: layerZ, feedRate: helixFeed }])) {
+      if (
+        !appendPoints(
+          points,
+          generateHelixBoreAt(entry, settings, helixTarget, layerZ, resolveHelixRadius(settings))
+        )
+      ) {
         break;
       }
     }
 
-    const connectorTroch = generateOpenTrochoidPath(
-      connectorGuide,
-      { ...rotParams, z: layerZ, liftAmount: 0 },
-      outwardCCW
-    );
-    if (connectorTroch.length > 0) {
-      if (!appendPoints(points, connectorTroch)) break;
+    if (li === 0) {
+      const connectorTroch = generateOpenTrochoidPath(
+        connectorGuide,
+        { ...rotParams, z: layerZ, liftAmount: 0 },
+        outwardCCW
+      );
+      if (connectorTroch.length > 0) {
+        if (!appendPoints(points, connectorTroch)) break;
+      }
     }
 
     const troch = generateAdaptiveTrochoidalPath(loop, settings, layerZ, true);
     if (troch.length === 0) continue;
 
-    const connectorEnd = connectorTroch[connectorTroch.length - 1];
-    if (!appendTrochoidPathFromJoin(points, troch, join, connectorEnd)) break;
+    if (li === 0) {
+      const connectorEnd = points[points.length - 1];
+      if (!appendTrochoidPathFromJoin(points, troch, join, connectorEnd)) break;
+    } else {
+      const at = lastPathPoint(points)!;
+      if (!appendTrochoidPathFromJoin(points, troch, at)) break;
+    }
   }
 
   if (settings.finishingPass) {
