@@ -1,15 +1,15 @@
 /**
  * Constant circular-loop adaptive trochoid.
  *
- * Each pass is one full orbit while the circle center advances forward along
- * the inner guide by `forwardIncrement` (stepover). The first half of the
- * orbit engages material; the second half is the return stroke through cleared
- * space with optional gradual Z lift (peaks at the midpoint of the return half).
+ * Each orbit advances the circle center forward by `stepover` along the inner
+ * guide. Parametric phase 0→1 moves forward along the outline; the angular
+ * position uses (1 − phase) so the tool traces the loop in the machining
+ * direction (cutting half first, return half second).
  *
- *   phase 0.0 → cutEnd       cutting — fully at cut depth
- *   phase cutEnd → liftStart return lead-out — still at cut depth (rapid)
- *   phase liftStart → liftEnd  gradual lift, peaks at midpoint
- *   phase liftEnd → 1.0      descend back to cut depth before next pass
+ *   phase 0.0 → 0.5   cutting half  — inner → outer, flat at cut depth
+ *   phase 0.5 → 0.58  return lead-out — still flat, leaving the outer arc
+ *   phase 0.58 → 0.88 gradual lift (peaks mid-return) when liftAmount > 0
+ *   phase 0.88 → 1.0  descend to cut depth before the next pass
  */
 
 import type { LoopPoint, ToolpathPoint } from '../types/operations';
@@ -17,12 +17,9 @@ import { buildArcLengthGuide, sampleGuideAtS } from './trochoidalPath';
 import { clampToolCenterMinDistanceFromPart, signedLoopArea2D } from './geometryProcessing';
 
 export interface FourZoneParams {
-  /** Forward advance per full orbit (mm) — stepover. */
   forwardIncrement: number;
-  /** Lateral orbit diameter component = slotWidth − toolDiameter (mm). */
   slotClearance: number;
   z: number;
-  /** Peak Z lift at the middle of the return half (mm). 0 = flat throughout. */
   liftAmount?: number;
   partLoop?: LoopPoint[];
   minCenterDist?: number;
@@ -30,10 +27,9 @@ export interface FourZoneParams {
 
 const ANGLE_STEP = (4 * Math.PI) / 180;
 
-/** Phase thresholds within one orbit (0–1). */
 const CUT_PHASE_END = 0.5;
-const RETURN_LEAD_OUT_END = 0.58; // flat at depth while leaving the outer arc
-const LIFT_END = 0.88; // begin descent — fully flat before phase 1.0 / next pass
+const RETURN_LIFT_START = 0.58;
+const RETURN_LIFT_END = 0.88;
 
 function normalizeFrame(frame: ReturnType<typeof sampleGuideAtS>) {
   let tx = frame.tx;
@@ -64,36 +60,25 @@ function orbitPoint(
   };
 }
 
-/** Z and rapid flag for a point on the orbit (phase ∈ [0, 1] within one loop). */
 function orbitZProfile(
   phase: number,
   zCut: number,
   liftAmount: number
 ): { z: number; rapid: boolean } {
-  // Entire cutting half — always flat at cut depth
   if (phase <= CUT_PHASE_END) {
     return { z: zCut, rapid: false };
   }
-
-  // Return half — rapid traverse (non-cutting)
-  // Lead-out: stay at cut depth while pulling off the outer arc
-  if (phase < RETURN_LEAD_OUT_END) {
+  if (phase < RETURN_LIFT_START) {
     return { z: zCut, rapid: true };
   }
-
-  // Tail: back on inner guide, flat at cut depth before next engagement
-  if (phase >= LIFT_END) {
+  if (phase >= RETURN_LIFT_END) {
     return { z: zCut, rapid: true };
   }
-
-  // Middle of return — gradual lift (0 when liftAmount is 0)
   if (liftAmount <= 0) {
     return { z: zCut, rapid: true };
   }
-
-  const u = (phase - RETURN_LEAD_OUT_END) / (LIFT_END - RETURN_LEAD_OUT_END);
-  const z = zCut + liftAmount * Math.sin(Math.PI * u);
-  return { z, rapid: true };
+  const u = (phase - RETURN_LIFT_START) / (RETURN_LIFT_END - RETURN_LIFT_START);
+  return { z: zCut + liftAmount * Math.sin(Math.PI * u), rapid: true };
 }
 
 export function generateFourZoneAdaptivePath(
@@ -125,7 +110,9 @@ export function generateFourZoneAdaptivePath(
       const sAlong = sStart + phase * stepover;
       if (sAlong > guide.totalLength + stepover * 0.01) break;
 
-      const theta = -Math.PI / 2 + rotSign * phase * 2 * Math.PI;
+      // (1 − phase) reverses angular direction vs travel so forward playback
+      // matches machining: cut (inner→outer) then return (outer→inner).
+      const theta = -Math.PI / 2 + rotSign * (1 - phase) * 2 * Math.PI;
       const frame = normalizeFrame(sampleGuideAtS(guide, sAlong));
       const { z, rapid } = orbitZProfile(phase, zCut, liftAmount);
 
