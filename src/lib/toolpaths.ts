@@ -37,6 +37,22 @@ function partTopZ(bounds: PartBounds | null): number {
   return bounds?.maxZ ?? 10;
 }
 
+function partBottomZ(bounds: PartBounds | null): number {
+  return bounds?.minZ ?? 0;
+}
+
+/** Cut floor from top using requested depth, capped to part thickness and part bottom. */
+function resolveCutZ(topZ: number, bottomZ: number, depth: number): number {
+  const thickness = Math.max(topZ - bottomZ, MIN_STEP_DOWN);
+  const effectiveDepth = Math.min(Math.max(depth, MIN_STEP_DOWN), thickness);
+  return Math.max(topZ - effectiveDepth, bottomZ);
+}
+
+export function partThicknessFromBounds(bounds: PartBounds | null): number {
+  if (!bounds) return DEFAULT_SETTINGS.depth;
+  return Math.max(bounds.maxZ - bounds.minZ, MIN_STEP_DOWN);
+}
+
 function safeStepDown(stepDown: number): number {
   if (!Number.isFinite(stepDown) || stepDown <= 0) return MIN_STEP_DOWN;
   return Math.max(stepDown, MIN_STEP_DOWN);
@@ -114,9 +130,10 @@ function appendPoints(target: ToolpathPoint[], points: ToolpathPoint[]): boolean
 function loopToToolpathPoints(
   loop: LoopPoint[],
   settings: Operation['settings'],
-  topZ: number
+  topZ: number,
+  bottomZ: number
 ): ToolpathPoint[] {
-  const cutZ = Math.max(topZ - settings.depth, 0);
+  const cutZ = resolveCutZ(topZ, bottomZ, settings.depth);
   const clearance = topZ + settings.clearance;
   const points: ToolpathPoint[] = [];
 
@@ -143,11 +160,11 @@ function loopToToolpathPoints(
   return points;
 }
 
-function generateOutlinePath(op: Operation, topZ: number): ToolpathPoint[] {
+function generateOutlinePath(op: Operation, topZ: number, bottomZ: number): ToolpathPoint[] {
   const { settings, geometry } = op;
 
   if (geometry?.loops && geometry.loops.length > 0) {
-    return loopToToolpathPoints(geometry.loops[0], settings, topZ);
+    return loopToToolpathPoints(geometry.loops[0], settings, topZ, bottomZ);
   }
 
   const { minX, maxX, minY, maxY } = getBounds(geometry);
@@ -157,7 +174,7 @@ function generateOutlinePath(op: Operation, topZ: number): ToolpathPoint[] {
     { x: maxX, y: maxY, z: topZ },
     { x: minX, y: maxY, z: topZ },
   ];
-  return loopToToolpathPoints(fallbackLoop, settings, topZ);
+  return loopToToolpathPoints(fallbackLoop, settings, topZ, bottomZ);
 }
 
 function generateHelixBoreAt(
@@ -260,33 +277,66 @@ function appendGeneratedPath(
   return appendPoints(target, generated.slice(start));
 }
 
-function appendPathFromGuideS(
+function appendClosedOutlinePath(
   target: ToolpathPoint[],
   path: ToolpathPoint[],
   guide: ReturnType<typeof buildArcLengthGuide>,
   from: { x: number; y: number }
 ): boolean {
-  if (path.length === 0) return true;
+  if (path.length < 2) return true;
+
+  let core = path;
+  if (
+    path.length > 2 &&
+    Math.hypot(path[0].x - path[path.length - 1].x, path[0].y - path[path.length - 1].y) < 0.08
+  ) {
+    core = path.slice(0, -1);
+  }
+
   const { s } = findClosestSOnGuide(guide, from);
-  const joinIdx = closestPointIndexOnPath(path, sampleGuideAtS(guide, s));
-  const loop = wrapPathFromIndex(path, joinIdx);
+  const anchor = sampleGuideAtS(guide, s);
+  const joinIdx = closestPointIndexOnPath(core, anchor);
+  const loop = wrapPathFromIndex(core, joinIdx);
+
+  if (!appendGeneratedPath(target, loop)) return false;
+
+  const loopStart = loop[0];
   const last = target[target.length - 1];
-  const start =
-    last && loop.length > 0 && Math.hypot(loop[0].x - last.x, loop[0].y - last.y) < 0.12 ? 1 : 0;
-  return appendPoints(target, loop.slice(start));
+  if (last && Math.hypot(loopStart.x - last.x, loopStart.y - last.y) > 0.04) {
+    return appendPoints(target, [{ x: loopStart.x, y: loopStart.y, z: loopStart.z }]);
+  }
+  return true;
 }
 
-function appendReturnToSlotCenter(
-  target: ToolpathPoint[],
-  guide: ReturnType<typeof buildArcLengthGuide>,
-  joinS: number,
-  z: number
-): boolean {
-  const center = sampleGuideAtS(guide, joinS);
-  const last = lastPathPoint(target);
-  if (!last) return true;
-  if (Math.hypot(last.x - center.x, last.y - center.y) < 0.08) return true;
-  return appendPoints(target, [{ x: center.x, y: center.y, z, rapid: true }]);
+function sampleFinishPoint(
+  partLoop: LoopPoint[],
+  finishSlot: ReturnType<typeof resolveAdaptiveSlotGeometry>,
+  roughSlot: ReturnType<typeof resolveAdaptiveSlotGeometry>,
+  roughCenterGuide: LoopPoint[],
+  x: number,
+  y: number,
+  layerZ: number
+): ToolpathPoint {
+  const finishTarget = finishSlot.minCenterDist;
+  let atFinish = closestPointOnLoop2D(x, y, partLoop);
+
+  if (roughCenterGuide.length >= 3) {
+    const onRoughGuide = closestPointOnLoop2D(x, y, roughCenterGuide);
+    const partAtGuide = closestPointOnLoop2D(onRoughGuide.x, onRoughGuide.y, partLoop);
+    const roughEnvelope = partAtGuide.dist - roughSlot.trochoidRadius;
+    if (roughEnvelope < finishTarget - 0.02 && atFinish.dist < roughEnvelope - 0.02) {
+      x = partAtGuide.x + partAtGuide.outX * roughEnvelope;
+      y = partAtGuide.y + partAtGuide.outY * roughEnvelope;
+      atFinish = closestPointOnLoop2D(x, y, partLoop);
+    }
+  }
+
+  if (atFinish.dist < finishTarget - 0.02) {
+    x = atFinish.x + atFinish.outX * finishTarget;
+    y = atFinish.y + atFinish.outY * finishTarget;
+  }
+
+  return { x, y, z: layerZ };
 }
 
 function generateFinishingOutline(
@@ -300,47 +350,52 @@ function generateFinishingOutline(
   const roughCenterGuide = offsetLoop2DMinkowski(partLoop, roughSlot.slotCenterOffset);
   if (finishGuide.length < 3) return [];
 
-  const sampleSpacing = 0.4;
+  const sampleSpacing = 0.35;
   const arcGuide = buildArcLengthGuide(finishGuide, sampleSpacing);
-  if (arcGuide.totalLength <= 0) return [];
+  const totalLen = arcGuide.totalLength;
+  if (totalLen <= 0) return [];
 
   const guideSign = resolveGuideTraverseSign(finishGuide, settings.climbMilling);
-  const steps = Math.max(2, Math.ceil(arcGuide.totalLength / sampleSpacing));
   const pts: ToolpathPoint[] = [];
+  let s = 0;
 
-  for (let i = 0; i <= steps; i++) {
-    const s = (i / steps) * arcGuide.totalLength;
-    const sSample = guideSign >= 0 ? s : arcGuide.totalLength - s;
+  while (s < totalLen - 1e-5) {
+    const sSample = guideSign >= 0 ? s : totalLen - s;
     const f = sampleGuideAtS(arcGuide, sSample);
-    let x = f.x;
-    let y = f.y;
-
-    const finishTarget = finishSlot.minCenterDist;
-    let atFinish = closestPointOnLoop2D(x, y, partLoop);
-
-    if (roughCenterGuide.length >= 3) {
-      const onRoughGuide = closestPointOnLoop2D(x, y, roughCenterGuide);
-      const partAtGuide = closestPointOnLoop2D(onRoughGuide.x, onRoughGuide.y, partLoop);
-      const roughEnvelope = partAtGuide.dist - roughSlot.trochoidRadius;
-      if (roughEnvelope < finishTarget - 0.02 && atFinish.dist < roughEnvelope - 0.02) {
-        x = partAtGuide.x + partAtGuide.outX * roughEnvelope;
-        y = partAtGuide.y + partAtGuide.outY * roughEnvelope;
-        atFinish = closestPointOnLoop2D(x, y, partLoop);
-      }
-    }
-
-    if (atFinish.dist < finishTarget - 0.02) {
-      x = atFinish.x + atFinish.outX * finishTarget;
-      y = atFinish.y + atFinish.outY * finishTarget;
-    }
-
-    pts.push({ x, y, z: layerZ });
+    pts.push(
+      sampleFinishPoint(
+        partLoop,
+        finishSlot,
+        roughSlot,
+        roughCenterGuide,
+        f.x,
+        f.y,
+        layerZ
+      )
+    );
+    s += sampleSpacing;
   }
 
-  if (pts.length > 1) {
-    pts.push({ ...pts[0] });
-  }
+  const sEnd = guideSign >= 0 ? totalLen : 0;
+  const fEnd = sampleGuideAtS(arcGuide, sEnd);
+  pts.push(
+    sampleFinishPoint(partLoop, finishSlot, roughSlot, roughCenterGuide, fEnd.x, fEnd.y, layerZ)
+  );
+
   return pts;
+}
+
+function appendReturnToSlotCenter(
+  target: ToolpathPoint[],
+  guide: ReturnType<typeof buildArcLengthGuide>,
+  joinS: number,
+  z: number
+): boolean {
+  const center = sampleGuideAtS(guide, joinS);
+  const last = lastPathPoint(target);
+  if (!last) return true;
+  if (Math.hypot(last.x - center.x, last.y - center.y) < 0.08) return true;
+  return appendPoints(target, [{ x: center.x, y: center.y, z, rapid: true }]);
 }
 
 function appendVerticalRetract(
@@ -359,16 +414,16 @@ function lastPathPoint(points: ToolpathPoint[]): { x: number; y: number; z: numb
   return { x: p.x, y: p.y, z: p.z };
 }
 
-function generateAdaptiveOutlinePath(op: Operation, topZ: number): ToolpathPoint[] {
+function generateAdaptiveOutlinePath(op: Operation, topZ: number, bottomZ: number): ToolpathPoint[] {
   const { settings, geometry } = op;
   const loop = geometry?.loops?.[0];
 
   if (!loop) {
-    return generateOutlinePath(op, topZ);
+    return generateOutlinePath(op, topZ, bottomZ);
   }
 
   const entry = resolveAdaptiveEntryPoint(loop, settings, geometry?.entryPoint);
-  const cutZ = Math.max(topZ - settings.depth, 0);
+  const cutZ = resolveCutZ(topZ, bottomZ, settings.depth);
   const clearance = topZ + settings.clearance;
   const points: ToolpathPoint[] = [];
   const layers = computeZLayers(topZ, cutZ, settings.stepDown);
@@ -455,7 +510,7 @@ function generateAdaptiveOutlinePath(op: Operation, topZ: number): ToolpathPoint
       const finishArcGuide = buildArcLengthGuide(finishGuide, 0.4);
       const at = lastPathPoint(points);
       if (at) {
-        if (!appendPathFromGuideS(points, finishPath, finishArcGuide, at)) {
+        if (!appendClosedOutlinePath(points, finishPath, finishArcGuide, at)) {
           appendVerticalRetract(points, clearance);
           return points;
         }
@@ -497,12 +552,12 @@ function generateDrillPathForHole(
   return points;
 }
 
-function generateDrillPath(op: Operation, topZ: number): ToolpathPoint[] {
+function generateDrillPath(op: Operation, topZ: number, bottomZ: number): ToolpathPoint[] {
   const { settings, geometry } = op;
   const holes = getSelectedHoles(geometry);
   if (holes.length === 0) return [];
 
-  const cutZ = Math.max(topZ - settings.depth, 0);
+  const cutZ = resolveCutZ(topZ, bottomZ, settings.depth);
   const clearance = topZ + settings.clearance;
   const points: ToolpathPoint[] = [];
 
@@ -569,12 +624,12 @@ function generateHelixPathForHole(
   return points;
 }
 
-function generateHelixPath(op: Operation, topZ: number): ToolpathPoint[] {
+function generateHelixPath(op: Operation, topZ: number, bottomZ: number): ToolpathPoint[] {
   const { settings, geometry } = op;
   const holes = getSelectedHoles(geometry);
   if (holes.length === 0) return [];
 
-  const cutZ = Math.max(topZ - settings.depth, 0);
+  const cutZ = resolveCutZ(topZ, bottomZ, settings.depth);
   const clearance = topZ + settings.clearance;
   const points: ToolpathPoint[] = [];
 
@@ -599,11 +654,11 @@ function generateHelixPath(op: Operation, topZ: number): ToolpathPoint[] {
   return points;
 }
 
-function generatePocketPath(op: Operation, topZ: number): ToolpathPoint[] {
+function generatePocketPath(op: Operation, topZ: number, bottomZ: number): ToolpathPoint[] {
   const { settings, geometry } = op;
   const { minX, maxX, minY, maxY } = getBounds(geometry);
   const stepover = settings.toolDiameter * (settings.stepover / 100);
-  const cutZ = Math.max(topZ - settings.depth, 0);
+  const cutZ = resolveCutZ(topZ, bottomZ, settings.depth);
   const clearance = topZ + settings.clearance;
   const points: ToolpathPoint[] = [];
 
@@ -654,21 +709,21 @@ function normalizedSettings(settings: Operation['settings']): Operation['setting
   return clampOperationSettings({ ...DEFAULT_SETTINGS, ...settings });
 }
 
-function generatePathForOperation(op: Operation, topZ: number): ToolpathPoint[] {
+function generatePathForOperation(op: Operation, topZ: number, bottomZ: number): ToolpathPoint[] {
   const settings = normalizedSettings(op.settings);
   const operation = { ...op, settings };
 
   switch (operation.type) {
     case 'outline':
-      return generateOutlinePath(operation, topZ);
+      return generateOutlinePath(operation, topZ, bottomZ);
     case 'adaptive-outline':
-      return generateAdaptiveOutlinePath(operation, topZ);
+      return generateAdaptiveOutlinePath(operation, topZ, bottomZ);
     case 'drill':
-      return generateDrillPath(operation, topZ);
+      return generateDrillPath(operation, topZ, bottomZ);
     case 'helix':
-      return generateHelixPath(operation, topZ);
+      return generateHelixPath(operation, topZ, bottomZ);
     case 'pocket':
-      return generatePocketPath(operation, topZ);
+      return generatePocketPath(operation, topZ, bottomZ);
     case 'contour':
       return generateContourPath(operation, topZ);
     default:
@@ -681,11 +736,12 @@ export function generateToolpaths(
   partBounds: PartBounds | null = null
 ): ToolpathSegment[] {
   const topZ = partTopZ(partBounds);
+  const bottomZ = partBottomZ(partBounds);
   return operations
     .filter((op) => op.enabled)
     .map((op) => ({
       operationId: op.id,
-      points: generatePathForOperation(op, topZ),
+      points: generatePathForOperation(op, topZ, bottomZ),
       color: OPERATION_COLORS[op.type],
     }));
 }
