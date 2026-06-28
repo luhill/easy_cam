@@ -6,8 +6,10 @@
  * orbit engages material; the second half is the return stroke through cleared
  * space with optional gradual Z lift (peaks at the midpoint of the return half).
  *
- *   phase 0.0 → 0.5   cutting half  (at cut depth)
- *   phase 0.5 → 1.0   return half   (rapid; liftAmount × sin(πt) when lift > 0)
+ *   phase 0.0 → cutEnd       cutting — fully at cut depth
+ *   phase cutEnd → liftStart return lead-out — still at cut depth (rapid)
+ *   phase liftStart → liftEnd  gradual lift, peaks at midpoint
+ *   phase liftEnd → 1.0      descend back to cut depth before next pass
  */
 
 import type { LoopPoint, ToolpathPoint } from '../types/operations';
@@ -27,6 +29,11 @@ export interface FourZoneParams {
 }
 
 const ANGLE_STEP = (4 * Math.PI) / 180;
+
+/** Phase thresholds within one orbit (0–1). */
+const CUT_PHASE_END = 0.5;
+const RETURN_LEAD_OUT_END = 0.58; // flat at depth while leaving the outer arc
+const LIFT_END = 0.88; // begin descent — fully flat before phase 1.0 / next pass
 
 function normalizeFrame(frame: ReturnType<typeof sampleGuideAtS>) {
   let tx = frame.tx;
@@ -58,17 +65,34 @@ function orbitPoint(
 }
 
 /** Z and rapid flag for a point on the orbit (phase ∈ [0, 1] within one loop). */
-function returnHalfProfile(
+function orbitZProfile(
   phase: number,
   zCut: number,
   liftAmount: number
 ): { z: number; rapid: boolean } {
-  if (phase <= 0.5) {
+  // Entire cutting half — always flat at cut depth
+  if (phase <= CUT_PHASE_END) {
     return { z: zCut, rapid: false };
   }
-  const t = (phase - 0.5) / 0.5;
-  const z =
-    liftAmount > 0 ? zCut + liftAmount * Math.sin(Math.PI * t) : zCut;
+
+  // Return half — rapid traverse (non-cutting)
+  // Lead-out: stay at cut depth while pulling off the outer arc
+  if (phase < RETURN_LEAD_OUT_END) {
+    return { z: zCut, rapid: true };
+  }
+
+  // Tail: back on inner guide, flat at cut depth before next engagement
+  if (phase >= LIFT_END) {
+    return { z: zCut, rapid: true };
+  }
+
+  // Middle of return — gradual lift (0 when liftAmount is 0)
+  if (liftAmount <= 0) {
+    return { z: zCut, rapid: true };
+  }
+
+  const u = (phase - RETURN_LEAD_OUT_END) / (LIFT_END - RETURN_LEAD_OUT_END);
+  const z = zCut + liftAmount * Math.sin(Math.PI * u);
   return { z, rapid: true };
 }
 
@@ -103,7 +127,7 @@ export function generateFourZoneAdaptivePath(
 
       const theta = -Math.PI / 2 + rotSign * phase * 2 * Math.PI;
       const frame = normalizeFrame(sampleGuideAtS(guide, sAlong));
-      const { z, rapid } = returnHalfProfile(phase, zCut, liftAmount);
+      const { z, rapid } = orbitZProfile(phase, zCut, liftAmount);
 
       let pt = orbitPoint(frame, trochoidR, theta, z);
       if (partLoop && minCenterDist !== undefined) {
