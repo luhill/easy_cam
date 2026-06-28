@@ -1,21 +1,20 @@
 /**
  * Constant circular-loop adaptive trochoid.
  *
- * Each orbit advances the circle center forward along the inner guide.
- * Angular position uses (1 − phase) so forward playback runs cut half then
- * return half. Trochoid radius and slot width stay constant; pass spacing
- * tightens on sharp convex bends and points outside the outer slot wall are
- * pulled back to preserve consistent engagement.
+ * Each orbit advances the circle center forward by a fixed `stepover` along the
+ * inner guide. Angular position uses (1 − phase) so forward playback runs cut
+ * half then return half. Trochoid radius and pass spacing are uniform for the
+ * full outline.
+ *
+ *   phase 0.0 → 0.5   cutting half  — inner → outer, flat at cut depth
+ *   phase 0.5 → 0.58  return lead-out — still flat, leaving the outer arc
+ *   phase 0.58 → 0.88 gradual lift (peaks mid-return) when liftAmount > 0
+ *   phase 0.88 → 1.0  descend to cut depth before the next pass
  */
 
 import type { LoopPoint, ToolpathPoint } from '../types/operations';
-import type { ArcLengthGuide } from './trochoidalPath';
 import { buildArcLengthGuide, sampleGuideAtS } from './trochoidalPath';
-import {
-  clampToolCenterInsideOffsetLoop,
-  clampToolCenterMinDistanceFromPart,
-  signedLoopArea2D,
-} from './geometryProcessing';
+import { clampToolCenterMinDistanceFromPart, signedLoopArea2D } from './geometryProcessing';
 
 export interface FourZoneParams {
   forwardIncrement: number;
@@ -24,8 +23,6 @@ export interface FourZoneParams {
   liftAmount?: number;
   partLoop?: LoopPoint[];
   minCenterDist?: number;
-  /** Outward offset loop marking the outer slot wall. */
-  outerGuideLoop?: LoopPoint[];
 }
 
 const ANGLE_STEP = (4 * Math.PI) / 180;
@@ -34,19 +31,7 @@ const CUT_PHASE_END = 0.5;
 const RETURN_LIFT_START = 0.58;
 const RETURN_LIFT_END = 0.88;
 
-/** Apply outer-wall clamp only where guide curvature is significant. */
-const CORNER_TURN_THRESHOLD = 0.08;
-
-interface PlanarFrame {
-  x: number;
-  y: number;
-  tx: number;
-  ty: number;
-  nx: number;
-  ny: number;
-}
-
-function normalizeFrame(frame: ReturnType<typeof sampleGuideAtS>): PlanarFrame {
+function normalizeFrame(frame: ReturnType<typeof sampleGuideAtS>) {
   let tx = frame.tx;
   let ty = frame.ty;
   let nx = frame.nx;
@@ -60,47 +45,14 @@ function normalizeFrame(frame: ReturnType<typeof sampleGuideAtS>): PlanarFrame {
   return { x: frame.x, y: frame.y, tx, ty, nx, ny };
 }
 
-/** Guide turning rate (rad/mm) — high at convex part corners. */
-function guideTurnRate(guide: ArcLengthGuide, s: number): number {
-  const ds = 0.45;
-  const a = sampleGuideAtS(guide, s - ds);
-  const b = sampleGuideAtS(guide, s + ds);
-  const dot = Math.max(-1, Math.min(1, a.tx * b.tx + a.ty * b.ty));
-  return Math.acos(dot) / (2 * ds);
-}
-
-function peakGuideTurnRate(guide: ArcLengthGuide, s: number, window: number): number {
-  const samples = 5;
-  let peak = 0;
-  for (let i = 0; i < samples; i++) {
-    const t = i / (samples - 1) - 0.5;
-    peak = Math.max(peak, guideTurnRate(guide, s + t * window));
-  }
-  return peak;
-}
-
-/** Shorten pass advance on tight bends so outer-edge spacing stays even. */
-function localForwardIncrement(baseStep: number, turnRate: number): number {
-  const bend = turnRate * baseStep;
-  const scale = 1 / (1 + bend * bend * 4);
-  return baseStep * Math.max(0.4, scale);
-}
-
-/** Pull orbit center inward on sharp bends to stop outer-arc blow-out. */
-function orbitCenterScale(turnRate: number, baseStep: number): number {
-  const bend = turnRate * baseStep;
-  return 1 / (1 + bend * bend * 6);
-}
-
 function orbitPoint(
-  frame: PlanarFrame,
+  frame: ReturnType<typeof normalizeFrame>,
   trochoidR: number,
-  centerScale: number,
   theta: number,
   z: number
 ): ToolpathPoint {
-  const cx = frame.x + frame.nx * trochoidR * centerScale;
-  const cy = frame.y + frame.ny * trochoidR * centerScale;
+  const cx = frame.x + frame.nx * trochoidR;
+  const cy = frame.y + frame.ny * trochoidR;
   return {
     x: cx + trochoidR * (Math.cos(theta) * frame.tx + Math.sin(theta) * frame.nx),
     y: cy + trochoidR * (Math.cos(theta) * frame.ty + Math.sin(theta) * frame.ny),
@@ -133,61 +85,50 @@ export function generateFourZoneAdaptivePath(
   innerGuideLoop: LoopPoint[],
   params: FourZoneParams
 ): ToolpathPoint[] {
-  const baseStepover = params.forwardIncrement;
+  const stepover = params.forwardIncrement;
   const { slotClearance, z: zCut, liftAmount = 0 } = params;
 
-  if (innerGuideLoop.length < 3 || baseStepover <= 0 || slotClearance <= 0) return [];
+  if (innerGuideLoop.length < 3 || stepover <= 0 || slotClearance <= 0) return [];
 
   const trochoidR = slotClearance / 2;
-  const sampleSpacing = Math.min(baseStepover / 4, trochoidR / 2, 0.5);
+  const sampleSpacing = Math.min(stepover / 4, trochoidR / 2, 0.5);
   const guide = buildArcLengthGuide(innerGuideLoop, sampleSpacing);
   if (guide.totalLength <= 0) return [];
 
   const ccwGuide = signedLoopArea2D(innerGuideLoop) >= 0;
   const rotSign = ccwGuide ? -1 : 1;
+  const numCycles = Math.ceil(guide.totalLength / stepover);
   const steps = Math.max(2, Math.ceil((2 * Math.PI) / ANGLE_STEP));
   const points: ToolpathPoint[] = [];
-  const { partLoop, minCenterDist, outerGuideLoop } = params;
+  const { partLoop, minCenterDist } = params;
 
-  let sStart = 0;
-  let cycle = 0;
-  while (sStart < guide.totalLength - baseStepover * 0.01) {
-    const turnRate = peakGuideTurnRate(guide, sStart, baseStepover);
-    const stepover = localForwardIncrement(baseStepover, turnRate);
-    const centerScale = orbitCenterScale(turnRate, baseStepover);
+  for (let cycle = 0; cycle < numCycles; cycle++) {
+    const sStart = cycle * stepover;
 
     for (let i = 0; i <= steps; i++) {
       const phase = i / steps;
       const sAlong = sStart + phase * stepover;
-      if (sAlong > guide.totalLength + baseStepover * 0.01) break;
+      if (sAlong > guide.totalLength + stepover * 0.01) break;
 
       const theta = -Math.PI / 2 + rotSign * (1 - phase) * 2 * Math.PI;
       const frame = normalizeFrame(sampleGuideAtS(guide, sAlong));
       const { z, rapid } = orbitZProfile(phase, zCut, liftAmount);
 
-      let pt = orbitPoint(frame, trochoidR, centerScale, theta, z);
-
+      let pt = orbitPoint(frame, trochoidR, theta, z);
       if (partLoop && minCenterDist !== undefined) {
-        const c = clampToolCenterMinDistanceFromPart(partLoop, pt.x, pt.y, minCenterDist);
+        const c = clampToolCenterMinDistanceFromPart(
+          partLoop,
+          pt.x,
+          pt.y,
+          minCenterDist
+        );
         pt = { ...pt, x: c.x, y: c.y };
       }
-
-      if (outerGuideLoop && outerGuideLoop.length >= 3) {
-        const localTurn = guideTurnRate(guide, sAlong);
-        if (localTurn > CORNER_TURN_THRESHOLD) {
-          const c = clampToolCenterInsideOffsetLoop(outerGuideLoop, pt.x, pt.y);
-          pt = { ...pt, x: c.x, y: c.y };
-        }
-      }
-
       if (rapid) pt = { ...pt, rapid: true };
 
       if (cycle > 0 && i === 0) continue;
       points.push(pt);
     }
-
-    sStart += stepover;
-    cycle++;
   }
 
   return points;

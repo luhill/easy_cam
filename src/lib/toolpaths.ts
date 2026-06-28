@@ -173,7 +173,6 @@ function generateAdaptiveTrochoidalPath(
 ): ToolpathPoint[] {
   const slot = resolveAdaptiveSlotGeometry(settings);
   const innerGuide = offsetLoop2D(partLoop, slot.innerCenterOffset);
-  const outerGuide = offsetLoop2D(partLoop, slot.maxCenterDist);
 
   return generateFourZoneAdaptivePath(innerGuide, {
     forwardIncrement: slot.forwardIncrement,
@@ -182,7 +181,6 @@ function generateAdaptiveTrochoidalPath(
     liftAmount: Math.max(settings.liftAmount ?? 0, 0),
     partLoop,
     minCenterDist: slot.minCenterDist,
-    outerGuideLoop: outerGuide,
   });
 }
 

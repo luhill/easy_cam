@@ -271,38 +271,6 @@ export function clampToolCenterMinDistanceFromPart(
   };
 }
 
-/** Pull tool center inward if it exceeds maximum standoff from the part outline. */
-export function clampToolCenterMaxDistanceFromPart(
-  partLoop: LoopPoint[],
-  x: number,
-  y: number,
-  maxDist: number
-): { x: number; y: number } {
-  const closest = closestPointOnLoop2D(x, y, partLoop);
-  if (closest.dist <= maxDist) return { x, y };
-  return {
-    x: closest.x + closest.outX * maxDist,
-    y: closest.y + closest.outY * maxDist,
-  };
-}
-
-/** Pull tool center back inside an outward offset loop (outer slot wall). */
-export function clampToolCenterInsideOffsetLoop(
-  offsetLoop: LoopPoint[],
-  x: number,
-  y: number
-): { x: number; y: number } {
-  const closest = closestPointOnLoop2D(x, y, offsetLoop);
-  const vx = x - closest.x;
-  const vy = y - closest.y;
-  const outward = vx * closest.outX + vy * closest.outY;
-  if (outward <= 1e-6) return { x, y };
-  return {
-    x: x - outward * closest.outX,
-    y: y - outward * closest.outY,
-  };
-}
-
 export function distanceToLoop2D(x: number, y: number, loop: LoopPoint[]): number {
   if (loop.length === 0) return Infinity;
   if (pointInPolygon2D(x, y, loop)) return 0;
