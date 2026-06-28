@@ -259,12 +259,7 @@ function appendClosedOutlinePath(
   if (!appendGeneratedPath(target, loop)) return false;
 
   const loopStart = loop[0];
-  const last = target[target.length - 1];
-  if (!last) return true;
-  if (Math.hypot(loopStart.x - last.x, loopStart.y - last.y) > 1e-3) {
-    return appendPoints(target, [{ x: loopStart.x, y: loopStart.y, z: loopStart.z }]);
-  }
-  return true;
+  return appendPoints(target, [{ x: loopStart.x, y: loopStart.y, z: loopStart.z }]);
 }
 
 function sampleFinishPoint(

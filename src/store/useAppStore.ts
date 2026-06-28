@@ -204,7 +204,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
 
-  setPartBounds: (bounds) => set({ partBounds: bounds }),
+  setPartBounds: (bounds) => {
+    set({ partBounds: bounds });
+    get().regenerateToolpaths();
+  },
 
   regenerateToolpaths: () => {
     const { operations, partBounds } = get();

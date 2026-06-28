@@ -8,10 +8,10 @@ function safeStepDown(stepDown: number): number {
   return Math.max(stepDown, MIN_STEP_DOWN);
 }
 
-/** Part thickness (mm). */
+/** Part thickness (mm) from mesh bounds. */
 export function partHeightFromBounds(bounds: PartBounds | null): number {
-  if (!bounds) return 10;
-  return Math.max(bounds.maxZ - bounds.minZ, MIN_STEP_DOWN);
+  if (!bounds) return 0;
+  return Math.max(bounds.maxZ - bounds.minZ, 0);
 }
 
 /** CAM Z of the part bottom (top of part is Z=0). */
@@ -32,6 +32,18 @@ export function totalCutDepth(partHeight: number, depthOffset: number): number {
   return Math.max(-resolveFinalCutCamZ(partHeight, depthOffset), 0);
 }
 
+/** Number of Z passes for the given stock and step-down limit. */
+export function computePassCount(
+  partHeight: number,
+  depthOffset: number,
+  maxStepDown: number
+): number {
+  const totalDepth = totalCutDepth(partHeight, depthOffset);
+  if (totalDepth <= 1e-6) return 0;
+  const maxStep = safeStepDown(maxStepDown);
+  return Math.min(Math.max(1, Math.ceil(totalDepth / maxStep)), MAX_Z_LAYERS);
+}
+
 /**
  * Z layers in CAM coordinates with equal step-down per pass.
  * Pass count = ceil(totalDepth / maxStepDown); each pass removes totalDepth / passCount.
@@ -45,8 +57,9 @@ export function computeCutLayersCamZ(
   const totalDepth = -finalZ;
   if (totalDepth <= 1e-6) return [];
 
-  const maxStep = safeStepDown(maxStepDown);
-  const passCount = Math.min(Math.max(1, Math.ceil(totalDepth / maxStep)), MAX_Z_LAYERS);
+  const passCount = computePassCount(partHeight, depthOffset, maxStepDown);
+  if (passCount <= 0) return [];
+
   const equalStep = totalDepth / passCount;
 
   const layers: number[] = [];
@@ -69,13 +82,19 @@ export function camZToWorld(camZ: number, worldTopZ: number): number {
 export interface CutZContext {
   partHeight: number;
   worldTopZ: number;
+  worldBottomZ: number;
+  hasStock: boolean;
 }
 
 export function createCutZContext(bounds: PartBounds | null): CutZContext {
-  const worldTopZ = bounds?.maxZ ?? 10;
+  if (!bounds) {
+    return { partHeight: 0, worldTopZ: 0, worldBottomZ: 0, hasStock: false };
+  }
   return {
     partHeight: partHeightFromBounds(bounds),
-    worldTopZ,
+    worldTopZ: bounds.maxZ,
+    worldBottomZ: bounds.minZ,
+    hasStock: true,
   };
 }
 
@@ -84,6 +103,7 @@ export function stockTopWorldZ(ctx: CutZContext): number {
 }
 
 export function clearanceWorldZ(ctx: CutZContext, clearance: number): number {
+  if (!ctx.hasStock) return clearance;
   return camZToWorld(clearanceCamZ(clearance), ctx.worldTopZ);
 }
 
@@ -92,11 +112,21 @@ export function cutLayersWorldZ(
   depthOffset: number,
   maxStepDown: number
 ): number[] {
+  if (!ctx.hasStock || ctx.partHeight <= 1e-6) return [];
   return computeCutLayersCamZ(ctx.partHeight, depthOffset, maxStepDown).map((z) =>
     camZToWorld(z, ctx.worldTopZ)
   );
 }
 
 export function finalCutWorldZ(ctx: CutZContext, depthOffset: number): number {
+  if (!ctx.hasStock) return ctx.worldTopZ;
   return camZToWorld(resolveFinalCutCamZ(ctx.partHeight, depthOffset), ctx.worldTopZ);
 }
+
+/** Convert world Z to CAM Z (0 at stock top). */
+export function worldZToCamZ(worldZ: number, stockTopWorldZ: number): number {
+  return worldZ - stockTopWorldZ;
+}
+
+/** Default WCS Z: 10 mm above stock top. */
+export const DEFAULT_WCS_Z_ABOVE_STOCK = 10;

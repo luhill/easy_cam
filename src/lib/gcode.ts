@@ -1,5 +1,6 @@
 import type { GcodeTemplates } from '../store/useSettingsStore';
 import type { ToolOrigin } from './geometryProcessing';
+import { DEFAULT_WCS_Z_ABOVE_STOCK, worldZToCamZ } from './cutDepth';
 import type { Operation, ToolpathSegment } from '../types/operations';
 
 export interface GcodeTemplateVars {
@@ -31,7 +32,8 @@ export function generateGcode(
   operations: Operation[],
   toolpaths: ToolpathSegment[],
   templates: GcodeTemplates,
-  toolOrigin: ToolOrigin = { x: 0, y: 0, z: 0 }
+  toolOrigin: ToolOrigin = { x: 0, y: 0, z: DEFAULT_WCS_Z_ABOVE_STOCK },
+  stockTopWorldZ = 0
 ): string {
   const enabledOps = operations.filter((op) => op.enabled);
   if (enabledOps.length === 0) {
@@ -89,7 +91,8 @@ export function generateGcode(
     for (const pt of path.points) {
       const x = pt.x - toolOrigin.x;
       const y = pt.y - toolOrigin.y;
-      const z = pt.z - toolOrigin.z;
+      const camZ = worldZToCamZ(pt.z, stockTopWorldZ);
+      const z = camZ - toolOrigin.z;
       if (pt.rapid) {
         lines.push(`G0 X${x.toFixed(3)} Y${y.toFixed(3)} Z${z.toFixed(3)}`);
       } else {

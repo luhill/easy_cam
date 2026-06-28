@@ -575,6 +575,7 @@ function SceneContent({
   const setSimulationDistance = useAppStore((s) => s.setSimulationDistance);
   const setSimulationPlaying = useAppStore((s) => s.setSimulationPlaying);
   const activeOperationId = useAppStore((s) => s.activeOperationId);
+  const partBounds = useAppStore((s) => s.partBounds);
   const toolOrigin = useSettingsStore((s) => s.toolOrigin);
   const { camera } = useThree();
   const simulationDistanceRef = useRef(simulationDistance);
@@ -654,7 +655,7 @@ function SceneContent({
         }}
         getDistance={() => simulationDistanceRef.current}
       />
-      <ToolOriginMarker origin={toolOrigin} />
+      <ToolOriginMarker origin={toolOrigin} stockTopWorldZ={partBounds?.maxZ ?? 0} />
       <OrbitControls
         makeDefault
         enableDamping

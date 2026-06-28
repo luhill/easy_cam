@@ -15,10 +15,12 @@ function GcodePanel() {
   const toolpaths = useAppStore((s) => s.toolpaths);
   const gcodeTemplates = useSettingsStore((s) => s.gcodeTemplates);
   const toolOrigin = useSettingsStore((s) => s.toolOrigin);
+  const partBounds = useAppStore((s) => s.partBounds);
   const enabledCount = operations.filter((o) => o.enabled).length;
 
   const handleExport = () => {
-    const gcode = generateGcode(operations, toolpaths, gcodeTemplates, toolOrigin);
+    const stockTop = partBounds?.maxZ ?? 0;
+    const gcode = generateGcode(operations, toolpaths, gcodeTemplates, toolOrigin, stockTop);
     downloadGcode(gcode);
   };
 

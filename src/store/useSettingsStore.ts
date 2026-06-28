@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { PartBounds, ToolOrigin } from '../lib/geometryProcessing';
+import { DEFAULT_WCS_Z_ABOVE_STOCK } from '../lib/cutDepth';
 
 export interface GcodeTemplates {
   startGcode: string;
@@ -45,7 +46,7 @@ export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
       gcodeTemplates: DEFAULT_GCODE_TEMPLATES,
-      toolOrigin: { x: 0, y: 0, z: 0 },
+      toolOrigin: { x: 0, y: 0, z: DEFAULT_WCS_Z_ABOVE_STOCK },
       toolOriginAuto: true,
       setGcodeTemplate: (key, value) =>
         set((state) => ({
@@ -65,7 +66,7 @@ export const useSettingsStore = create<SettingsState>()(
             toolOrigin: {
               x: (bounds.minX + bounds.maxX) / 2,
               y: (bounds.minY + bounds.maxY) / 2,
-              z: bounds.maxZ,
+              z: DEFAULT_WCS_Z_ABOVE_STOCK,
             },
           };
         }),

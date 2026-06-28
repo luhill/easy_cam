@@ -58,7 +58,7 @@ export function finalizePartPlacement(geometry: THREE.BufferGeometry): Processed
   const defaultToolOrigin: ToolOrigin = {
     x: (bounds.minX + bounds.maxX) / 2,
     y: (bounds.minY + bounds.maxY) / 2,
-    z: bounds.maxZ,
+    z: 10,
   };
 
   return { geometry: geo, bounds, defaultToolOrigin };
