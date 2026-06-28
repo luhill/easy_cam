@@ -28,48 +28,17 @@ import {
   resolveSlotHelixRadius,
 } from './entryPath';
 import { buildArcLengthGuide, findClosestSOnGuide, sampleGuideAtS } from './trochoidalPath';
+import {
+  clearanceWorldZ,
+  createCutZContext,
+  cutLayersWorldZ,
+  finalCutWorldZ,
+  stockTopWorldZ,
+  type CutZContext,
+} from './cutDepth';
 
-const MIN_STEP_DOWN = 0.05;
 const MAX_Z_LAYERS = 500;
 const MAX_TOOLPATH_POINTS = 500_000;
-
-function partTopZ(bounds: PartBounds | null): number {
-  return bounds?.maxZ ?? 10;
-}
-
-function partBottomZ(bounds: PartBounds | null): number {
-  return bounds?.minZ ?? 0;
-}
-
-/** Cut floor from top using requested depth, capped to part thickness and part bottom. */
-function resolveCutZ(topZ: number, bottomZ: number, depth: number): number {
-  const thickness = Math.max(topZ - bottomZ, MIN_STEP_DOWN);
-  const effectiveDepth = Math.min(Math.max(depth, MIN_STEP_DOWN), thickness);
-  return Math.max(topZ - effectiveDepth, bottomZ);
-}
-
-export function partThicknessFromBounds(bounds: PartBounds | null): number {
-  if (!bounds) return DEFAULT_SETTINGS.depth;
-  return Math.max(bounds.maxZ - bounds.minZ, MIN_STEP_DOWN);
-}
-
-function safeStepDown(stepDown: number): number {
-  if (!Number.isFinite(stepDown) || stepDown <= 0) return MIN_STEP_DOWN;
-  return Math.max(stepDown, MIN_STEP_DOWN);
-}
-
-function computeZLayers(topZ: number, cutZ: number, stepDown: number): number[] {
-  const step = safeStepDown(stepDown);
-  const layers: number[] = [];
-  let currentZ = topZ;
-
-  while (currentZ > cutZ + 1e-6 && layers.length < MAX_Z_LAYERS) {
-    currentZ = Math.max(currentZ - step, cutZ);
-    layers.push(currentZ);
-  }
-
-  return layers;
-}
 
 function toolRadius(settings: Operation['settings']): number {
   return Math.max(settings.toolDiameter, 0.1) / 2;
@@ -130,11 +99,11 @@ function appendPoints(target: ToolpathPoint[], points: ToolpathPoint[]): boolean
 function loopToToolpathPoints(
   loop: LoopPoint[],
   settings: Operation['settings'],
-  topZ: number,
-  bottomZ: number
+  ctx: CutZContext
 ): ToolpathPoint[] {
-  const cutZ = resolveCutZ(topZ, bottomZ, settings.depth);
-  const clearance = topZ + settings.clearance;
+  const topZ = stockTopWorldZ(ctx);
+  const clearance = clearanceWorldZ(ctx, settings.clearance);
+  const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
   const points: ToolpathPoint[] = [];
 
   if (loop.length === 0) return points;
@@ -143,7 +112,6 @@ function loopToToolpathPoints(
   const ccw = signedLoopArea2D(loop) >= 0;
   const reverse = settings.climbMilling ? ccw : !ccw;
   const traverse = reverse ? [...toolLoop].reverse() : toolLoop;
-  const layers = computeZLayers(topZ, cutZ, settings.stepDown);
 
   const start = traverse[0];
   points.push({ x: start.x, y: start.y, z: clearance, rapid: true });
@@ -160,11 +128,12 @@ function loopToToolpathPoints(
   return points;
 }
 
-function generateOutlinePath(op: Operation, topZ: number, bottomZ: number): ToolpathPoint[] {
+function generateOutlinePath(op: Operation, ctx: CutZContext): ToolpathPoint[] {
   const { settings, geometry } = op;
+  const topZ = stockTopWorldZ(ctx);
 
   if (geometry?.loops && geometry.loops.length > 0) {
-    return loopToToolpathPoints(geometry.loops[0], settings, topZ, bottomZ);
+    return loopToToolpathPoints(geometry.loops[0], settings, ctx);
   }
 
   const { minX, maxX, minY, maxY } = getBounds(geometry);
@@ -174,7 +143,7 @@ function generateOutlinePath(op: Operation, topZ: number, bottomZ: number): Tool
     { x: maxX, y: maxY, z: topZ },
     { x: minX, y: maxY, z: topZ },
   ];
-  return loopToToolpathPoints(fallbackLoop, settings, topZ, bottomZ);
+  return loopToToolpathPoints(fallbackLoop, settings, ctx);
 }
 
 function generateHelixBoreAt(
@@ -215,13 +184,13 @@ function generateHelixBoreAt(
 function generateHelixBore(
   entry: { x: number; y: number },
   settings: Operation['settings'],
-  topZ: number,
+  startZ: number,
   targetZ: number
 ): ToolpathPoint[] {
   return generateHelixBoreAt(
     entry,
     settings,
-    topZ,
+    startZ,
     targetZ,
     resolveHelixRadius(settings)
   );
@@ -280,29 +249,19 @@ function appendGeneratedPath(
 function appendClosedOutlinePath(
   target: ToolpathPoint[],
   path: ToolpathPoint[],
-  guide: ReturnType<typeof buildArcLengthGuide>,
   from: { x: number; y: number }
 ): boolean {
   if (path.length < 2) return true;
 
-  let core = path;
-  if (
-    path.length > 2 &&
-    Math.hypot(path[0].x - path[path.length - 1].x, path[0].y - path[path.length - 1].y) < 0.08
-  ) {
-    core = path.slice(0, -1);
-  }
-
-  const { s } = findClosestSOnGuide(guide, from);
-  const anchor = sampleGuideAtS(guide, s);
-  const joinIdx = closestPointIndexOnPath(core, anchor);
-  const loop = wrapPathFromIndex(core, joinIdx);
+  const joinIdx = closestPointIndexOnPath(path, from);
+  const loop = wrapPathFromIndex(path, joinIdx);
 
   if (!appendGeneratedPath(target, loop)) return false;
 
   const loopStart = loop[0];
   const last = target[target.length - 1];
-  if (last && Math.hypot(loopStart.x - last.x, loopStart.y - last.y) > 0.04) {
+  if (!last) return true;
+  if (Math.hypot(loopStart.x - last.x, loopStart.y - last.y) > 1e-3) {
     return appendPoints(target, [{ x: loopStart.x, y: loopStart.y, z: loopStart.z }]);
   }
   return true;
@@ -350,38 +309,32 @@ function generateFinishingOutline(
   const roughCenterGuide = offsetLoop2DMinkowski(partLoop, roughSlot.slotCenterOffset);
   if (finishGuide.length < 3) return [];
 
-  const sampleSpacing = 0.35;
-  const arcGuide = buildArcLengthGuide(finishGuide, sampleSpacing);
-  const totalLen = arcGuide.totalLength;
-  if (totalLen <= 0) return [];
+  const ccw = signedLoopArea2D(finishGuide) >= 0;
+  const reverse = settings.climbMilling ? ccw : !ccw;
+  const traverse = reverse ? [...finishGuide].reverse() : finishGuide;
 
-  const guideSign = resolveGuideTraverseSign(finishGuide, settings.climbMilling);
   const pts: ToolpathPoint[] = [];
-  let s = 0;
-
-  while (s < totalLen - 1e-5) {
-    const sSample = guideSign >= 0 ? s : totalLen - s;
-    const f = sampleGuideAtS(arcGuide, sSample);
+  for (const p of traverse) {
     pts.push(
       sampleFinishPoint(
         partLoop,
         finishSlot,
         roughSlot,
         roughCenterGuide,
-        f.x,
-        f.y,
+        p.x,
+        p.y,
         layerZ
       )
     );
-    s += sampleSpacing;
   }
 
-  const sEnd = guideSign >= 0 ? totalLen : 0;
-  const fEnd = sampleGuideAtS(arcGuide, sEnd);
-  pts.push(
-    sampleFinishPoint(partLoop, finishSlot, roughSlot, roughCenterGuide, fEnd.x, fEnd.y, layerZ)
-  );
-
+  if (pts.length > 1) {
+    const first = pts[0];
+    const last = pts[pts.length - 1];
+    if (Math.hypot(first.x - last.x, first.y - last.y) > 1e-3) {
+      pts.push({ x: first.x, y: first.y, z: layerZ });
+    }
+  }
   return pts;
 }
 
@@ -414,19 +367,21 @@ function lastPathPoint(points: ToolpathPoint[]): { x: number; y: number; z: numb
   return { x: p.x, y: p.y, z: p.z };
 }
 
-function generateAdaptiveOutlinePath(op: Operation, topZ: number, bottomZ: number): ToolpathPoint[] {
+function generateAdaptiveOutlinePath(op: Operation, ctx: CutZContext): ToolpathPoint[] {
   const { settings, geometry } = op;
   const loop = geometry?.loops?.[0];
 
   if (!loop) {
-    return generateOutlinePath(op, topZ, bottomZ);
+    return generateOutlinePath(op, ctx);
   }
 
+  const topZ = stockTopWorldZ(ctx);
+  const clearance = clearanceWorldZ(ctx, settings.clearance);
+  const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
+  const finalZ = finalCutWorldZ(ctx, settings.depthOffset);
+
   const entry = resolveAdaptiveEntryPoint(loop, settings, geometry?.entryPoint);
-  const cutZ = resolveCutZ(topZ, bottomZ, settings.depth);
-  const clearance = topZ + settings.clearance;
   const points: ToolpathPoint[] = [];
-  const layers = computeZLayers(topZ, cutZ, settings.stepDown);
   const helixFeed = settings.helixFeedRate;
   const roughSlot = resolveAdaptiveSlotGeometry(settings, { roughing: true });
   const slotCenterGuide = offsetLoop2DMinkowski(loop, roughSlot.slotCenterOffset);
@@ -446,7 +401,7 @@ function generateAdaptiveOutlinePath(op: Operation, topZ: number, bottomZ: numbe
   points.push({ x: entry.x, y: entry.y, z: clearance, rapid: true });
   points.push({ x: entry.x, y: entry.y, z: topZ });
 
-  const helixTarget = layers.length > 0 ? layers[0] : cutZ;
+  const helixTarget = layers.length > 0 ? layers[0] : finalZ;
   appendPoints(points, generateHelixBore(entry, settings, topZ, helixTarget));
 
   for (let li = 0; li < layers.length; li++) {
@@ -502,15 +457,12 @@ function generateAdaptiveOutlinePath(op: Operation, topZ: number, bottomZ: numbe
   }
 
   if (settings.finishingPass) {
-    const finishZ = layers.length > 0 ? layers[layers.length - 1] : cutZ;
+    const finishZ = layers.length > 0 ? layers[layers.length - 1] : finalZ;
     const finishPath = generateFinishingOutline(loop, settings, finishZ);
     if (finishPath.length > 0) {
-      const finishSlot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
-      const finishGuide = offsetLoop2DMinkowski(loop, finishSlot.innerCenterOffset);
-      const finishArcGuide = buildArcLengthGuide(finishGuide, 0.4);
       const at = lastPathPoint(points);
       if (at) {
-        if (!appendClosedOutlinePath(points, finishPath, finishArcGuide, at)) {
+        if (!appendClosedOutlinePath(points, finishPath, at)) {
           appendVerticalRetract(points, clearance);
           return points;
         }
@@ -529,11 +481,12 @@ function generateDrillPathForHole(
   cx: number,
   cy: number,
   settings: Operation['settings'],
-  topZ: number,
-  cutZ: number,
+  ctx: CutZContext,
   clearance: number,
   isFirst: boolean
 ): ToolpathPoint[] {
+  const topZ = stockTopWorldZ(ctx);
+  const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
   const points: ToolpathPoint[] = [];
 
   if (isFirst) {
@@ -543,7 +496,6 @@ function generateDrillPathForHole(
   }
   points.push({ x: cx, y: cy, z: topZ });
 
-  const layers = computeZLayers(topZ, cutZ, settings.stepDown);
   for (const layerZ of layers) {
     points.push({ x: cx, y: cy, z: layerZ });
     points.push({ x: cx, y: cy, z: topZ, rapid: true });
@@ -552,13 +504,12 @@ function generateDrillPathForHole(
   return points;
 }
 
-function generateDrillPath(op: Operation, topZ: number, bottomZ: number): ToolpathPoint[] {
+function generateDrillPath(op: Operation, ctx: CutZContext): ToolpathPoint[] {
   const { settings, geometry } = op;
   const holes = getSelectedHoles(geometry);
   if (holes.length === 0) return [];
 
-  const cutZ = resolveCutZ(topZ, bottomZ, settings.depth);
-  const clearance = topZ + settings.clearance;
+  const clearance = clearanceWorldZ(ctx, settings.clearance);
   const points: ToolpathPoint[] = [];
 
   holes.forEach((hole, index) => {
@@ -568,8 +519,7 @@ function generateDrillPath(op: Operation, topZ: number, bottomZ: number): Toolpa
         hole.center.x,
         hole.center.y,
         settings,
-        topZ,
-        cutZ,
+        ctx,
         clearance,
         index === 0
       )
@@ -586,11 +536,13 @@ function generateHelixPathForHole(
   cy: number,
   holeR: number,
   settings: Operation['settings'],
-  topZ: number,
-  cutZ: number,
+  ctx: CutZContext,
   clearance: number,
   isFirst: boolean
 ): ToolpathPoint[] {
+  const topZ = stockTopWorldZ(ctx);
+  const finalZ = finalCutWorldZ(ctx, settings.depthOffset);
+  const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
   const cutR = Math.max(holeR - toolRadius(settings), toolRadius(settings) * 0.25);
   const points: ToolpathPoint[] = [];
   const segments = 36;
@@ -602,35 +554,35 @@ function generateHelixPathForHole(
     points.push({ x: cx + cutR, y: cy, z: topZ });
   }
 
+  const zTargets = layers.length > 0 ? layers : [finalZ];
   let currentZ = topZ;
   let angle = 0;
-  let iterations = 0;
-  const maxIterations = MAX_Z_LAYERS * segments;
 
-  while (currentZ > cutZ + 1e-6 && iterations < maxIterations) {
-    const zStep = safeStepDown(settings.stepDown) / segments;
+  for (const targetZ of zTargets) {
+    const zSpan = currentZ - targetZ;
+    if (zSpan <= 1e-6) continue;
+    const zStep = zSpan / segments;
     for (let i = 0; i < segments; i++) {
       angle += (Math.PI * 2) / segments;
-      currentZ = Math.max(currentZ - zStep, cutZ);
+      currentZ = Math.max(currentZ - zStep, targetZ);
       points.push({
         x: cx + Math.cos(angle) * cutR,
         y: cy + Math.sin(angle) * cutR,
         z: currentZ,
       });
-      iterations++;
     }
+    currentZ = targetZ;
   }
 
   return points;
 }
 
-function generateHelixPath(op: Operation, topZ: number, bottomZ: number): ToolpathPoint[] {
+function generateHelixPath(op: Operation, ctx: CutZContext): ToolpathPoint[] {
   const { settings, geometry } = op;
   const holes = getSelectedHoles(geometry);
   if (holes.length === 0) return [];
 
-  const cutZ = resolveCutZ(topZ, bottomZ, settings.depth);
-  const clearance = topZ + settings.clearance;
+  const clearance = clearanceWorldZ(ctx, settings.clearance);
   const points: ToolpathPoint[] = [];
 
   holes.forEach((hole, index) => {
@@ -641,8 +593,7 @@ function generateHelixPath(op: Operation, topZ: number, bottomZ: number): Toolpa
         hole.center.y,
         hole.radius,
         settings,
-        topZ,
-        cutZ,
+        ctx,
         clearance,
         index === 0
       )
@@ -654,12 +605,13 @@ function generateHelixPath(op: Operation, topZ: number, bottomZ: number): Toolpa
   return points;
 }
 
-function generatePocketPath(op: Operation, topZ: number, bottomZ: number): ToolpathPoint[] {
+function generatePocketPath(op: Operation, ctx: CutZContext): ToolpathPoint[] {
   const { settings, geometry } = op;
   const { minX, maxX, minY, maxY } = getBounds(geometry);
   const stepover = settings.toolDiameter * (settings.stepover / 100);
-  const cutZ = resolveCutZ(topZ, bottomZ, settings.depth);
-  const clearance = topZ + settings.clearance;
+  const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
+  const cutZ = layers.length > 0 ? layers[layers.length - 1] : finalCutWorldZ(ctx, settings.depthOffset);
+  const clearance = clearanceWorldZ(ctx, settings.clearance);
   const points: ToolpathPoint[] = [];
 
   points.push({ x: minX, y: minY, z: clearance, rapid: true });
@@ -684,10 +636,12 @@ function generatePocketPath(op: Operation, topZ: number, bottomZ: number): Toolp
   return points;
 }
 
-function generateContourPath(op: Operation, topZ: number): ToolpathPoint[] {
+function generateContourPath(op: Operation, ctx: CutZContext): ToolpathPoint[] {
   const { settings, geometry } = op;
   const { minX, maxX, minY, maxY } = getBounds(geometry);
-  const clearance = topZ + settings.clearance;
+  const topZ = stockTopWorldZ(ctx);
+  const finalZ = finalCutWorldZ(ctx, settings.depthOffset);
+  const clearance = clearanceWorldZ(ctx, settings.clearance);
   const points: ToolpathPoint[] = [];
   const steps = 20;
 
@@ -697,7 +651,7 @@ function generateContourPath(op: Operation, topZ: number): ToolpathPoint[] {
     const t = i / steps;
     const x = minX + (maxX - minX) * t;
     const wave = Math.sin(t * Math.PI * 4) * 2;
-    const currentZ = topZ - settings.depth * t + wave;
+    const currentZ = topZ + (finalZ - topZ) * t + wave;
     points.push({ x, y: minY + (maxY - minY) * t, z: currentZ });
   }
 
@@ -709,23 +663,23 @@ function normalizedSettings(settings: Operation['settings']): Operation['setting
   return clampOperationSettings({ ...DEFAULT_SETTINGS, ...settings });
 }
 
-function generatePathForOperation(op: Operation, topZ: number, bottomZ: number): ToolpathPoint[] {
+function generatePathForOperation(op: Operation, ctx: CutZContext): ToolpathPoint[] {
   const settings = normalizedSettings(op.settings);
   const operation = { ...op, settings };
 
   switch (operation.type) {
     case 'outline':
-      return generateOutlinePath(operation, topZ, bottomZ);
+      return generateOutlinePath(operation, ctx);
     case 'adaptive-outline':
-      return generateAdaptiveOutlinePath(operation, topZ, bottomZ);
+      return generateAdaptiveOutlinePath(operation, ctx);
     case 'drill':
-      return generateDrillPath(operation, topZ, bottomZ);
+      return generateDrillPath(operation, ctx);
     case 'helix':
-      return generateHelixPath(operation, topZ, bottomZ);
+      return generateHelixPath(operation, ctx);
     case 'pocket':
-      return generatePocketPath(operation, topZ, bottomZ);
+      return generatePocketPath(operation, ctx);
     case 'contour':
-      return generateContourPath(operation, topZ);
+      return generateContourPath(operation, ctx);
     default:
       return [];
   }
@@ -735,13 +689,12 @@ export function generateToolpaths(
   operations: Operation[],
   partBounds: PartBounds | null = null
 ): ToolpathSegment[] {
-  const topZ = partTopZ(partBounds);
-  const bottomZ = partBottomZ(partBounds);
+  const ctx = createCutZContext(partBounds);
   return operations
     .filter((op) => op.enabled)
     .map((op) => ({
       operationId: op.id,
-      points: generatePathForOperation(op, topZ, bottomZ),
+      points: generatePathForOperation(op, ctx),
       color: OPERATION_COLORS[op.type],
     }));
 }

@@ -24,7 +24,7 @@ const BASE_FIELDS: {
   { key: 'stepover', label: 'Stepover', unit: '%', step: 1 },
   { key: 'spindleSpeed', label: 'Spindle Speed', unit: 'RPM', step: 500 },
   { key: 'clearance', label: 'Clearance', unit: 'mm', step: 1 },
-  { key: 'depth', label: 'Cut Depth', unit: 'mm', step: 0.5 },
+  { key: 'depthOffset', label: 'Depth Offset', unit: 'mm', step: 0.1 },
 ];
 
 const OUTLINE_FIELDS: typeof BASE_FIELDS = [
@@ -123,8 +123,8 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
       {(operation.type === 'outline' || operation.type === 'adaptive-outline') && (
         <p className="settings-hint">
           {operation.type === 'adaptive-outline'
-            ? 'Helix bores at entry, then trochoid loops carve a connector slot to the outline before the full adaptive loop. Finishing pass uses your additional offset only (no 0.1 mm stock).'
-            : 'Toolpath runs at tool radius + additional offset from the part outline.'}
+            ? 'Z=0 at stock top; cuts are negative Z. Depth offset is measured from the part bottom (+ stops short). Step down sets the maximum per-pass depth; passes are spaced evenly to the target.'
+            : 'Z=0 at stock top; cuts are negative Z. Depth offset is measured from the part bottom (+ stops short).'}
         </p>
       )}
       {(operation.type === 'drill' || operation.type === 'helix') && (

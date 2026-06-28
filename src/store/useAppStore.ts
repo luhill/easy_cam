@@ -13,7 +13,7 @@ import {
   getOperationLabel,
 } from '../types/operations';
 import { clampOperationSettings } from '../lib/settingLimits';
-import { generateToolpaths, partThicknessFromBounds } from '../lib/toolpaths';
+import { generateToolpaths } from '../lib/toolpaths';
 
 interface AppState {
   stlFile: File | null;
@@ -89,7 +89,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   addOperation: (type) => {
-    const partHeight = partThicknessFromBounds(get().partBounds);
     const op: Operation = {
       id: uuidv4(),
       type,
@@ -97,7 +96,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       enabled: true,
       visible: true,
       collapsed: false,
-      settings: clampOperationSettings({ ...DEFAULT_SETTINGS, depth: partHeight }),
+      settings: clampOperationSettings({ ...DEFAULT_SETTINGS }),
       geometry: null,
     };
     set((state) => ({
