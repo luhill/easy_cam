@@ -1,51 +1,13 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { Operation } from '../../types/operations';
-import { OPERATION_COLORS, getSelectionStrategy, getSelectedHoles } from '../../types/operations';
-import { computeDefaultEntryPoint } from '../../lib/adaptiveOutline';
+import { OPERATION_COLORS } from '../../types/operations';
 import { useAppStore } from '../../store/useAppStore';
 import { OperationSettings } from './OperationSettings';
+import { OperationGeometrySection } from './OperationGeometrySection';
 
 interface OperationCardProps {
   operation: Operation;
-}
-
-function formatGeometrySummary(operation: Operation): string {
-  const geo = operation.geometry;
-  if (!geo) return 'None selected';
-
-  const holes = getSelectedHoles(geo);
-  if (holes.length > 0 && (operation.type === 'drill' || operation.type === 'helix')) {
-    if (holes.length === 1) {
-      return `Hole ⌀${(holes[0].radius * 2).toFixed(1)} mm`;
-    }
-    return `${holes.length} holes`;
-  }
-
-  if (operation.type === 'adaptive-outline') {
-    const hasOutline = geo.loops && geo.loops.length > 0;
-    if (!hasOutline) return 'None selected';
-    const parts: string[] = ['outline'];
-    if (geo.entryPoint) {
-      parts.push(`entry (${geo.entryPoint.x.toFixed(1)}, ${geo.entryPoint.y.toFixed(1)})`);
-    } else {
-      const auto = computeDefaultEntryPoint(geo.loops![0], operation.settings);
-      parts.push(`auto entry (${auto.x.toFixed(1)}, ${auto.y.toFixed(1)})`);
-    }
-    return parts.join(', ');
-  }
-
-  if (!geo.faceIndices.length) return 'None selected';
-
-  const strategy = getSelectionStrategy(operation.type);
-  const faceCount = geo.faceIndices.length;
-
-  if (strategy === 'outline-loop' && geo.loops && geo.loops.length > 0) {
-    const points = geo.loops.reduce((sum, loop) => sum + loop.length, 0);
-    return `${geo.loops.length} loop(s), ${points} pts`;
-  }
-
-  return `${faceCount} face${faceCount === 1 ? '' : 's'}`;
 }
 
 export function OperationCard({ operation }: OperationCardProps) {
@@ -54,11 +16,8 @@ export function OperationCard({ operation }: OperationCardProps) {
     toggleOperationVisible,
     toggleOperationCollapsed,
     setActiveOperation,
-    setSelectionMode,
     removeOperation,
     activeOperationId,
-    selectionMode,
-    selectionSubMode,
   } = useAppStore();
 
   const {
@@ -78,29 +37,6 @@ export function OperationCard({ operation }: OperationCardProps) {
   };
 
   const isActive = activeOperationId === operation.id;
-  const geometrySummary = formatGeometrySummary(operation);
-  const hasGeometry =
-    !!operation.geometry &&
-    (operation.geometry.faceIndices.length > 0 ||
-      getSelectedHoles(operation.geometry).length > 0 ||
-      !!operation.geometry.entryPoint ||
-      (operation.type === 'adaptive-outline' &&
-        !!operation.geometry.loops &&
-        operation.geometry.loops.length > 0));
-
-  const handleSelectGeometry = () => {
-    setActiveOperation(operation.id);
-    setSelectionMode(true, 'geometry');
-  };
-
-  const handleSelectEntry = () => {
-    setActiveOperation(operation.id);
-    setSelectionMode(true, 'entry-point');
-  };
-
-  const handleStopSelection = () => {
-    setSelectionMode(false);
-  };
 
   return (
     <div
@@ -156,52 +92,8 @@ export function OperationCard({ operation }: OperationCardProps) {
 
       {!operation.collapsed && (
         <div className="operation-body">
+          <OperationGeometrySection operation={operation} />
           <OperationSettings operation={operation} />
-
-          <div className="geometry-section">
-            <div className="geometry-header">
-              <span>Geometry</span>
-              <span className="geometry-count">{geometrySummary}</span>
-            </div>
-            <div className="geometry-actions">
-              {isActive && selectionMode ? (
-                <button className="btn btn-small btn-accent" onClick={handleStopSelection}>
-                  Done Selecting
-                </button>
-              ) : (
-                <>
-                  <button className="btn btn-small" onClick={handleSelectGeometry}>
-                    Select from Model
-                  </button>
-                  {operation.type === 'adaptive-outline' && (
-                    <button className="btn btn-small btn-secondary" onClick={handleSelectEntry}>
-                      Set Entry Point
-                    </button>
-                  )}
-                </>
-              )}
-              {hasGeometry && !(isActive && selectionMode) && (
-                <button
-                  className="btn btn-small btn-secondary"
-                  onClick={() => useAppStore.getState().setOperationGeometry(operation.id, null)}
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-            {isActive && selectionMode && operation.type === 'adaptive-outline' && (
-              <p className="geometry-submode">
-                {selectionSubMode === 'entry-point'
-                  ? 'Click in stock above the part to override helix entry (optional)'
-                  : 'Select top-facing part outline — entry is placed automatically in stock'}
-              </p>
-            )}
-            {isActive && selectionMode && (operation.type === 'drill' || operation.type === 'helix') && (
-              <p className="geometry-submode">
-                Click holes to add or remove — multiple holes supported
-              </p>
-            )}
-          </div>
         </div>
       )}
     </div>

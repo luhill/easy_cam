@@ -3,9 +3,11 @@ import {
   closestPointOnLoop2D,
   distanceToLoop2D,
   pointInPolygon2D,
+  signedLoopArea2D,
 } from './geometryProcessing';
+import { buildArcLengthGuide, sampleGuideAtS } from './trochoidalPath';
 
-/** Helix circle radius from diameter % (default 1.5× tool ⌀ → radius 0.75× tool ⌀). */
+/** Helix circle radius from diameter % of tool. */
 export function resolveHelixRadius(settings: OperationDefaults): number {
   const toolD = Math.max(settings.toolDiameter, 0.1);
   return (settings.helixDiameterPercent / 100) * toolD / 2;
@@ -16,6 +18,11 @@ export function helixPitchFromAngle(settings: OperationDefaults): number {
   const helixR = Math.max(resolveHelixRadius(settings), 0.05);
   const angleRad = (settings.helixAngleDeg * Math.PI) / 180;
   return Math.max(2 * Math.PI * helixR * Math.tan(angleRad), 0.05);
+}
+
+/** +1 = CCW helix, −1 = CW helix (climb external default). */
+export function resolveHelixRotationDir(climbMilling: boolean): number {
+  return climbMilling ? -1 : 1;
 }
 
 export function loopCentroid2D(loop: LoopPoint[]): { x: number; y: number } {
@@ -64,85 +71,48 @@ export function closestPointIndexOnPath(
   return bestIdx;
 }
 
-/**
- * Horizontal toroidal arc from entry to the outline join point, bulging away from
- * the part so the tool stays in open stock.
- */
-export function generateToroidalLeadIn(
-  from: { x: number; y: number },
-  to: { x: number; y: number },
-  arcRadius: number,
-  z: number,
-  partLoop: LoopPoint[],
-  feedRate: number
-): ToolpathPoint[] {
-  const dx = to.x - from.x;
-  const dy = to.y - from.y;
-  const chord = Math.hypot(dx, dy);
-  if (chord < 1e-4) return [{ x: to.x, y: to.y, z, feedRate }];
+/** Open guide from entry to the join point on the slot-center loop. */
+export function buildEntryConnectorGuide(
+  entry: { x: number; y: number },
+  slotCenterGuide: LoopPoint[],
+  joinS: number,
+  sampleSpacing = 0.4
+): LoopPoint[] {
+  const guide = buildArcLengthGuide(slotCenterGuide, sampleSpacing);
+  if (guide.totalLength <= 0) {
+    return [{ x: entry.x, y: entry.y, z: 0 }];
+  }
 
-  const R = Math.max(arcRadius, chord / 2 + 0.05);
-  const mx = (from.x + to.x) / 2;
-  const my = (from.y + to.y) / 2;
-  const tx = dx / chord;
-  const ty = dy / chord;
-  const n1x = -ty;
-  const n1y = tx;
+  const joinPt = sampleGuideAtS(guide, joinS);
+  const span = Math.hypot(joinPt.x - entry.x, joinPt.y - entry.y);
+  const backLen = Math.max(span * 1.15, 2);
+  const sStart = Math.max(0, joinS - backLen);
 
-  const centroid = loopCentroid2D(partLoop);
-  const toCentroidX = centroid.x - mx;
-  const toCentroidY = centroid.y - my;
-  const outward =
-    toCentroidX * n1x + toCentroidY * n1y > 0
-      ? { nx: -n1x, ny: -n1y }
-      : { nx: n1x, ny: n1y };
+  const points: LoopPoint[] = [{ x: entry.x, y: entry.y, z: joinPt.z }];
+  for (let s = sStart; s <= joinS + 1e-6; s += sampleSpacing) {
+    const f = sampleGuideAtS(guide, Math.min(s, joinS));
+    points.push({ x: f.x, y: f.y, z: f.z });
+  }
 
-  const halfChord = chord / 2;
-  const h = Math.sqrt(Math.max(R * R - halfChord * halfChord, 0));
-  const cx = mx + outward.nx * h;
-  const cy = my + outward.ny * h;
+  const last = points[points.length - 1];
+  if (Math.hypot(last.x - joinPt.x, last.y - joinPt.y) > 0.05) {
+    points.push({ x: joinPt.x, y: joinPt.y, z: joinPt.z });
+  }
 
-  const a1 = Math.atan2(from.y - cy, from.x - cx);
-  const a2 = Math.atan2(to.y - cy, to.x - cx);
-
-  let sweep1 = a2 - a1;
-  while (sweep1 <= 1e-9) sweep1 += 2 * Math.PI;
-  let sweep2 = sweep1 - 2 * Math.PI;
-
-  const sampleArc = (sweep: number): ToolpathPoint[] => {
-    const steps = Math.max(4, Math.ceil((Math.abs(sweep) * R) / 0.4));
-    const pts: ToolpathPoint[] = [];
-    for (let i = 1; i <= steps; i++) {
-      const ang = a1 + (sweep * i) / steps;
-      pts.push({
-        x: cx + R * Math.cos(ang),
-        y: cy + R * Math.sin(ang),
-        z,
-        feedRate,
-      });
-    }
-    return pts;
-  };
-
-  const arc1 = sampleArc(sweep1);
-  const arc2 = sampleArc(sweep2);
-
-  const score = (pts: ToolpathPoint[]) => {
-    let minDist = Infinity;
-    for (const p of pts) {
-      minDist = Math.min(minDist, distanceToLoop2D(p.x, p.y, partLoop));
-    }
-    return minDist;
-  };
-
-  return score(arc1) >= score(arc2) ? arc1 : arc2;
+  return points;
 }
 
 export function minimumEntryStandoff(settings: OperationDefaults): number {
   const toolR = Math.max(settings.toolDiameter, 0.1) / 2;
-  const radialOffset = settings.radialOffset ?? 0;
-  const slotWidthPercent = Math.max(settings.slotWidthPercent ?? 150, 125);
+  const stock =
+    settings.finishingPass ? 0.1 : 0;
+  const radialOffset = (settings.radialOffset ?? 0) + stock;
+  const slotWidthPercent = Math.min(Math.max(settings.slotWidthPercent ?? 150, 125), 200);
   const slotWidth = settings.toolDiameter * (slotWidthPercent / 100);
   const maxCenterDist = radialOffset + slotWidth - toolR;
   return maxCenterDist + Math.max(settings.clearance, 1);
+}
+
+export function isGuideOutwardCCW(partLoop: LoopPoint[]): boolean {
+  return signedLoopArea2D(partLoop) >= 0;
 }

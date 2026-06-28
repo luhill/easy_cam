@@ -6,10 +6,13 @@ interface OperationSettingsProps {
   operation: Operation;
 }
 
-type SettingKey = keyof Operation['settings'];
+type NumericSettingKey = Exclude<
+  keyof Operation['settings'],
+  'finishingPass' | 'climbMilling'
+>;
 
 const BASE_FIELDS: {
-  key: SettingKey;
+  key: NumericSettingKey;
   label: string;
   unit: string;
   step: number;
@@ -18,7 +21,7 @@ const BASE_FIELDS: {
   { key: 'feedRate', label: 'Feed Rate', unit: 'mm/min', step: 50 },
   { key: 'plungeRate', label: 'Plunge Rate', unit: 'mm/min', step: 25 },
   { key: 'stepDown', label: 'Step Down', unit: 'mm', step: 0.1 },
-  { key: 'stepover', label: 'Stepover', unit: '%', step: 5 },
+  { key: 'stepover', label: 'Stepover', unit: '%', step: 1 },
   { key: 'spindleSpeed', label: 'Spindle Speed', unit: 'RPM', step: 500 },
   { key: 'clearance', label: 'Clearance', unit: 'mm', step: 1 },
   { key: 'depth', label: 'Cut Depth', unit: 'mm', step: 0.5 },
@@ -37,7 +40,7 @@ const ADAPTIVE_FIELDS: typeof BASE_FIELDS = [
   { key: 'helixFeedRate', label: 'Helix Feed Rate', unit: 'mm/min', step: 25 },
 ];
 
-function fieldLabel(operation: Operation, key: SettingKey, fallback: string): string {
+function fieldLabel(operation: Operation, key: NumericSettingKey, fallback: string): string {
   if (operation.type === 'adaptive-outline' && key === 'stepover') {
     return 'Pass Advance (Stepover)';
   }
@@ -65,6 +68,34 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
           onChange={(e) => updateOperation(operation.id, { name: e.target.value })}
         />
       </div>
+
+      {(operation.type === 'outline' || operation.type === 'adaptive-outline') && (
+        <div className="settings-checkboxes">
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={operation.settings.climbMilling}
+              onChange={(e) =>
+                updateOperationSettings(operation.id, { climbMilling: e.target.checked })
+              }
+            />
+            Climb milling (clockwise on external cuts)
+          </label>
+          {operation.type === 'adaptive-outline' && (
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={operation.settings.finishingPass}
+                onChange={(e) =>
+                  updateOperationSettings(operation.id, { finishingPass: e.target.checked })
+                }
+              />
+              Final outline finishing pass (0.1 mm roughing stock)
+            </label>
+          )}
+        </div>
+      )}
+
       <div className="settings-grid">
         {fields.map(({ key, label, unit, step }) => {
           const limits = SETTING_LIMITS[key];
@@ -92,7 +123,7 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
       {(operation.type === 'outline' || operation.type === 'adaptive-outline') && (
         <p className="settings-hint">
           {operation.type === 'adaptive-outline'
-            ? 'Helix bores at the entry, then a toroidal arc connects to the nearest outline point before trochoid loops begin. Pass lift raises Z gradually on the return half of each loop (0 = flat).'
+            ? 'Helix bores at entry, then trochoid loops carve a connector slot to the outline before the full adaptive loop. Finishing pass uses your additional offset only (no 0.1 mm stock).'
             : 'Toolpath runs at tool radius + additional offset from the part outline.'}
         </p>
       )}

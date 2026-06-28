@@ -23,10 +23,23 @@ export interface AdaptiveSlotGeometry {
   maxCenterDist: number;
 }
 
-export function resolveAdaptiveSlotGeometry(settings: OperationDefaults): AdaptiveSlotGeometry {
+/** Extra stock left on part walls during adaptive roughing when finishing pass is enabled. */
+export const FINISHING_STOCK_ALLOWANCE = 0.1;
+
+export interface AdaptiveSlotOptions {
+  /** When false, omit roughing stock allowance (used for finishing outline). */
+  roughing?: boolean;
+}
+
+export function resolveAdaptiveSlotGeometry(
+  settings: OperationDefaults,
+  options: AdaptiveSlotOptions = {}
+): AdaptiveSlotGeometry {
   const toolDiameter = Math.max(settings.toolDiameter, 0.1);
   const toolRadius = toolDiameter / 2;
-  const radialOffset = settings.radialOffset ?? 0;
+  const stockAllowance =
+    settings.finishingPass && options.roughing !== false ? FINISHING_STOCK_ALLOWANCE : 0;
+  const radialOffset = (settings.radialOffset ?? 0) + stockAllowance;
   const slotWidthPercent = Math.min(Math.max(settings.slotWidthPercent ?? 150, 125), 200);
   const slotWidth = toolDiameter * (slotWidthPercent / 100);
   const slotClearance = Math.max(slotWidth - toolDiameter, toolDiameter * 0.05);

@@ -2,17 +2,25 @@ import type { Operation, ToolpathPoint, ToolpathSegment } from '../types/operati
 import type { LoopPoint } from '../types/operations';
 import { DEFAULT_SETTINGS } from '../types/operations';
 import type { PartBounds } from './geometryProcessing';
-import { offsetLoop2D, offsetLoop2DMinkowski } from './geometryProcessing';
+import { offsetLoop2D, offsetLoop2DMinkowski, signedLoopArea2D } from './geometryProcessing';
 import { OPERATION_COLORS, getSelectedHoles } from '../types/operations';
 import { clampOperationSettings } from './settingLimits';
 import { resolveAdaptiveEntryPoint, resolveAdaptiveSlotGeometry } from './adaptiveOutline';
-import { generateFourZoneAdaptivePath } from './adaptiveFourZone';
 import {
+  generateFourZoneAdaptivePath,
+  generateOpenTrochoidPath,
+  resolveOrbitRotSign,
+  wrapPathFromIndex,
+} from './adaptiveFourZone';
+import {
+  buildEntryConnectorGuide,
   closestPointIndexOnPath,
-  generateToroidalLeadIn,
   helixPitchFromAngle,
+  isGuideOutwardCCW,
   resolveHelixRadius,
+  resolveHelixRotationDir,
 } from './entryPath';
+import { buildArcLengthGuide, findClosestSOnGuide } from './trochoidalPath';
 
 const MIN_STEP_DOWN = 0.05;
 const MAX_Z_LAYERS = 500;
@@ -108,17 +116,20 @@ function loopToToolpathPoints(
   if (loop.length === 0) return points;
 
   const toolLoop = offsetLoop2D(loop, toolCenterlineOffset(settings));
+  const ccw = signedLoopArea2D(loop) >= 0;
+  const reverse = settings.climbMilling ? ccw : !ccw;
+  const traverse = reverse ? [...toolLoop].reverse() : toolLoop;
   const layers = computeZLayers(topZ, cutZ, settings.stepDown);
 
-  const start = toolLoop[0];
+  const start = traverse[0];
   points.push({ x: start.x, y: start.y, z: clearance, rapid: true });
   points.push({ x: start.x, y: start.y, z: topZ });
 
   for (const layerZ of layers) {
-    for (const p of toolLoop) {
+    for (const p of traverse) {
       points.push({ x: p.x, y: p.y, z: layerZ });
     }
-    points.push({ x: toolLoop[0].x, y: toolLoop[0].y, z: layerZ });
+    points.push({ x: traverse[0].x, y: traverse[0].y, z: layerZ });
   }
 
   points.push({ x: start.x, y: start.y, z: clearance, rapid: true });
@@ -151,6 +162,7 @@ function generateHelixBore(
   const helixR = resolveHelixRadius(settings);
   const pitch = helixPitchFromAngle(settings);
   const feedRate = settings.helixFeedRate;
+  const rotDir = resolveHelixRotationDir(settings.climbMilling);
   const segments = 24;
   const points: ToolpathPoint[] = [];
 
@@ -161,7 +173,7 @@ function generateHelixBore(
 
   while (z > targetZ + 1e-6 && iterations < maxIterations) {
     for (let i = 0; i < segments; i++) {
-      angle += (Math.PI * 2) / segments;
+      angle += rotDir * ((Math.PI * 2) / segments);
       z = Math.max(z - pitch / segments, targetZ);
       points.push({
         x: entry.x + Math.cos(angle) * helixR,
@@ -176,22 +188,72 @@ function generateHelixBore(
   return points;
 }
 
-function generateAdaptiveTrochoidalPath(
+function trochoidParams(
   partLoop: LoopPoint[],
   settings: Operation['settings'],
-  z: number
-): ToolpathPoint[] {
-  const slot = resolveAdaptiveSlotGeometry(settings);
-  const slotCenterGuide = offsetLoop2DMinkowski(partLoop, slot.slotCenterOffset);
-
-  return generateFourZoneAdaptivePath(slotCenterGuide, {
+  slotCenterGuide: LoopPoint[],
+  z: number,
+  roughing: boolean,
+  feedRate?: number
+) {
+  const slot = resolveAdaptiveSlotGeometry(settings, { roughing });
+  return {
     forwardIncrement: slot.forwardIncrement,
     slotClearance: slot.slotClearance,
     z,
     liftAmount: Math.max(settings.liftAmount ?? 0, 0),
     partLoop,
     minCenterDist: slot.minCenterDist,
-  });
+    rotSign: resolveOrbitRotSign(slotCenterGuide, settings.climbMilling),
+    feedRate,
+  };
+}
+
+function generateAdaptiveTrochoidalPath(
+  partLoop: LoopPoint[],
+  settings: Operation['settings'],
+  z: number,
+  roughing = true
+): ToolpathPoint[] {
+  const slot = resolveAdaptiveSlotGeometry(settings, { roughing });
+  const slotCenterGuide = offsetLoop2DMinkowski(partLoop, slot.slotCenterOffset);
+  return generateFourZoneAdaptivePath(
+    slotCenterGuide,
+    trochoidParams(partLoop, settings, slotCenterGuide, z, roughing)
+  );
+}
+
+function generateFinishingOutline(
+  partLoop: LoopPoint[],
+  settings: Operation['settings'],
+  layerZ: number
+): ToolpathPoint[] {
+  const offset = toolRadius(settings) + (settings.radialOffset ?? 0);
+  const toolLoop = offsetLoop2D(partLoop, offset);
+  const ccw = signedLoopArea2D(partLoop) >= 0;
+  const reverse = settings.climbMilling ? ccw : !ccw;
+  const traverse = reverse ? [...toolLoop].reverse() : toolLoop;
+  const pts = traverse.map((p) => ({ x: p.x, y: p.y, z: layerZ }));
+  if (pts.length > 1) {
+    pts.push({ ...pts[0] });
+  }
+  return pts;
+}
+
+function appendTrochoidPathFromJoin(
+  target: ToolpathPoint[],
+  troch: ToolpathPoint[],
+  join: { x: number; y: number },
+  connectorEnd?: ToolpathPoint
+): boolean {
+  const joinIdx = closestPointIndexOnPath(troch, join);
+  const wrapped = wrapPathFromIndex(troch, joinIdx);
+  let start = 0;
+  if (connectorEnd && wrapped.length > 0) {
+    const d = Math.hypot(wrapped[0].x - connectorEnd.x, wrapped[0].y - connectorEnd.y);
+    if (d < 0.15) start = 1;
+  }
+  return appendPoints(target, wrapped.slice(start));
 }
 
 function generateAdaptiveOutlinePath(op: Operation, topZ: number): ToolpathPoint[] {
@@ -207,8 +269,14 @@ function generateAdaptiveOutlinePath(op: Operation, topZ: number): ToolpathPoint
   const clearance = topZ + settings.clearance;
   const points: ToolpathPoint[] = [];
   const layers = computeZLayers(topZ, cutZ, settings.stepDown);
-  const helixR = resolveHelixRadius(settings);
   const helixFeed = settings.helixFeedRate;
+  const slot = resolveAdaptiveSlotGeometry(settings, { roughing: true });
+  const slotCenterGuide = offsetLoop2DMinkowski(loop, slot.slotCenterOffset);
+  const arcGuide = buildArcLengthGuide(slotCenterGuide, 0.4);
+  const join = findClosestSOnGuide(arcGuide, entry);
+  const connectorGuide = buildEntryConnectorGuide(entry, slotCenterGuide, join.s);
+  const outwardCCW = isGuideOutwardCCW(loop);
+  const rotParams = trochoidParams(loop, settings, slotCenterGuide, 0, true, helixFeed);
 
   points.push({ x: entry.x, y: entry.y, z: clearance, rapid: true });
   points.push({ x: entry.x, y: entry.y, z: topZ });
@@ -218,28 +286,44 @@ function generateAdaptiveOutlinePath(op: Operation, topZ: number): ToolpathPoint
 
   for (let li = 0; li < layers.length; li++) {
     const layerZ = layers[li];
-    const troch = generateAdaptiveTrochoidalPath(loop, settings, layerZ);
-    if (troch.length === 0) continue;
-
-    const joinIdx = closestPointIndexOnPath(troch, entry);
-    const joinPt = troch[joinIdx];
 
     if (li > 0) {
       if (!appendPoints(points, [{ x: entry.x, y: entry.y, z: layerZ, rapid: true }])) break;
     } else if (Math.abs(layerZ - helixTarget) > 1e-4) {
-      if (!appendPoints(points, [{ x: entry.x, y: entry.y, z: layerZ, feedRate: helixFeed }])) break;
+      if (!appendPoints(points, [{ x: entry.x, y: entry.y, z: layerZ, feedRate: helixFeed }])) {
+        break;
+      }
     }
 
-    const leadDist = Math.hypot(joinPt.x - entry.x, joinPt.y - entry.y);
-    if (leadDist > 0.05) {
-      const leadIn = generateToroidalLeadIn(entry, joinPt, helixR, layerZ, loop, helixFeed);
-      if (!appendPoints(points, leadIn)) break;
-    } else if (!appendPoints(points, [{ ...joinPt, feedRate: helixFeed }])) {
-      break;
+    const connectorTroch = generateOpenTrochoidPath(
+      connectorGuide,
+      { ...rotParams, z: layerZ, liftAmount: 0 },
+      outwardCCW
+    );
+    if (connectorTroch.length > 0) {
+      if (!appendPoints(points, connectorTroch)) break;
     }
 
-    const pathFromJoin = troch.slice(joinIdx + 1);
-    if (!appendPoints(points, pathFromJoin)) break;
+    const troch = generateAdaptiveTrochoidalPath(loop, settings, layerZ, true);
+    if (troch.length === 0) continue;
+
+    const connectorEnd = connectorTroch[connectorTroch.length - 1];
+    if (!appendTrochoidPathFromJoin(points, troch, join, connectorEnd)) break;
+  }
+
+  if (settings.finishingPass) {
+    const finishZ = layers.length > 0 ? layers[layers.length - 1] : cutZ;
+    const finishPath = generateFinishingOutline(loop, settings, finishZ);
+    if (finishPath.length > 0) {
+      if (!appendPoints(points, [{ ...finishPath[0], rapid: true }])) {
+        points.push({ x: entry.x, y: entry.y, z: clearance, rapid: true });
+        return points;
+      }
+      if (!appendPoints(points, finishPath)) {
+        points.push({ x: entry.x, y: entry.y, z: clearance, rapid: true });
+        return points;
+      }
+    }
   }
 
   points.push({ x: entry.x, y: entry.y, z: clearance, rapid: true });

@@ -1,11 +1,15 @@
 import type { OperationDefaults } from '../types/operations';
+import { DEFAULT_SETTINGS } from '../types/operations';
 
 export interface NumericLimit {
   min: number;
   max: number;
 }
 
-export const SETTING_LIMITS: Record<keyof OperationDefaults, NumericLimit> = {
+export const SETTING_LIMITS: Record<
+  Exclude<keyof OperationDefaults, 'finishingPass' | 'climbMilling'>,
+  NumericLimit
+> = {
   toolDiameter: { min: 0.1, max: 25 },
   feedRate: { min: 1, max: 10000 },
   plungeRate: { min: 1, max: 5000 },
@@ -17,12 +21,15 @@ export const SETTING_LIMITS: Record<keyof OperationDefaults, NumericLimit> = {
   radialOffset: { min: -50, max: 50 },
   slotWidthPercent: { min: 125, max: 200 },
   liftAmount: { min: 0, max: 20 },
-  helixDiameterPercent: { min: 50, max: 400 },
+  helixDiameterPercent: { min: 25, max: 400 },
   helixAngleDeg: { min: 0.5, max: 45 },
   helixFeedRate: { min: 1, max: 5000 },
 };
 
-export function clampSettingValue(key: keyof OperationDefaults, value: number): number {
+export function clampSettingValue(
+  key: Exclude<keyof OperationDefaults, 'finishingPass' | 'climbMilling'>,
+  value: number
+): number {
   if (!Number.isFinite(value)) {
     return SETTING_LIMITS[key].min;
   }
@@ -30,10 +37,12 @@ export function clampSettingValue(key: keyof OperationDefaults, value: number): 
   return Math.min(max, Math.max(min, value));
 }
 
-export function clampOperationSettings(settings: OperationDefaults): OperationDefaults {
-  const result = { ...settings };
-  for (const key of Object.keys(SETTING_LIMITS) as (keyof OperationDefaults)[]) {
-    result[key] = clampSettingValue(key, result[key]);
+export function clampOperationSettings(
+  settings: Partial<OperationDefaults>
+): OperationDefaults {
+  const merged = { ...DEFAULT_SETTINGS, ...settings };
+  for (const key of Object.keys(SETTING_LIMITS) as (keyof typeof SETTING_LIMITS)[]) {
+    merged[key] = clampSettingValue(key, merged[key]);
   }
-  return result;
+  return merged as OperationDefaults;
 }

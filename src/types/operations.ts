@@ -27,6 +27,10 @@ export interface OperationDefaults {
   helixAngleDeg: number;
   /** Adaptive outline: feed rate for helix bore and toroidal lead-in (mm/min) */
   helixFeedRate: number;
+  /** Adaptive outline: leave 0.1 mm on walls then run a final outline pass */
+  finishingPass: boolean;
+  /** External cuts: climb (clockwise) vs conventional (counter-clockwise) */
+  climbMilling: boolean;
 }
 
 export interface LoopPoint {
@@ -136,16 +140,18 @@ export const DEFAULT_SETTINGS: OperationDefaults = {
   feedRate: 700,
   plungeRate: 300,
   stepDown: 2,
-  stepover: 40,
+  stepover: 7,
   spindleSpeed: 10000,
   clearance: 5,
   depth: 10,
   radialOffset: 0,
   slotWidthPercent: 150,
   liftAmount: 0,
-  helixDiameterPercent: 150,
+  helixDiameterPercent: 50,
   helixAngleDeg: 1.5,
   helixFeedRate: 350,
+  finishingPass: false,
+  climbMilling: true,
 };
 
 export type SelectionSubMode = 'geometry' | 'entry-point' | 'bottom-face';
