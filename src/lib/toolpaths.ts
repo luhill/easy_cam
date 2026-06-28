@@ -2,7 +2,12 @@ import type { Operation, ToolpathPoint, ToolpathSegment } from '../types/operati
 import type { LoopPoint } from '../types/operations';
 import { DEFAULT_SETTINGS } from '../types/operations';
 import type { PartBounds } from './geometryProcessing';
-import { offsetLoop2D, offsetLoop2DMinkowski, signedLoopArea2D } from './geometryProcessing';
+import {
+  closestPointOnLoop2D,
+  offsetLoop2D,
+  offsetLoop2DMinkowski,
+  signedLoopArea2D,
+} from './geometryProcessing';
 import { OPERATION_COLORS, getSelectedHoles } from '../types/operations';
 import { clampOperationSettings } from './settingLimits';
 import { resolveAdaptiveEntryPoint, resolveAdaptiveSlotGeometry } from './adaptiveOutline';
@@ -242,13 +247,31 @@ function generateAdaptiveTrochoidalPath(
   );
 }
 
+function appendFullTrochoidLoop(
+  target: ToolpathPoint[],
+  troch: ToolpathPoint[],
+  from: { x: number; y: number }
+): boolean {
+  if (troch.length === 0) return true;
+  const joinIdx = closestPointIndexOnPath(troch, from);
+  const loop = wrapPathFromIndex(troch, joinIdx);
+  if (loop.length <= 1) return appendPoints(target, loop);
+
+  const last = target[target.length - 1];
+  const start =
+    last && Math.hypot(loop[0].x - last.x, loop[0].y - last.y) < 0.12 ? 1 : 0;
+  return appendPoints(target, loop.slice(start));
+}
+
 function generateFinishingOutline(
   partLoop: LoopPoint[],
   settings: Operation['settings'],
   layerZ: number
 ): ToolpathPoint[] {
-  const offset = toolRadius(settings) + (settings.radialOffset ?? 0);
-  const finishGuide = offsetLoop2DMinkowski(partLoop, offset);
+  const roughSlot = resolveAdaptiveSlotGeometry(settings, { roughing: true });
+  const finishSlot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
+  const finishGuide = offsetLoop2DMinkowski(partLoop, finishSlot.innerCenterOffset);
+  const roughCenterGuide = offsetLoop2DMinkowski(partLoop, roughSlot.slotCenterOffset);
   if (finishGuide.length < 3) return [];
 
   const sampleSpacing = 0.4;
@@ -256,17 +279,40 @@ function generateFinishingOutline(
   if (arcGuide.totalLength <= 0) return [];
 
   const guideSign = resolveGuideTraverseSign(finishGuide, settings.climbMilling);
-  const steps = Math.max(
-    2,
-    Math.ceil(arcGuide.totalLength / sampleSpacing)
-  );
+  const steps = Math.max(2, Math.ceil(arcGuide.totalLength / sampleSpacing));
   const pts: ToolpathPoint[] = [];
 
   for (let i = 0; i <= steps; i++) {
     const s = (i / steps) * arcGuide.totalLength;
     const sSample = guideSign >= 0 ? s : arcGuide.totalLength - s;
     const f = sampleGuideAtS(arcGuide, sSample);
-    pts.push({ x: f.x, y: f.y, z: layerZ });
+    let x = f.x;
+    let y = f.y;
+
+    const closest = closestPointOnLoop2D(x, y, partLoop);
+    if (closest.dist < finishSlot.minCenterDist - 0.02) {
+      x = closest.x + closest.outX * finishSlot.minCenterDist;
+      y = closest.y + closest.outY * finishSlot.minCenterDist;
+    }
+
+    const atPart = closestPointOnLoop2D(x, y, partLoop);
+    if (atPart.dist < roughSlot.minCenterDist - 0.02) {
+      x = atPart.x + atPart.outX * roughSlot.minCenterDist;
+      y = atPart.y + atPart.outY * roughSlot.minCenterDist;
+    }
+
+    if (roughCenterGuide.length >= 3) {
+      const onRoughGuide = closestPointOnLoop2D(x, y, roughCenterGuide);
+      const partAtGuide = closestPointOnLoop2D(onRoughGuide.x, onRoughGuide.y, partLoop);
+      const roughEnvelope = partAtGuide.dist - roughSlot.trochoidRadius;
+      const atFinish = closestPointOnLoop2D(x, y, partLoop);
+      if (atFinish.dist < roughEnvelope - 0.02) {
+        x = partAtGuide.x + partAtGuide.outX * roughEnvelope;
+        y = partAtGuide.y + partAtGuide.outY * roughEnvelope;
+      }
+    }
+
+    pts.push({ x, y, z: layerZ });
   }
 
   if (pts.length > 1) {
@@ -275,26 +321,20 @@ function generateFinishingOutline(
   return pts;
 }
 
+function appendVerticalRetract(
+  points: ToolpathPoint[],
+  clearanceZ: number
+): void {
+  const last = lastPathPoint(points);
+  if (last) {
+    points.push({ x: last.x, y: last.y, z: clearanceZ, rapid: true });
+  }
+}
+
 function lastPathPoint(points: ToolpathPoint[]): { x: number; y: number; z: number } | null {
   if (points.length === 0) return null;
   const p = points[points.length - 1];
   return { x: p.x, y: p.y, z: p.z };
-}
-
-function appendTrochoidPathFromJoin(
-  target: ToolpathPoint[],
-  troch: ToolpathPoint[],
-  join: { x: number; y: number },
-  connectorEnd?: ToolpathPoint
-): boolean {
-  const joinIdx = closestPointIndexOnPath(troch, join);
-  const wrapped = wrapPathFromIndex(troch, joinIdx);
-  let start = 0;
-  if (connectorEnd && wrapped.length > 0) {
-    const d = Math.hypot(wrapped[0].x - connectorEnd.x, wrapped[0].y - connectorEnd.y);
-    if (d < 0.15) start = 1;
-  }
-  return appendPoints(target, wrapped.slice(start));
 }
 
 function generateAdaptiveOutlinePath(op: Operation, topZ: number): ToolpathPoint[] {
@@ -367,31 +407,28 @@ function generateAdaptiveOutlinePath(op: Operation, topZ: number): ToolpathPoint
     const troch = generateAdaptiveTrochoidalPath(loop, settings, layerZ, true);
     if (troch.length === 0) continue;
 
-    if (li === 0) {
-      const connectorEnd = points[points.length - 1];
-      if (!appendTrochoidPathFromJoin(points, troch, join, connectorEnd)) break;
-    } else {
-      const at = lastPathPoint(points)!;
-      if (!appendTrochoidPathFromJoin(points, troch, at)) break;
-    }
+    const at = lastPathPoint(points);
+    if (!at || !appendFullTrochoidLoop(points, troch, at)) break;
   }
 
   if (settings.finishingPass) {
     const finishZ = layers.length > 0 ? layers[layers.length - 1] : cutZ;
     const finishPath = generateFinishingOutline(loop, settings, finishZ);
     if (finishPath.length > 0) {
-      if (!appendPoints(points, [{ ...finishPath[0], rapid: true }])) {
-        points.push({ x: entry.x, y: entry.y, z: clearance, rapid: true });
-        return points;
-      }
-      if (!appendPoints(points, finishPath)) {
-        points.push({ x: entry.x, y: entry.y, z: clearance, rapid: true });
+      const at = lastPathPoint(points);
+      if (at) {
+        if (!appendFullTrochoidLoop(points, finishPath, at)) {
+          appendVerticalRetract(points, clearance);
+          return points;
+        }
+      } else if (!appendPoints(points, finishPath)) {
+        appendVerticalRetract(points, clearance);
         return points;
       }
     }
   }
 
-  points.push({ x: entry.x, y: entry.y, z: clearance, rapid: true });
+  appendVerticalRetract(points, clearance);
   return points;
 }
 

@@ -176,7 +176,7 @@ export function generateOpenTrochoidPath(
     guide.totalLength,
     false,
     (s) => sampleOpenGuideAtS(guide, s),
-    params
+    { ...params, guideSign: 1 }
   );
 }
 
