@@ -171,42 +171,51 @@ export function offsetLoop2D(loop: LoopPoint[], offset: number): LoopPoint[] {
     const prev = loop[(i - 1 + n) % n];
     const curr = loop[i];
     const next = loop[(i + 1) % n];
-
-    const e1x = curr.x - prev.x;
-    const e1y = curr.y - prev.y;
-    const e2x = next.x - curr.x;
-    const e2y = next.y - curr.y;
-    const len1 = Math.hypot(e1x, e1y) || 1;
-    const len2 = Math.hypot(e2x, e2y) || 1;
-
-    const n1x = side * (e1y / len1);
-    const n1y = side * (-e1x / len1);
-    const n2x = side * (e2y / len2);
-    const n2y = side * (-e2x / len2);
-
-    let bx = n1x + n2x;
-    let by = n1y + n2y;
-    const blen = Math.hypot(bx, by);
-    if (blen < 1e-8) {
-      bx = n1x;
-      by = n1y;
-    } else {
-      bx /= blen;
-      by /= blen;
-    }
-
-    const dot = bx * n1x + by * n1y;
-    const miter = dot > 0.05 ? offset / dot : offset;
-    const clamped = Math.sign(miter) * Math.min(Math.abs(miter), Math.abs(offset) * 6);
-
-    result.push({
-      x: curr.x + bx * clamped,
-      y: curr.y + by * clamped,
-      z: curr.z,
-    });
+    result.push(offsetMiterVertex(prev, curr, next, offset, side));
   }
 
   return result;
+}
+
+function offsetMiterVertex(
+  prev: LoopPoint,
+  curr: LoopPoint,
+  next: LoopPoint,
+  offset: number,
+  side: number
+): LoopPoint {
+  const e1x = curr.x - prev.x;
+  const e1y = curr.y - prev.y;
+  const e2x = next.x - curr.x;
+  const e2y = next.y - curr.y;
+  const len1 = Math.hypot(e1x, e1y) || 1;
+  const len2 = Math.hypot(e2x, e2y) || 1;
+
+  const n1x = side * (e1y / len1);
+  const n1y = side * (-e1x / len1);
+  const n2x = side * (e2y / len2);
+  const n2y = side * (-e2x / len2);
+
+  let bx = n1x + n2x;
+  let by = n1y + n2y;
+  const blen = Math.hypot(bx, by);
+  if (blen < 1e-8) {
+    bx = n1x;
+    by = n1y;
+  } else {
+    bx /= blen;
+    by /= blen;
+  }
+
+  const dot = bx * n1x + by * n1y;
+  const miter = dot > 0.05 ? offset / dot : offset;
+  const clamped = Math.sign(miter) * Math.min(Math.abs(miter), Math.abs(offset) * 6);
+
+  return {
+    x: curr.x + bx * clamped,
+    y: curr.y + by * clamped,
+    z: curr.z,
+  };
 }
 
 function outwardEdgeNormal2D(
@@ -222,10 +231,38 @@ function outwardEdgeNormal2D(
   return { nx: side * (dy / len), ny: side * (-dx / len) };
 }
 
+function appendDensifiedSegment(
+  result: LoopPoint[],
+  ax: number,
+  ay: number,
+  az: number,
+  bx: number,
+  by: number,
+  bz: number,
+  segLen: number,
+  skipFirst: boolean
+): void {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-9) return;
+
+  const steps = Math.max(1, Math.ceil(len / segLen));
+  const start = skipFirst ? 1 : 0;
+  for (let s = start; s <= steps; s++) {
+    const t = s / steps;
+    result.push({
+      x: ax + dx * t,
+      y: ay + dy * t,
+      z: az + (bz - az) * t,
+    });
+  }
+}
+
 /**
- * Outward offset via Minkowski sum with a disk (round joins).
- * Exterior (convex) part corners become smooth circular arcs at distance `offset`.
- * Interior (concave) corners get a complementary arc; very tight notches can pinch.
+ * Hybrid outward offset for slot-center guides.
+ * Convex (exterior) corners: round joins via Minkowski disk sum.
+ * Concave (interior) corners: miter joins to handle tight notches.
  */
 export function offsetLoop2DMinkowski(
   loop: LoopPoint[],
@@ -238,7 +275,21 @@ export function offsetLoop2DMinkowski(
   const ccw = signedLoopArea2D(loop) >= 0;
   const side = ccw ? 1 : -1;
   const segLen = Math.max(maxSegmentLen, Math.abs(offset) / 6);
-  const result: LoopPoint[] = [];
+
+  interface VertexJoin {
+    convex: boolean;
+    curr: LoopPoint;
+    startX: number;
+    startY: number;
+    endX: number;
+    endY: number;
+    nInX: number;
+    nInY: number;
+    nOutX: number;
+    nOutY: number;
+  }
+
+  const joins: VertexJoin[] = [];
 
   for (let i = 0; i < n; i++) {
     const prev = loop[(i - 1 + n) % n];
@@ -252,39 +303,79 @@ export function offsetLoop2DMinkowski(
 
     const nIn = outwardEdgeNormal2D(prev.x, prev.y, curr.x, curr.y, side);
     const nOut = outwardEdgeNormal2D(curr.x, curr.y, next.x, next.y, side);
-
     const cross = u1x * u2y - u1y * u2x;
     const convex = side * cross > 0;
 
-    const a1 = Math.atan2(nIn.ny, nIn.nx);
-    const a2 = Math.atan2(nOut.ny, nOut.nx);
-    let sweep = a2 - a1;
     if (convex) {
-      while (sweep < -1e-9) sweep += 2 * Math.PI;
+      joins.push({
+        convex: true,
+        curr,
+        startX: curr.x + nIn.nx * offset,
+        startY: curr.y + nIn.ny * offset,
+        endX: curr.x + nOut.nx * offset,
+        endY: curr.y + nOut.ny * offset,
+        nInX: nIn.nx,
+        nInY: nIn.ny,
+        nOutX: nOut.nx,
+        nOutY: nOut.ny,
+      });
     } else {
-      while (sweep > 1e-9) sweep -= 2 * Math.PI;
+      const miter = offsetMiterVertex(prev, curr, next, offset, side);
+      joins.push({
+        convex: false,
+        curr,
+        startX: miter.x,
+        startY: miter.y,
+        endX: miter.x,
+        endY: miter.y,
+        nInX: nIn.nx,
+        nInY: nIn.ny,
+        nOutX: nOut.nx,
+        nOutY: nOut.ny,
+      });
     }
+  }
 
-    const arcSteps = Math.max(1, Math.ceil((Math.abs(sweep) * Math.abs(offset)) / segLen));
-    for (let s = 0; s <= arcSteps; s++) {
-      const ang = a1 + (sweep * s) / arcSteps;
+  const result: LoopPoint[] = [];
+
+  for (let i = 0; i < n; i++) {
+    const join = joins[i];
+    const nextJoin = joins[(i + 1) % n];
+
+    if (join.convex) {
+      const a1 = Math.atan2(join.nInY, join.nInX);
+      const a2 = Math.atan2(join.nOutY, join.nOutX);
+      let sweep = a2 - a1;
+      while (sweep < -1e-9) sweep += 2 * Math.PI;
+
+      const arcSteps = Math.max(1, Math.ceil((Math.abs(sweep) * Math.abs(offset)) / segLen));
+      for (let s = 0; s <= arcSteps; s++) {
+        const ang = a1 + (sweep * s) / arcSteps;
+        result.push({
+          x: join.curr.x + offset * Math.cos(ang),
+          y: join.curr.y + offset * Math.sin(ang),
+          z: join.curr.z,
+        });
+      }
+    } else {
       result.push({
-        x: curr.x + offset * Math.cos(ang),
-        y: curr.y + offset * Math.sin(ang),
-        z: curr.z,
+        x: join.endX,
+        y: join.endY,
+        z: join.curr.z,
       });
     }
 
-    const edgeLen = Math.hypot(u2x, u2y);
-    const edgeSteps = Math.max(1, Math.ceil(edgeLen / segLen));
-    for (let s = 1; s < edgeSteps; s++) {
-      const t = s / edgeSteps;
-      result.push({
-        x: curr.x + nOut.nx * offset + u2x * t,
-        y: curr.y + nOut.ny * offset + u2y * t,
-        z: curr.z + (next.z - curr.z) * t,
-      });
-    }
+    appendDensifiedSegment(
+      result,
+      join.endX,
+      join.endY,
+      join.curr.z,
+      nextJoin.startX,
+      nextJoin.startY,
+      nextJoin.curr.z,
+      segLen,
+      true
+    );
   }
 
   return result;
