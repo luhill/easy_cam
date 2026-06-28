@@ -1,10 +1,10 @@
 /**
  * Constant circular-loop adaptive trochoid.
  *
- * Each orbit advances the circle center forward by a fixed `stepover` along the
- * inner guide. Angular position uses (1 − phase) so forward playback runs cut
- * half then return half. Trochoid radius and pass spacing are uniform for the
- * full outline.
+ * Each orbit advances along the slot-center guide — a Minkowski (round-join)
+ * offset from the part at constant distance. The circle is centered on that
+ * guide and sweeps ±slotClearance/2 normal to it. Angular position uses
+ * (1 − phase) so forward playback runs cut half then return half.
  *
  *   phase 0.0 → 0.5   cutting half  — inner → outer, flat at cut depth
  *   phase 0.5 → 0.58  return lead-out — still flat, leaving the outer arc
@@ -51,11 +51,9 @@ function orbitPoint(
   theta: number,
   z: number
 ): ToolpathPoint {
-  const cx = frame.x + frame.nx * trochoidR;
-  const cy = frame.y + frame.ny * trochoidR;
   return {
-    x: cx + trochoidR * (Math.cos(theta) * frame.tx + Math.sin(theta) * frame.nx),
-    y: cy + trochoidR * (Math.cos(theta) * frame.ty + Math.sin(theta) * frame.ny),
+    x: frame.x + trochoidR * (Math.cos(theta) * frame.tx + Math.sin(theta) * frame.nx),
+    y: frame.y + trochoidR * (Math.cos(theta) * frame.ty + Math.sin(theta) * frame.ny),
     z,
   };
 }
@@ -82,20 +80,20 @@ function orbitZProfile(
 }
 
 export function generateFourZoneAdaptivePath(
-  innerGuideLoop: LoopPoint[],
+  slotCenterGuide: LoopPoint[],
   params: FourZoneParams
 ): ToolpathPoint[] {
   const stepover = params.forwardIncrement;
   const { slotClearance, z: zCut, liftAmount = 0 } = params;
 
-  if (innerGuideLoop.length < 3 || stepover <= 0 || slotClearance <= 0) return [];
+  if (slotCenterGuide.length < 3 || stepover <= 0 || slotClearance <= 0) return [];
 
   const trochoidR = slotClearance / 2;
   const sampleSpacing = Math.min(stepover / 4, trochoidR / 2, 0.5);
-  const guide = buildArcLengthGuide(innerGuideLoop, sampleSpacing);
+  const guide = buildArcLengthGuide(slotCenterGuide, sampleSpacing);
   if (guide.totalLength <= 0) return [];
 
-  const ccwGuide = signedLoopArea2D(innerGuideLoop) >= 0;
+  const ccwGuide = signedLoopArea2D(slotCenterGuide) >= 0;
   const rotSign = ccwGuide ? -1 : 1;
   const numCycles = Math.ceil(guide.totalLength / stepover);
   const steps = Math.max(2, Math.ceil((2 * Math.PI) / ANGLE_STEP));
@@ -135,8 +133,8 @@ export function generateFourZoneAdaptivePath(
 }
 
 export function generateConstantEngagementTrochoid(
-  innerGuideLoop: LoopPoint[],
+  slotCenterGuide: LoopPoint[],
   params: FourZoneParams
 ): ToolpathPoint[] {
-  return generateFourZoneAdaptivePath(innerGuideLoop, params);
+  return generateFourZoneAdaptivePath(slotCenterGuide, params);
 }

@@ -1,7 +1,7 @@
 import type { Operation, ToolpathPoint, ToolpathSegment } from '../types/operations';
 import type { LoopPoint } from '../types/operations';
 import type { PartBounds } from './geometryProcessing';
-import { offsetLoop2D } from './geometryProcessing';
+import { offsetLoop2D, offsetLoop2DMinkowski } from './geometryProcessing';
 import { OPERATION_COLORS, getSelectedHoles } from '../types/operations';
 import { resolveAdaptiveEntryPoint, resolveAdaptiveSlotGeometry } from './adaptiveOutline';
 import { generateFourZoneAdaptivePath } from './adaptiveFourZone';
@@ -172,9 +172,9 @@ function generateAdaptiveTrochoidalPath(
   z: number
 ): ToolpathPoint[] {
   const slot = resolveAdaptiveSlotGeometry(settings);
-  const innerGuide = offsetLoop2D(partLoop, slot.innerCenterOffset);
+  const slotCenterGuide = offsetLoop2DMinkowski(partLoop, slot.slotCenterOffset);
 
-  return generateFourZoneAdaptivePath(innerGuide, {
+  return generateFourZoneAdaptivePath(slotCenterGuide, {
     forwardIncrement: slot.forwardIncrement,
     slotClearance: slot.slotClearance,
     z,

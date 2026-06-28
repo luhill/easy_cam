@@ -209,6 +209,87 @@ export function offsetLoop2D(loop: LoopPoint[], offset: number): LoopPoint[] {
   return result;
 }
 
+function outwardEdgeNormal2D(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  side: number
+): { nx: number; ny: number } {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len = Math.hypot(dx, dy) || 1;
+  return { nx: side * (dy / len), ny: side * (-dx / len) };
+}
+
+/**
+ * Outward offset via Minkowski sum with a disk (round joins).
+ * Exterior (convex) part corners become smooth circular arcs at distance `offset`.
+ * Interior (concave) corners get a complementary arc; very tight notches can pinch.
+ */
+export function offsetLoop2DMinkowski(
+  loop: LoopPoint[],
+  offset: number,
+  maxSegmentLen = 0.3
+): LoopPoint[] {
+  const n = loop.length;
+  if (n < 3 || Math.abs(offset) < 1e-9) return loop.map((p) => ({ ...p }));
+
+  const ccw = signedLoopArea2D(loop) >= 0;
+  const side = ccw ? 1 : -1;
+  const segLen = Math.max(maxSegmentLen, Math.abs(offset) / 6);
+  const result: LoopPoint[] = [];
+
+  for (let i = 0; i < n; i++) {
+    const prev = loop[(i - 1 + n) % n];
+    const curr = loop[i];
+    const next = loop[(i + 1) % n];
+
+    const u1x = curr.x - prev.x;
+    const u1y = curr.y - prev.y;
+    const u2x = next.x - curr.x;
+    const u2y = next.y - curr.y;
+
+    const nIn = outwardEdgeNormal2D(prev.x, prev.y, curr.x, curr.y, side);
+    const nOut = outwardEdgeNormal2D(curr.x, curr.y, next.x, next.y, side);
+
+    const cross = u1x * u2y - u1y * u2x;
+    const convex = side * cross > 0;
+
+    const a1 = Math.atan2(nIn.ny, nIn.nx);
+    const a2 = Math.atan2(nOut.ny, nOut.nx);
+    let sweep = a2 - a1;
+    if (convex) {
+      while (sweep < -1e-9) sweep += 2 * Math.PI;
+    } else {
+      while (sweep > 1e-9) sweep -= 2 * Math.PI;
+    }
+
+    const arcSteps = Math.max(1, Math.ceil((Math.abs(sweep) * Math.abs(offset)) / segLen));
+    for (let s = 0; s <= arcSteps; s++) {
+      const ang = a1 + (sweep * s) / arcSteps;
+      result.push({
+        x: curr.x + offset * Math.cos(ang),
+        y: curr.y + offset * Math.sin(ang),
+        z: curr.z,
+      });
+    }
+
+    const edgeLen = Math.hypot(u2x, u2y);
+    const edgeSteps = Math.max(1, Math.ceil(edgeLen / segLen));
+    for (let s = 1; s < edgeSteps; s++) {
+      const t = s / edgeSteps;
+      result.push({
+        x: curr.x + nOut.nx * offset + u2x * t,
+        y: curr.y + nOut.ny * offset + u2y * t,
+        z: curr.z + (next.z - curr.z) * t,
+      });
+    }
+  }
+
+  return result;
+}
+
 export function closestPointOnLoop2D(
   x: number,
   y: number,

@@ -1,6 +1,6 @@
 import type { LoopPoint } from '../types/operations';
 import type { OperationDefaults } from '../types/operations';
-import { offsetLoop2D, signedLoopArea2D } from './geometryProcessing';
+import { offsetLoop2DMinkowski, signedLoopArea2D } from './geometryProcessing';
 import { adaptiveForwardIncrement } from './trochoidalPath';
 
 export interface AdaptiveSlotGeometry {
@@ -9,6 +9,8 @@ export interface AdaptiveSlotGeometry {
   radialOffset: number;
   /** Tool-center offset from part outline (tool radius + additional offset). */
   innerCenterOffset: number;
+  /** Tool-center offset for slot midline (constant-distance Minkowski path). */
+  slotCenterOffset: number;
   /** Full slot width in stock (mm). */
   slotWidth: number;
   /** Lateral tool-center excursion outward from inner guide. */
@@ -32,12 +34,14 @@ export function resolveAdaptiveSlotGeometry(settings: OperationDefaults): Adapti
   const innerCenterOffset = toolRadius + radialOffset;
   const minCenterDist = innerCenterOffset;
   const maxCenterDist = radialOffset + slotWidth - toolRadius;
+  const slotCenterOffset = (minCenterDist + maxCenterDist) / 2;
 
   return {
     toolDiameter,
     toolRadius,
     radialOffset,
     innerCenterOffset,
+    slotCenterOffset,
     slotWidth,
     slotClearance,
     trochoidRadius,
@@ -55,7 +59,7 @@ export function computeDefaultEntryPoint(
   if (partLoop.length < 2) return { x: 0, y: 0 };
 
   const slot = resolveAdaptiveSlotGeometry(settings);
-  const guide = offsetLoop2D(partLoop, slot.innerCenterOffset);
+  const guide = offsetLoop2DMinkowski(partLoop, slot.slotCenterOffset);
   const p0 = guide[0];
   const p1 = guide[1];
   const dx = p1.x - p0.x;
