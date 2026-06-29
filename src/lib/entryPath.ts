@@ -142,12 +142,18 @@ export function buildEntryConnectorGuide(
 }
 
 /**
- * Minimum distance from part outline to bore center so the max bore outer edge
- * is tangent to the inner slot guide (tool center path closest to the part).
+ * Minimum distance from part outline to bore center.
+ * Tool center during the bore must not cross the inner slot path; the closest
+ * tool orbit sits on that guide (innerCenterOffset + helixR from the part).
  */
 export function minimumEntryCenterDist(settings: OperationDefaults): number {
   const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
-  return slot.minCenterDist + resolveBoreOuterRadius(settings);
+  return slot.minCenterDist + resolveHelixRadius(settings);
+}
+
+/** Outward offset from the inner slot guide to the bore center. */
+export function boreCenterOffsetFromInnerGuide(settings: OperationDefaults): number {
+  return resolveHelixRadius(settings);
 }
 
 /** 2D expanding spiral at fixed Z to widen a bore to the slot helix radius. */
