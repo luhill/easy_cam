@@ -286,6 +286,103 @@ export function generateContractingSpiral(
   return points;
 }
 
+/** 2D contracting spiral at fixed Z, ending at a target angle and radius. */
+export function generateContractingSpiralToAngle(
+  center: { x: number; y: number },
+  startRadius: number,
+  targetRadius: number,
+  z: number,
+  radialStepPerRev: number,
+  rotDir: number,
+  segmentsPerRev: number,
+  endAngle: number,
+  feedRate?: number
+): ToolpathPoint[] {
+  const startR = Math.max(startRadius, 0.05);
+  const targetR = Math.max(targetRadius, 0.05);
+  if (startR <= targetR + 1e-4 || radialStepPerRev <= 0) return [];
+
+  const segments = Math.max(8, segmentsPerRev);
+  const dr = radialStepPerRev / segments;
+  const deltaR = startR - targetR;
+  const revs = Math.max(1, Math.ceil(deltaR / radialStepPerRev));
+  let angle = endAngle + rotDir * revs * 2 * Math.PI;
+  let r = startR;
+  const points: ToolpathPoint[] = [];
+
+  while (r > targetR + 1e-4) {
+    for (let i = 0; i < segments; i++) {
+      angle += rotDir * ((Math.PI * 2) / segments);
+      r = Math.max(r - dr, targetR);
+      points.push({
+        x: center.x + Math.cos(angle) * r,
+        y: center.y + Math.sin(angle) * r,
+        z,
+        feedRate,
+      });
+      if (r <= targetR + 1e-4) break;
+    }
+  }
+
+  if (points.length > 0) {
+    const last = points[points.length - 1];
+    last.x = center.x + Math.cos(endAngle) * targetR;
+    last.y = center.y + Math.sin(endAngle) * targetR;
+  }
+
+  return points;
+}
+
+/** Radial spiral along a fixed bearing from center, ending on a target radius. */
+export function generateRadialSpiralBetweenRadii(
+  center: { x: number; y: number },
+  startRadius: number,
+  targetRadius: number,
+  angle: number,
+  z: number,
+  radialStepPerRev: number,
+  rotDir: number,
+  segmentsPerRev: number,
+  feedRate?: number
+): ToolpathPoint[] {
+  if (Math.abs(startRadius - targetRadius) < 1e-3) return [];
+
+  if (targetRadius > startRadius) {
+    return generateExpandingSpiralToAngle(
+      center,
+      startRadius,
+      targetRadius,
+      z,
+      radialStepPerRev,
+      rotDir,
+      segmentsPerRev,
+      angle,
+      feedRate
+    );
+  }
+
+  return generateContractingSpiralToAngle(
+    center,
+    startRadius,
+    targetRadius,
+    z,
+    radialStepPerRev,
+    rotDir,
+    segmentsPerRev,
+    angle,
+    feedRate
+  );
+}
+
+/** Tool center follows slot-center guide points at fixed Z. */
+export function generateSlotCenterTraverse(
+  guidePts: LoopPoint[],
+  feedRate?: number
+): ToolpathPoint[] {
+  if (guidePts.length === 0) return [];
+  return guidePts.map((p) => ({ x: p.x, y: p.y, z: p.z, feedRate }));
+}
+
 /** Spiral outward or inward at bore center until the tool orbit matches slot width. */
 export function adjustBoreRadiusToSlotWidth(
   center: { x: number; y: number },
