@@ -142,14 +142,51 @@ export function buildEntryConnectorGuide(
 }
 
 /**
- * Minimum distance from part outline to bore center so the outside of the bore
- * is tangent to the slot outer edge (radial offset + slot width).
+ * Minimum distance from part outline to bore center — aligned with the inner slot path
+ * (tool center closest to the part wall).
  */
 export function minimumEntryCenterDist(settings: OperationDefaults): number {
   const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
-  const boreOuterR = resolveBoreOuterRadius(settings);
-  const slotOuterEdge = slot.radialOffset + slot.slotWidth;
-  return Math.max(slotOuterEdge - boreOuterR, slot.minCenterDist);
+  return slot.minCenterDist;
+}
+
+/** 2D expanding spiral at fixed Z to widen a bore to the slot helix radius. */
+export function generateExpandingSpiral(
+  center: { x: number; y: number },
+  startRadius: number,
+  targetRadius: number,
+  z: number,
+  radialStepPerRev: number,
+  rotDir: number,
+  segmentsPerRev: number,
+  startAngle: number,
+  feedRate?: number
+): ToolpathPoint[] {
+  const startR = Math.max(startRadius, 0.05);
+  const targetR = Math.max(targetRadius, startR);
+  if (targetR <= startR + 1e-4 || radialStepPerRev <= 0) return [];
+
+  const segments = Math.max(8, segmentsPerRev);
+  const dr = radialStepPerRev / segments;
+  const points: ToolpathPoint[] = [];
+  let r = startR;
+  let angle = startAngle;
+
+  while (r < targetR - 1e-4) {
+    for (let i = 0; i < segments; i++) {
+      angle += rotDir * ((Math.PI * 2) / segments);
+      r = Math.min(r + dr, targetR);
+      points.push({
+        x: center.x + Math.cos(angle) * r,
+        y: center.y + Math.sin(angle) * r,
+        z,
+        feedRate,
+      });
+      if (r >= targetR - 1e-4) break;
+    }
+  }
+
+  return points;
 }
 
 export function isGuideOutwardCCW(partLoop: LoopPoint[]): boolean {

@@ -36,6 +36,7 @@ interface AppState {
   selectionSubMode: SelectionSubMode;
   partBounds: PartBounds | null;
   toolpaths: ToolpathSegment[];
+  toolpathWarnings: string[];
   simulationDistance: number;
   simulationPlaying: boolean;
   simulationSpeed: number;
@@ -76,6 +77,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectionSubMode: 'geometry',
   partBounds: null,
   toolpaths: [],
+  toolpathWarnings: [],
   simulationDistance: 0,
   simulationPlaying: false,
   simulationSpeed: 1,
@@ -90,6 +92,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       stlFileName: file.name,
       operations: [],
       toolpaths: [],
+      toolpathWarnings: [],
       partBounds: null,
       simulationDistance: 0,
       simulationPlaying: false,
@@ -105,6 +108,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       stlFileName: DEFAULT_DEV_STL_NAME,
       operations: [],
       toolpaths: [],
+      toolpathWarnings: [],
       partBounds: null,
       simulationDistance: 0,
       simulationPlaying: false,
@@ -120,6 +124,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       stlFileName: null,
       operations: [],
       toolpaths: [],
+      toolpathWarnings: [],
       partBounds: null,
       activeOperationId: null,
       simulationDistance: 0,
@@ -252,11 +257,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   regenerateToolpaths: () => {
     const { operations, partBounds } = get();
     const { safeHeight, toolpathResolution } = useSettingsStore.getState();
-    const toolpaths = generateToolpaths(operations, partBounds, {
+    const { segments, warnings } = generateToolpaths(operations, partBounds, {
       safeHeight,
       resolution: toolpathResolution,
     });
-    set({ toolpaths, simulationDistance: 0, simulationPlaying: false });
+    set({ toolpaths: segments, toolpathWarnings: warnings, simulationDistance: 0, simulationPlaying: false });
   },
 
   setSimulationDistance: (distance) =>

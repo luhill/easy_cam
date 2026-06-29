@@ -28,9 +28,9 @@ export interface FourZoneParams {
   skipArcLength?: number;
   feedRate?: number;
   sampleSpacing?: number;
+  /** Points per trochoid orbit; scales with global toolpath resolution. */
+  orbitStepsPerRev?: number;
 }
-
-const ANGLE_STEP = (4 * Math.PI) / 180;
 
 const CUT_PHASE_END = 0.5;
 const RETURN_LIFT_START = 0.58;
@@ -106,7 +106,7 @@ function generateTrochoidAlongGuide(
   if (totalLength <= 0 || stepover <= 0 || slotClearance <= 0) return [];
 
   const trochoidR = slotClearance / 2;
-  const steps = Math.max(2, Math.ceil((2 * Math.PI) / ANGLE_STEP));
+  const steps = Math.max(8, params.orbitStepsPerRev ?? 90);
   const points: ToolpathPoint[] = [];
   const { partLoop, minCenterDist } = params;
   const defaultStartS = guideSign >= 0 ? 0 : totalLength;

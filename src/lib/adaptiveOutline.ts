@@ -1,6 +1,6 @@
 import type { LoopPoint } from '../types/operations';
 import type { OperationDefaults } from '../types/operations';
-import { offsetLoop2DMinkowski, distanceToLoop2D, closestPointOnLoop2D } from './geometryProcessing';
+import { offsetLoop2DMinkowski, distanceToLoop2D } from './geometryProcessing';
 import { adaptiveForwardIncrement } from './trochoidalPath';
 import { ensureEntryOutsidePart, minimumEntryCenterDist } from './entryPath';
 
@@ -65,7 +65,7 @@ export function resolveAdaptiveSlotGeometry(
   };
 }
 
-/** Default helix entry: bore outer edge tangent to slot outer wall. */
+/** Default helix entry: bore center on the inner slot path (closest to the part). */
 export function computeDefaultEntryPoint(
   partLoop: LoopPoint[],
   settings: OperationDefaults
@@ -73,29 +73,21 @@ export function computeDefaultEntryPoint(
   if (partLoop.length < 2) return { x: 0, y: 0 };
 
   const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
-  const guide = offsetLoop2DMinkowski(partLoop, slot.slotCenterOffset);
-  const centerDist = minimumEntryCenterDist(settings);
+  const guide = offsetLoop2DMinkowski(partLoop, slot.innerCenterOffset);
+  const minDist = minimumEntryCenterDist(settings);
 
   let bestGuide = guide[0];
   let bestScore = Infinity;
   for (const p of guide) {
     const d = distanceToLoop2D(p.x, p.y, partLoop);
-    const score = Math.abs(d - centerDist);
+    const score = Math.abs(d - minDist);
     if (score < bestScore) {
       bestScore = score;
       bestGuide = p;
     }
   }
 
-  const outward = closestPointOnLoop2D(bestGuide.x, bestGuide.y, partLoop);
-  return ensureEntryOutsidePart(
-    partLoop,
-    {
-      x: outward.x + outward.outX * centerDist,
-      y: outward.y + outward.outY * centerDist,
-    },
-    centerDist * 0.98
-  );
+  return ensureEntryOutsidePart(partLoop, bestGuide, minDist * 0.98);
 }
 
 export function resolveAdaptiveEntryPoint(

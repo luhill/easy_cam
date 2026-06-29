@@ -21,8 +21,11 @@ import {
 import {
   buildEntryConnectorGuide,
   closestPointIndexOnPath,
+  generateExpandingSpiral,
   generateHelixBorePoints,
+  helixRadiusAtZ,
   isGuideOutwardCCW,
+  resolveHelixRotationDir,
   resolveSlotHelixRadius,
 } from './entryPath';
 import { buildArcLengthGuide, findClosestSOnGuide, sampleGuideAtS } from './trochoidalPath';
@@ -35,6 +38,7 @@ import {
 } from './cutDepth';
 import {
   contourSteps,
+  helixSegmentsPerRev,
   minkowskiSegmentLen,
   pathSampleSpacing,
   safeHeightWorldZ,
@@ -44,7 +48,14 @@ import {
   DEFAULT_TOOLPATH_RESOLUTION,
 } from './toolpathConfig';
 
-const MAX_TOOLPATH_POINTS = 500_000;
+export const MAX_TOOLPATH_POINTS = 500_000;
+
+export interface ToolpathGenerationResult {
+  segments: ToolpathSegment[];
+  warnings: string[];
+}
+
+let activePointBudget: { discarded: number } | null = null;
 
 function toolRadius(settings: Operation['settings']): number {
   return Math.max(settings.toolDiameter, 0.1) / 2;
@@ -94,12 +105,18 @@ function getBounds(geometry: Operation['geometry']): {
 }
 
 function appendPoints(target: ToolpathPoint[], points: ToolpathPoint[]): boolean {
-  if (target.length + points.length > MAX_TOOLPATH_POINTS) {
-    target.push(...points.slice(0, MAX_TOOLPATH_POINTS - target.length));
+  const room = MAX_TOOLPATH_POINTS - target.length;
+  if (room <= 0) {
+    if (activePointBudget) activePointBudget.discarded += points.length;
     return false;
   }
-  target.push(...points);
-  return true;
+  if (points.length <= room) {
+    target.push(...points);
+    return true;
+  }
+  target.push(...points.slice(0, room));
+  if (activePointBudget) activePointBudget.discarded += points.length - room;
+  return false;
 }
 
 function loopToToolpathPoints(
@@ -183,6 +200,7 @@ function trochoidParams(
       slot.trochoidRadius,
       globals.resolution
     ),
+    orbitStepsPerRev: helixSegmentsPerRev(globals.resolution),
   };
 }
 
@@ -431,6 +449,32 @@ function generateAdaptiveOutlinePath(
     }
 
     if (li === 0) {
+      const bottomHelixR = helixRadiusAtZ(settings, layerZ, topZ);
+      if (bottomHelixR < slotHelixR - 1e-3) {
+        const lastPt = lastPathPoint(points);
+        const startAngle = lastPt
+          ? Math.atan2(lastPt.y - entry.y, lastPt.x - entry.x)
+          : 0;
+        if (
+          !appendPoints(
+            points,
+            generateExpandingSpiral(
+              entry,
+              bottomHelixR,
+              slotHelixR,
+              layerZ,
+              roughSlot.forwardIncrement,
+              resolveHelixRotationDir(settings.climbMilling),
+              helixSegmentsPerRev(globals.resolution),
+              startAngle,
+              helixFeed
+            )
+          )
+        ) {
+          break;
+        }
+      }
+
       const connectorTroch = generateOpenTrochoidPath(
         connectorGuide,
         { ...rotParams, z: layerZ, liftAmount: 0 },
@@ -715,13 +759,30 @@ export function generateToolpaths(
     safeHeight: DEFAULT_SAFE_HEIGHT,
     resolution: DEFAULT_TOOLPATH_RESOLUTION,
   }
-): ToolpathSegment[] {
+): ToolpathGenerationResult {
   const ctx = createCutZContext(partBounds);
-  return operations
+  const budget = { discarded: 0 };
+  activePointBudget = budget;
+
+  const segments = operations
     .filter((op) => op.enabled)
     .map((op) => ({
       operationId: op.id,
       points: generatePathForOperation(op, ctx, globals),
       color: OPERATION_COLORS[op.type],
     }));
+
+  activePointBudget = null;
+
+  const warnings: string[] = [];
+  if (budget.discarded > 0) {
+    const totalPoints = segments.reduce((sum, seg) => sum + seg.points.length, 0);
+    warnings.push(
+      `Toolpath point limit reached (${MAX_TOOLPATH_POINTS.toLocaleString()} max). ` +
+        `${budget.discarded.toLocaleString()} point${budget.discarded === 1 ? '' : 's'} discarded; ` +
+        `${totalPoints.toLocaleString()} kept. Increase Toolpath Resolution or disable operations to reduce point count.`
+    );
+  }
+
+  return { segments, warnings };
 }
