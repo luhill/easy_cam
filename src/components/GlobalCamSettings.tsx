@@ -1,6 +1,7 @@
 import { useAppStore } from '../store/useAppStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { DEFAULT_SAFE_HEIGHT, DEFAULT_TOOLPATH_RESOLUTION } from '../lib/toolpathConfig';
+import { MAX_TOOLPATH_POINTS } from '../lib/toolpaths';
 
 export function GlobalCamSettings() {
   const safeHeight = useSettingsStore((s) => s.safeHeight);
@@ -8,6 +9,8 @@ export function GlobalCamSettings() {
   const setSafeHeight = useSettingsStore((s) => s.setSafeHeight);
   const setToolpathResolution = useSettingsStore((s) => s.setToolpathResolution);
   const regenerateToolpaths = useAppStore((s) => s.regenerateToolpaths);
+  const toolpaths = useAppStore((s) => s.toolpaths);
+  const totalPoints = toolpaths.reduce((sum, seg) => sum + seg.points.length, 0);
 
   return (
     <div className="global-cam-settings">
@@ -46,6 +49,9 @@ export function GlobalCamSettings() {
           />
         </div>
       </div>
+      <p className="settings-hint toolpath-point-count">
+        Toolpath points: {totalPoints.toLocaleString()} / {MAX_TOOLPATH_POINTS.toLocaleString()}
+      </p>
       <p className="settings-hint">
         Safe height is used at the start and end of every operation. Resolution 2× (default) uses
         half as many points as the original fine setting — raise it if toolpaths are too dense.

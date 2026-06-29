@@ -8,7 +8,7 @@ import { OperationList } from './components/Operations/OperationList';
 import { GcodeSettings } from './components/GcodeSettings';
 import { ToolOriginSettings } from './components/ToolOriginSettings';
 import { GlobalCamSettings } from './components/GlobalCamSettings';
-import { ToolpathWarnings } from './components/ToolpathWarnings';
+import { ToolpathStatus } from './components/ToolpathStatus';
 import { generateGcode, downloadGcode } from './lib/gcode';
 import './App.css';
 
@@ -68,7 +68,7 @@ export default function App() {
           <GcodeSettings />
         </aside>
         <section className="viewer-panel">
-          <ToolpathWarnings />
+          <ToolpathStatus />
           <StlViewer />
         </section>
       </main>

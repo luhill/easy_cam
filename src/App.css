@@ -538,22 +538,39 @@ body {
   color: var(--text-secondary);
 }
 
-.toolpath-warnings {
+.toolpath-status {
   flex-shrink: 0;
   padding: 10px 16px;
-  border-bottom: 1px solid rgba(245, 158, 11, 0.35);
-  background: rgba(245, 158, 11, 0.12);
-  color: #fcd34d;
+  border-bottom: 1px solid var(--border);
+  background: #151820;
+  color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.45;
 }
 
-.toolpath-warnings p {
+.toolpath-status--warn {
+  border-bottom-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.12);
+  color: #fcd34d;
+}
+
+.toolpath-status p {
   margin: 0;
 }
 
-.toolpath-warnings p + p {
+.toolpath-status-count {
+  font-weight: 500;
+}
+
+.toolpath-status-warning + .toolpath-status-warning,
+.toolpath-status-count + .toolpath-status-warning {
   margin-top: 6px;
+}
+
+.toolpath-point-count {
+  margin-bottom: 4px;
+  font-weight: 500;
+  color: var(--text-secondary);
 }
 
 .viewer-webgl-banner-copy {
