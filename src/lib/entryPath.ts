@@ -54,6 +54,18 @@ export function resolveSlotHelixRadius(slotClearance: number): number {
   return Math.max(slotClearance / 2, 0.05);
 }
 
+/**
+ * Largest tool-center radius from bore center during entry — derived from the
+ * greater of bore outer diameter and slot width so the widen spiral cannot
+ * cross the inner slot path.
+ */
+export function resolveMaxEntryHelixRadius(settings: OperationDefaults): number {
+  const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
+  const boreOuterD = 2 * resolveBoreOuterRadius(settings);
+  const effectiveDiameter = Math.max(boreOuterD, slot.slotWidth);
+  return Math.max(effectiveDiameter / 2 - slot.toolRadius, 0.05);
+}
+
 /** +1 = CCW helix, −1 = CW helix (climb external default). */
 export function resolveHelixRotationDir(climbMilling: boolean): number {
   return climbMilling ? -1 : 1;
@@ -143,17 +155,17 @@ export function buildEntryConnectorGuide(
 
 /**
  * Minimum distance from part outline to bore center.
- * Tool center during the bore must not cross the inner slot path; the closest
- * tool orbit sits on that guide (innerCenterOffset + helixR from the part).
+ * Clears the inner slot path for the largest tool orbit during entry (bore
+ * helix or bottom widen spiral, whichever is greater).
  */
 export function minimumEntryCenterDist(settings: OperationDefaults): number {
   const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
-  return slot.minCenterDist + resolveHelixRadius(settings);
+  return slot.minCenterDist + resolveMaxEntryHelixRadius(settings);
 }
 
 /** Outward offset from the inner slot guide to the bore center. */
 export function boreCenterOffsetFromInnerGuide(settings: OperationDefaults): number {
-  return resolveHelixRadius(settings);
+  return resolveMaxEntryHelixRadius(settings);
 }
 
 /** 2D expanding spiral at fixed Z to widen a bore to the slot helix radius. */
