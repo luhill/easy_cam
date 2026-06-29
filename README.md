@@ -31,6 +31,22 @@ npm run build
 npm run preview
 ```
 
+## Deploy to GitHub Pages
+
+Public demo URL: **https://luhill.github.io/easy_cam/**
+
+Publishing uses **GitHub Actions**, not “Deploy from a branch”:
+
+1. **Settings → Pages → Build and deployment**
+2. Set **Source** to **GitHub Actions**
+3. **Actions → Deploy GitHub Pages → Run workflow** (or re-run a failed job)
+
+Pushes to `main` deploy automatically after that.
+
+```bash
+npm run build:pages   # production build with /easy_cam/ base path
+```
+
 ## Tech Stack
 
 - React 19 + TypeScript
