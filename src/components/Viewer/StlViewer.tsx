@@ -38,6 +38,7 @@ import { ToolPreview, ToolSimulationDriver } from './ToolPreview';
 import { ToolSimulationControls } from './ToolSimulationControls';
 import {
   buildSimulationTimeline,
+  filterToolpathSegmentsByDistance,
   sampleSimulationTimeline,
   pickPreviewToolDiameter,
   PREVIEW_RAPID_FEED,
@@ -561,6 +562,8 @@ function SceneContent({
   const simulationDistance = useAppStore((s) => s.simulationDistance);
   const simulationPlaying = useAppStore((s) => s.simulationPlaying);
   const simulationSpeed = useAppStore((s) => s.simulationSpeed);
+  const simulationWindowStart = useAppStore((s) => s.simulationWindowStart);
+  const simulationWindowEnd = useAppStore((s) => s.simulationWindowEnd);
   const setSimulationDistance = useAppStore((s) => s.setSimulationDistance);
   const setSimulationPlaying = useAppStore((s) => s.setSimulationPlaying);
   const activeOperationId = useAppStore((s) => s.activeOperationId);
@@ -590,10 +593,37 @@ function SceneContent({
     [visiblePaths]
   );
 
+  const previewPaths = useMemo(() => {
+    const isFullWindow =
+      simulationWindowStart <= 1e-4 && simulationWindowEnd >= 1 - 1e-4;
+    if (isFullWindow) return visiblePaths;
+    const start = simulationWindowStart * simulationTimeline.totalDistance;
+    const end = simulationWindowEnd * simulationTimeline.totalDistance;
+    return filterToolpathSegmentsByDistance(visiblePaths, start, end);
+  }, [
+    visiblePaths,
+    simulationTimeline.totalDistance,
+    simulationWindowStart,
+    simulationWindowEnd,
+  ]);
+
   const simulationSample = useMemo(
     () => sampleSimulationTimeline(simulationTimeline, simulationDistance),
     [simulationTimeline, simulationDistance]
   );
+
+  const toolInPreviewWindow = useMemo(() => {
+    const total = simulationTimeline.totalDistance;
+    if (total <= 0) return true;
+    const start = simulationWindowStart * total;
+    const end = simulationWindowEnd * total;
+    return simulationDistance >= start - 1e-6 && simulationDistance <= end + 1e-6;
+  }, [
+    simulationTimeline.totalDistance,
+    simulationWindowStart,
+    simulationWindowEnd,
+    simulationDistance,
+  ]);
 
   const previewToolDiameter = useMemo(
     () => pickPreviewToolDiameter(operations, visiblePaths),
@@ -630,8 +660,10 @@ function SceneContent({
         onMeshUpdate={onMeshUpdate}
         onIndexReady={onIndexReady}
       />
-      <ToolpathLines segments={visiblePaths} />
-      <ToolPreview sample={simulationSample} toolDiameter={previewToolDiameter} />
+      <ToolpathLines segments={previewPaths} />
+      {toolInPreviewWindow && (
+        <ToolPreview sample={simulationSample} toolDiameter={previewToolDiameter} />
+      )}
       <ToolSimulationDriver
         playing={simulationPlaying}
         speed={simulationSpeed}

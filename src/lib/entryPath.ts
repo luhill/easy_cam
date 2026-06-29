@@ -168,6 +168,53 @@ export function boreCenterOffsetFromInnerGuide(settings: OperationDefaults): num
   return resolveMaxEntryHelixRadius(settings);
 }
 
+/** 2D expanding spiral at fixed Z, ending at a target angle and radius. */
+export function generateExpandingSpiralToAngle(
+  center: { x: number; y: number },
+  startRadius: number,
+  targetRadius: number,
+  z: number,
+  radialStepPerRev: number,
+  rotDir: number,
+  segmentsPerRev: number,
+  endAngle: number,
+  feedRate?: number
+): ToolpathPoint[] {
+  const startR = Math.max(startRadius, 0.05);
+  const targetR = Math.max(targetRadius, startR);
+  if (targetR <= startR + 1e-4 || radialStepPerRev <= 0) return [];
+
+  const segments = Math.max(8, segmentsPerRev);
+  const dr = radialStepPerRev / segments;
+  const deltaR = targetR - startR;
+  const revs = Math.max(1, Math.ceil(deltaR / radialStepPerRev));
+  let angle = endAngle - rotDir * revs * 2 * Math.PI;
+  let r = startR;
+  const points: ToolpathPoint[] = [];
+
+  while (r < targetR - 1e-4) {
+    for (let i = 0; i < segments; i++) {
+      angle += rotDir * ((Math.PI * 2) / segments);
+      r = Math.min(r + dr, targetR);
+      points.push({
+        x: center.x + Math.cos(angle) * r,
+        y: center.y + Math.sin(angle) * r,
+        z,
+        feedRate,
+      });
+      if (r >= targetR - 1e-4) break;
+    }
+  }
+
+  if (points.length > 0) {
+    const last = points[points.length - 1];
+    last.x = center.x + Math.cos(endAngle) * targetR;
+    last.y = center.y + Math.sin(endAngle) * targetR;
+  }
+
+  return points;
+}
+
 /** 2D expanding spiral at fixed Z to widen a bore to the slot helix radius. */
 export function generateExpandingSpiral(
   center: { x: number; y: number },

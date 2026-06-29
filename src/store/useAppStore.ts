@@ -40,6 +40,9 @@ interface AppState {
   simulationDistance: number;
   simulationPlaying: boolean;
   simulationSpeed: number;
+  /** Preview window as fraction of total path length [0, 1]. */
+  simulationWindowStart: number;
+  simulationWindowEnd: number;
 
   setStlFile: (file: File) => void;
   loadDefaultStl: () => void;
@@ -64,6 +67,7 @@ interface AppState {
   setSimulationDistance: (distance: number) => void;
   setSimulationPlaying: (playing: boolean) => void;
   setSimulationSpeed: (speed: number) => void;
+  setSimulationWindow: (start: number, end: number) => void;
   resetSimulation: () => void;
 }
 
@@ -81,6 +85,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   simulationDistance: 0,
   simulationPlaying: false,
   simulationSpeed: 1,
+  simulationWindowStart: 0,
+  simulationWindowEnd: 1,
 
   setStlFile: (file) => {
     const prev = get().stlUrl;
@@ -96,6 +102,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       partBounds: null,
       simulationDistance: 0,
       simulationPlaying: false,
+      simulationWindowStart: 0,
+      simulationWindowEnd: 1,
     });
   },
 
@@ -112,6 +120,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       partBounds: null,
       simulationDistance: 0,
       simulationPlaying: false,
+      simulationWindowStart: 0,
+      simulationWindowEnd: 1,
     });
   },
 
@@ -129,6 +139,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       activeOperationId: null,
       simulationDistance: 0,
       simulationPlaying: false,
+      simulationWindowStart: 0,
+      simulationWindowEnd: 1,
     });
   },
 
@@ -261,7 +273,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       safeHeight,
       resolution: toolpathResolution,
     });
-    set({ toolpaths: segments, toolpathWarnings: warnings, simulationDistance: 0, simulationPlaying: false });
+    set({ toolpaths: segments, toolpathWarnings: warnings, simulationDistance: 0, simulationPlaying: false, simulationWindowStart: 0, simulationWindowEnd: 1 });
   },
 
   setSimulationDistance: (distance) =>
@@ -271,5 +283,18 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setSimulationSpeed: (speed) => set({ simulationSpeed: speed }),
 
-  resetSimulation: () => set({ simulationDistance: 0, simulationPlaying: false }),
+  setSimulationWindow: (start, end) => {
+    const s = Math.max(0, Math.min(1, start));
+    const e = Math.max(0, Math.min(1, end));
+    if (e - s < 0.02) return;
+    set({ simulationWindowStart: s, simulationWindowEnd: e });
+  },
+
+  resetSimulation: () =>
+    set({
+      simulationDistance: 0,
+      simulationPlaying: false,
+      simulationWindowStart: 0,
+      simulationWindowEnd: 1,
+    }),
 }));

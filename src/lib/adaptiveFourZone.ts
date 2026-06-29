@@ -84,6 +84,11 @@ function orbitZProfile(
   return { z: zCut + liftAmount * Math.sin(Math.PI * u), rapid: true };
 }
 
+/** Trochoid orbit angle (radians) at a given phase within one micro-loop. */
+export function trochoidOrbitAngleAtPhase(phase: number, rotSign: number): number {
+  return -Math.PI / 2 + rotSign * (1 - phase) * 2 * Math.PI;
+}
+
 /** Climb milling on external CCW loops → clockwise tool motion around the part. */
 export function resolveGuideTraverseSign(guideLoop: LoopPoint[], climbMilling: boolean): number {
   const ccw = signedLoopArea2D(guideLoop) >= 0;

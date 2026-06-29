@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useAppStore } from '../../store/useAppStore';
 import { buildSimulationTimeline, sampleSimulationTimeline } from '../../lib/toolpathSimulation';
+import { RangeWindowSlider } from './RangeWindowSlider';
 
 export function ToolSimulationControls() {
   const stlUrl = useAppStore((s) => s.stlUrl);
@@ -9,9 +10,12 @@ export function ToolSimulationControls() {
   const simulationDistance = useAppStore((s) => s.simulationDistance);
   const simulationPlaying = useAppStore((s) => s.simulationPlaying);
   const simulationSpeed = useAppStore((s) => s.simulationSpeed);
+  const simulationWindowStart = useAppStore((s) => s.simulationWindowStart);
+  const simulationWindowEnd = useAppStore((s) => s.simulationWindowEnd);
   const setSimulationDistance = useAppStore((s) => s.setSimulationDistance);
   const setSimulationPlaying = useAppStore((s) => s.setSimulationPlaying);
   const setSimulationSpeed = useAppStore((s) => s.setSimulationSpeed);
+  const setSimulationWindow = useAppStore((s) => s.setSimulationWindow);
   const resetSimulation = useAppStore((s) => s.resetSimulation);
 
   const visiblePaths = useMemo(() => {
@@ -29,6 +33,8 @@ export function ToolSimulationControls() {
 
   const progress =
     timeline.totalDistance > 0 ? (simulationDistance / timeline.totalDistance) * 100 : 0;
+  const windowStartDist = simulationWindowStart * timeline.totalDistance;
+  const windowEndDist = simulationWindowEnd * timeline.totalDistance;
 
   return (
     <div className="tool-simulation-controls">
@@ -60,6 +66,18 @@ export function ToolSimulationControls() {
             <option value={8}>8×</option>
           </select>
         </label>
+      </div>
+      <div className="tool-simulation-range-label">Preview range</div>
+      <RangeWindowSlider
+        start={simulationWindowStart}
+        end={simulationWindowEnd}
+        onChange={setSimulationWindow}
+      />
+      <div className="tool-simulation-meta tool-simulation-window-meta">
+        <span>
+          {windowStartDist.toFixed(1)}–{windowEndDist.toFixed(1)} mm
+        </span>
+        <span>{((simulationWindowEnd - simulationWindowStart) * 100).toFixed(0)}% of path</span>
       </div>
       <input
         type="range"
