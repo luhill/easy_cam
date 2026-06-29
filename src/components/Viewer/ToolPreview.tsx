@@ -6,13 +6,24 @@ import { sampleSimulationTimeline } from '../../lib/toolpathSimulation';
 interface ToolPreviewProps {
   sample: SimulationSample | null;
   toolDiameter: number;
+  showTool?: boolean;
 }
 
-export function ToolPreview({ sample, toolDiameter }: ToolPreviewProps) {
+export function ToolPreview({ sample, toolDiameter, showTool = true }: ToolPreviewProps) {
   if (!sample) return null;
 
-  const r = Math.max(toolDiameter / 2, 0.05);
   const color = sample.rapid ? '#f59e0b' : '#e2e8f0';
+
+  if (!showTool) {
+    return (
+      <mesh position={[sample.x, sample.y, sample.z]}>
+        <sphereGeometry args={[0.22, 10, 10]} />
+        <meshBasicMaterial color={color} depthTest />
+      </mesh>
+    );
+  }
+
+  const r = Math.max(toolDiameter / 2, 0.05);
 
   return (
     <group position={[sample.x, sample.y, sample.z]}>

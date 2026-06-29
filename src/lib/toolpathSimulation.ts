@@ -66,6 +66,26 @@ export function sampleSimulationTimeline(
   return samples[samples.length - 1];
 }
 
+/** Step simulation to the next or previous toolpath point (sample index). */
+export function stepSimulationDistance(
+  timeline: SimulationTimeline,
+  distance: number,
+  stepPoints: number
+): number {
+  const { samples, totalDistance } = timeline;
+  if (samples.length === 0) return 0;
+  if (stepPoints === 0) return Math.max(0, Math.min(totalDistance, distance));
+
+  let idx = 0;
+  for (let i = 0; i < samples.length; i++) {
+    if (samples[i].distance <= distance + 1e-6) idx = i;
+    else break;
+  }
+
+  const nextIdx = Math.max(0, Math.min(samples.length - 1, idx + stepPoints));
+  return samples[nextIdx].distance;
+}
+
 /** Default mm/min for rapid segments in preview (not exported G-code). */
 export const PREVIEW_RAPID_FEED = 6000;
 

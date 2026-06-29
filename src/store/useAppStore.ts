@@ -43,6 +43,7 @@ interface AppState {
   /** Preview window as fraction of total path length [0, 1]. */
   simulationWindowStart: number;
   simulationWindowEnd: number;
+  simulationShowTool: boolean;
 
   setStlFile: (file: File) => void;
   loadDefaultStl: () => void;
@@ -68,6 +69,7 @@ interface AppState {
   setSimulationPlaying: (playing: boolean) => void;
   setSimulationSpeed: (speed: number) => void;
   setSimulationWindow: (start: number, end: number) => void;
+  setSimulationShowTool: (show: boolean) => void;
   resetSimulation: () => void;
 }
 
@@ -87,6 +89,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   simulationSpeed: 1,
   simulationWindowStart: 0,
   simulationWindowEnd: 1,
+  simulationShowTool: true,
 
   setStlFile: (file) => {
     const prev = get().stlUrl;
@@ -289,6 +292,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (e - s < 0.02) return;
     set({ simulationWindowStart: s, simulationWindowEnd: e });
   },
+
+  setSimulationShowTool: (show) => set({ simulationShowTool: show }),
 
   resetSimulation: () =>
     set({

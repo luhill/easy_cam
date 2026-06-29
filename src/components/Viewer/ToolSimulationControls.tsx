@@ -1,6 +1,10 @@
 import { useMemo } from 'react';
 import { useAppStore } from '../../store/useAppStore';
-import { buildSimulationTimeline, sampleSimulationTimeline } from '../../lib/toolpathSimulation';
+import {
+  buildSimulationTimeline,
+  sampleSimulationTimeline,
+  stepSimulationDistance,
+} from '../../lib/toolpathSimulation';
 import { RangeWindowSlider } from './RangeWindowSlider';
 
 export function ToolSimulationControls() {
@@ -12,10 +16,12 @@ export function ToolSimulationControls() {
   const simulationSpeed = useAppStore((s) => s.simulationSpeed);
   const simulationWindowStart = useAppStore((s) => s.simulationWindowStart);
   const simulationWindowEnd = useAppStore((s) => s.simulationWindowEnd);
+  const simulationShowTool = useAppStore((s) => s.simulationShowTool);
   const setSimulationDistance = useAppStore((s) => s.setSimulationDistance);
   const setSimulationPlaying = useAppStore((s) => s.setSimulationPlaying);
   const setSimulationSpeed = useAppStore((s) => s.setSimulationSpeed);
   const setSimulationWindow = useAppStore((s) => s.setSimulationWindow);
+  const setSimulationShowTool = useAppStore((s) => s.setSimulationShowTool);
   const resetSimulation = useAppStore((s) => s.resetSimulation);
 
   const visiblePaths = useMemo(() => {
@@ -36,6 +42,11 @@ export function ToolSimulationControls() {
   const windowStartDist = simulationWindowStart * timeline.totalDistance;
   const windowEndDist = simulationWindowEnd * timeline.totalDistance;
 
+  const stepBy = (delta: number) => {
+    setSimulationPlaying(false);
+    setSimulationDistance(stepSimulationDistance(timeline, simulationDistance, delta));
+  };
+
   return (
     <div className="tool-simulation-controls">
       <div className="tool-simulation-header">
@@ -45,10 +56,28 @@ export function ToolSimulationControls() {
       <div className="tool-simulation-buttons">
         <button
           type="button"
+          className="btn btn-small btn-icon"
+          title="Previous point"
+          aria-label="Previous toolpath point"
+          onClick={() => stepBy(-1)}
+        >
+          ‹
+        </button>
+        <button
+          type="button"
           className="btn btn-small"
           onClick={() => setSimulationPlaying(!simulationPlaying)}
         >
           {simulationPlaying ? 'Pause' : 'Play'}
+        </button>
+        <button
+          type="button"
+          className="btn btn-small btn-icon"
+          title="Next point"
+          aria-label="Next toolpath point"
+          onClick={() => stepBy(1)}
+        >
+          ›
         </button>
         <button type="button" className="btn btn-small btn-secondary" onClick={resetSimulation}>
           Reset
@@ -65,6 +94,14 @@ export function ToolSimulationControls() {
             <option value={4}>4×</option>
             <option value={8}>8×</option>
           </select>
+        </label>
+        <label className="tool-simulation-show-tool">
+          <input
+            type="checkbox"
+            checked={simulationShowTool}
+            onChange={(e) => setSimulationShowTool(e.target.checked)}
+          />
+          Show tool
         </label>
       </div>
       <div className="tool-simulation-range-label">Preview range</div>

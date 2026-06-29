@@ -564,6 +564,7 @@ function SceneContent({
   const simulationSpeed = useAppStore((s) => s.simulationSpeed);
   const simulationWindowStart = useAppStore((s) => s.simulationWindowStart);
   const simulationWindowEnd = useAppStore((s) => s.simulationWindowEnd);
+  const simulationShowTool = useAppStore((s) => s.simulationShowTool);
   const setSimulationDistance = useAppStore((s) => s.setSimulationDistance);
   const setSimulationPlaying = useAppStore((s) => s.setSimulationPlaying);
   const activeOperationId = useAppStore((s) => s.activeOperationId);
@@ -662,7 +663,11 @@ function SceneContent({
       />
       <ToolpathLines segments={previewPaths} />
       {toolInPreviewWindow && (
-        <ToolPreview sample={simulationSample} toolDiameter={previewToolDiameter} />
+        <ToolPreview
+          sample={simulationSample}
+          toolDiameter={previewToolDiameter}
+          showTool={simulationShowTool}
+        />
       )}
       <ToolSimulationDriver
         playing={simulationPlaying}

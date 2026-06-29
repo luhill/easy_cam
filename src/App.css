@@ -694,13 +694,12 @@ body {
 .tool-simulation-controls {
   position: absolute;
   bottom: 16px;
-  left: 16px;
-  right: 16px;
-  max-width: 420px;
+  left: 12px;
+  right: 12px;
   background: rgba(26, 29, 35, 0.92);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 10px 12px;
+  padding: 10px 14px;
   z-index: 2;
   backdrop-filter: blur(6px);
 }
@@ -728,8 +727,32 @@ body {
 .tool-simulation-buttons {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 8px;
+}
+
+.btn-icon {
+  min-width: 32px;
+  padding-left: 0;
+  padding-right: 0;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.tool-simulation-show-tool {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-left: auto;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tool-simulation-show-tool input {
+  accent-color: var(--accent);
 }
 
 .tool-simulation-speed {
