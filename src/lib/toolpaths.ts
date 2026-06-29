@@ -16,12 +16,13 @@ import {
   generateOpenTrochoidPath,
   resolveGuideTraverseSign,
   resolveOrbitRotSign,
+  sampleTrochoidOrbitPoint,
   wrapPathFromIndex,
 } from './adaptiveFourZone';
 import {
-  buildBoreToSlotConnectorGuide,
+  adjustBoreRadiusToSlotWidth,
   closestPointIndexOnPath,
-  generateExpandingSpiral,
+  generateBoreAlignOrbit,
   generateHelixBorePoints,
   helixRadiusAtZ,
   isGuideOutwardCCW,
@@ -392,7 +393,6 @@ function generateAdaptiveOutlinePath(
   const trochoidStartS = findClosestSOnGuide(trochArcGuide, joinPt).s;
   const slotHelixR = resolveSlotHelixRadius(roughSlot.slotClearance);
   const helixOpts = { stockTopZ: topZ, globals };
-  const guideTraverseSign = resolveGuideTraverseSign(slotCenterGuide, settings.climbMilling);
   const outwardCCW = isGuideOutwardCCW(loop);
 
   points.push({ x: entry.x, y: entry.y, z: safeZ, rapid: true });
@@ -450,9 +450,12 @@ function generateAdaptiveOutlinePath(
       }
     }
 
+    let omitFirstOrbitSample = false;
+
     if (li === 0) {
       const bottomHelixR = helixRadiusAtZ(settings, layerZ, topZ);
       const segmentsPerRev = helixSegmentsPerRev(globals.resolution);
+      const rotDir = resolveHelixRotationDir(settings.climbMilling);
       const rotParams = trochoidParams(
         loop,
         settings,
@@ -463,52 +466,79 @@ function generateAdaptiveOutlinePath(
         helixFeed
       );
 
-      if (bottomHelixR < slotHelixR - 1e-3) {
-        const lastPt = lastPathPoint(points);
-        const startAngle = lastPt
-          ? Math.atan2(lastPt.y - entry.y, lastPt.x - entry.x)
-          : 0;
+      const lastBeforeAdjust = lastPathPoint(points);
+      const boreStartAngle = lastBeforeAdjust
+        ? Math.atan2(lastBeforeAdjust.y - entry.y, lastBeforeAdjust.x - entry.x)
+        : 0;
+
+      if (
+        !appendPoints(
+          points,
+          adjustBoreRadiusToSlotWidth(
+            entry,
+            bottomHelixR,
+            slotHelixR,
+            layerZ,
+            roughSlot.forwardIncrement,
+            rotDir,
+            segmentsPerRev,
+            boreStartAngle,
+            helixFeed
+          )
+        )
+      ) {
+        break;
+      }
+
+      const firstTrochPt = sampleTrochoidOrbitPoint(slotCenterGuide, {
+        ...rotParams,
+        startS: trochoidStartS,
+        phase: 0,
+      });
+
+      if (firstTrochPt) {
+        const lastAfterAdjust = lastPathPoint(points);
+        const orbitStartAngle = lastAfterAdjust
+          ? Math.atan2(lastAfterAdjust.y - entry.y, lastAfterAdjust.x - entry.x)
+          : boreStartAngle;
+        const targetAngle = Math.atan2(firstTrochPt.y - entry.y, firstTrochPt.x - entry.x);
+
         if (
           !appendPoints(
             points,
-            generateExpandingSpiral(
+            generateBoreAlignOrbit(
               entry,
-              bottomHelixR,
               slotHelixR,
               layerZ,
-              roughSlot.forwardIncrement,
-              resolveHelixRotationDir(settings.climbMilling),
+              orbitStartAngle,
+              targetAngle,
+              rotDir,
               segmentsPerRev,
-              startAngle,
               helixFeed
             )
           )
         ) {
           break;
         }
-      }
 
-      const lastPt = lastPathPoint(points);
-      if (lastPt) {
-        const connectorStartS = findClosestSOnGuide(trochArcGuide, lastPt).s;
-        const connectorGuide = buildBoreToSlotConnectorGuide(
-          { x: lastPt.x, y: lastPt.y, z: layerZ },
-          trochArcGuide,
-          connectorStartS,
-          trochoidStartS,
-          guideTraverseSign,
-          trochSampleSpacing,
-          layerZ
-        );
-
-        if (connectorGuide.length >= 2) {
-          const connectorTroch = generateOpenTrochoidPath(
-            connectorGuide,
-            { ...rotParams, z: layerZ, liftAmount: 0 },
-            outwardCCW
-          );
-          if (connectorTroch.length > 0) {
-            if (!appendGeneratedPath(points, connectorTroch)) break;
+        const lastAfterOrbit = lastPathPoint(points);
+        if (lastAfterOrbit) {
+          const gap = Math.hypot(lastAfterOrbit.x - firstTrochPt.x, lastAfterOrbit.y - firstTrochPt.y);
+          if (gap > 0.12) {
+            const blendGuide: LoopPoint[] = [
+              { x: lastAfterOrbit.x, y: lastAfterOrbit.y, z: layerZ },
+              { x: firstTrochPt.x, y: firstTrochPt.y, z: layerZ },
+            ];
+            const blendTroch = generateOpenTrochoidPath(
+              blendGuide,
+              { ...rotParams, z: layerZ, liftAmount: 0 },
+              outwardCCW
+            );
+            if (blendTroch.length > 0 && !appendGeneratedPath(points, blendTroch)) {
+              break;
+            }
+          } else {
+            omitFirstOrbitSample = true;
           }
         }
       }
@@ -524,7 +554,7 @@ function generateAdaptiveOutlinePath(
       true,
       startS,
       skipArc,
-      false
+      omitFirstOrbitSample
     );
     if (troch.length === 0) continue;
 

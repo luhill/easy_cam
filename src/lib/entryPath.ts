@@ -247,6 +247,140 @@ export function generateExpandingSpiralToAngle(
   return points;
 }
 
+/** 2D contracting spiral at fixed Z to narrow a bore to the slot helix radius. */
+export function generateContractingSpiral(
+  center: { x: number; y: number },
+  startRadius: number,
+  targetRadius: number,
+  z: number,
+  radialStepPerRev: number,
+  rotDir: number,
+  segmentsPerRev: number,
+  startAngle: number,
+  feedRate?: number
+): ToolpathPoint[] {
+  const startR = Math.max(startRadius, 0.05);
+  const targetR = Math.max(targetRadius, 0.05);
+  if (startR <= targetR + 1e-4 || radialStepPerRev <= 0) return [];
+
+  const segments = Math.max(8, segmentsPerRev);
+  const dr = radialStepPerRev / segments;
+  const points: ToolpathPoint[] = [];
+  let r = startR;
+  let angle = startAngle;
+
+  while (r > targetR + 1e-4) {
+    for (let i = 0; i < segments; i++) {
+      angle += rotDir * ((Math.PI * 2) / segments);
+      r = Math.max(r - dr, targetR);
+      points.push({
+        x: center.x + Math.cos(angle) * r,
+        y: center.y + Math.sin(angle) * r,
+        z,
+        feedRate,
+      });
+      if (r <= targetR + 1e-4) break;
+    }
+  }
+
+  return points;
+}
+
+/** Spiral outward or inward at bore center until the tool orbit matches slot width. */
+export function adjustBoreRadiusToSlotWidth(
+  center: { x: number; y: number },
+  currentRadius: number,
+  slotRadius: number,
+  z: number,
+  radialStepPerRev: number,
+  rotDir: number,
+  segmentsPerRev: number,
+  startAngle: number,
+  feedRate?: number
+): ToolpathPoint[] {
+  if (Math.abs(currentRadius - slotRadius) < 1e-3) return [];
+
+  if (currentRadius < slotRadius) {
+    return generateExpandingSpiral(
+      center,
+      currentRadius,
+      slotRadius,
+      z,
+      radialStepPerRev,
+      rotDir,
+      segmentsPerRev,
+      startAngle,
+      feedRate
+    );
+  }
+
+  return generateContractingSpiral(
+    center,
+    currentRadius,
+    slotRadius,
+    z,
+    radialStepPerRev,
+    rotDir,
+    segmentsPerRev,
+    startAngle,
+    feedRate
+  );
+}
+
+/** Shortest angular span in the helix rotation direction, never exceeding one revolution. */
+export function boreAlignAngleDelta(
+  startAngle: number,
+  targetAngle: number,
+  rotDir: number
+): number {
+  let delta = targetAngle - startAngle;
+  while (delta <= -Math.PI) delta += 2 * Math.PI;
+  while (delta > Math.PI) delta -= 2 * Math.PI;
+  if (Math.abs(delta) < 1e-4) return 0;
+
+  if (rotDir >= 0) {
+    if (delta < 0) delta += 2 * Math.PI;
+  } else if (delta > 0) {
+    delta -= 2 * Math.PI;
+  }
+  return delta;
+}
+
+/**
+ * Fixed-radius orbit around the bore center (≤ one revolution) until the tool
+ * reaches the angular position where the slot trochoid path begins.
+ */
+export function generateBoreAlignOrbit(
+  center: { x: number; y: number },
+  radius: number,
+  z: number,
+  startAngle: number,
+  targetAngle: number,
+  rotDir: number,
+  segmentsPerRev: number,
+  feedRate?: number
+): ToolpathPoint[] {
+  const r = Math.max(radius, 0.05);
+  const delta = boreAlignAngleDelta(startAngle, targetAngle, rotDir);
+  if (Math.abs(delta) < 1e-4) return [];
+
+  const segments = Math.max(4, Math.ceil((Math.abs(delta) / (2 * Math.PI)) * segmentsPerRev));
+  const points: ToolpathPoint[] = [];
+
+  for (let i = 1; i <= segments; i++) {
+    const t = i / segments;
+    const angle = startAngle + delta * t;
+    points.push({
+      x: center.x + Math.cos(angle) * r,
+      y: center.y + Math.sin(angle) * r,
+      z,
+      feedRate,
+    });
+  }
+
+  return points;
+}
+
 /** 2D expanding spiral at fixed Z to widen a bore to the slot helix radius. */
 export function generateExpandingSpiral(
   center: { x: number; y: number },

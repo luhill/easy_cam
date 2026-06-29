@@ -197,6 +197,33 @@ export function generateTrochoidEntrySpiral(
   return points;
 }
 
+export function sampleTrochoidOrbitPoint(
+  slotCenterGuide: LoopPoint[],
+  params: FourZoneParams & { startS: number; phase?: number }
+): ToolpathPoint | null {
+  if (slotCenterGuide.length < 3) return null;
+
+  const trochoidR = params.slotClearance / 2;
+  const sampleSpacing =
+    params.sampleSpacing ??
+    Math.min(params.forwardIncrement / 4, trochoidR / 2, 0.5);
+  const guide = buildArcLengthGuide(slotCenterGuide, sampleSpacing);
+  if (guide.totalLength <= 0) return null;
+
+  const phase = params.phase ?? 0;
+  const rotSign = params.rotSign ?? -1;
+  return sampleOrbitPoint(
+    (s) => sampleGuideAtS(guide, s),
+    params.startS,
+    phase,
+    trochoidR,
+    rotSign,
+    params.z,
+    params.partLoop,
+    params.minCenterDist
+  );
+}
+
 function generateTrochoidAlongGuide(
   totalLength: number,
   closed: boolean,
