@@ -1,0 +1,39 @@
+{
+  "name": "easy-cam",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "build:pages": "tsc -b && vite build --base /easy_cam/",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "@react-three/drei": "^10.0.6",
+    "@react-three/fiber": "^9.1.2",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "three": "^0.175.0",
+    "three-stdlib": "^2.35.16",
+    "uuid": "^11.1.0",
+    "zustand": "^5.0.3"
+  },
+  "overrides": {
+    "zustand": "$zustand"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "@types/three": "^0.175.0",
+    "@types/uuid": "^10.0.0",
+    "@vitejs/plugin-react": "^4.4.1",
+    "sharp": "^0.35.2",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.3",
+    "vite-plugin-pwa": "^0.21.2"
+  }
+}
