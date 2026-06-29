@@ -6,7 +6,12 @@ import {
   signedLoopArea2D,
 } from './geometryProcessing';
 import { resolveAdaptiveSlotGeometry } from './adaptiveOutline';
-import { buildArcLengthGuide, extractGuideArcSegment, sampleGuideAtS } from './trochoidalPath';
+import {
+  buildArcLengthGuide,
+  extractGuideArcSegment,
+  findClosestSOnGuide,
+  sampleGuideAtS,
+} from './trochoidalPath';
 import { helixSegmentsPerRev, pathSampleSpacing, type ToolpathGlobalOptions } from './toolpathConfig';
 
 /** Outside radius of the bored helix hole (mm). */
@@ -115,6 +120,52 @@ export function closestPointIndexOnPath(
     }
   }
   return bestIdx;
+}
+
+/**
+ * Lead-in centerline: straight leg from bore center to the nearest slot-center
+ * point, then along the slot center guide to the join station.
+ */
+export function buildBoreLeadInGuide(
+  boreCenter: { x: number; y: number },
+  trochArcGuide: ReturnType<typeof buildArcLengthGuide>,
+  joinS: number,
+  guideTraverseSign: number,
+  sampleSpacing: number,
+  z: number
+): LoopPoint[] {
+  const nearest = findClosestSOnGuide(trochArcGuide, boreCenter);
+  const nearestPt = sampleGuideAtS(trochArcGuide, nearest.s);
+  const points: LoopPoint[] = [{ x: boreCenter.x, y: boreCenter.y, z }];
+
+  const span = Math.hypot(nearestPt.x - boreCenter.x, nearestPt.y - boreCenter.y);
+  if (span > sampleSpacing * 0.5) {
+    const steps = Math.max(1, Math.ceil(span / sampleSpacing));
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      points.push({
+        x: boreCenter.x + (nearestPt.x - boreCenter.x) * t,
+        y: boreCenter.y + (nearestPt.y - boreCenter.y) * t,
+        z,
+      });
+    }
+  } else if (Math.hypot(points[0].x - nearestPt.x, points[0].y - nearestPt.y) > 1e-4) {
+    points.push({ x: nearestPt.x, y: nearestPt.y, z });
+  }
+
+  const arcPts = extractGuideArcSegment(
+    trochArcGuide,
+    nearest.s,
+    joinS,
+    guideTraverseSign,
+    sampleSpacing,
+    z
+  );
+  if (arcPts.length === 0) return points;
+
+  const last = points[points.length - 1];
+  const dup = Math.hypot(last.x - arcPts[0].x, last.y - arcPts[0].y) < sampleSpacing * 0.3;
+  return dup ? [...points, ...arcPts.slice(1)] : [...points, ...arcPts];
 }
 
 /**
@@ -476,6 +527,79 @@ export function generateBoreAlignOrbit(
   }
 
   return points;
+}
+
+/**
+ * Spiral around a center from one polar position to another (≤ one revolution
+ * of azimuth change in the helix rotation direction).
+ */
+export function generateSpiralBetweenPolarPositions(
+  center: { x: number; y: number },
+  startRadius: number,
+  startAngle: number,
+  endRadius: number,
+  endAngle: number,
+  z: number,
+  radialStepPerRev: number,
+  rotDir: number,
+  segmentsPerRev: number,
+  feedRate?: number
+): ToolpathPoint[] {
+  const deltaR = endRadius - startRadius;
+  const deltaAngle = boreAlignAngleDelta(startAngle, endAngle, rotDir);
+  if (Math.abs(deltaR) < 1e-4 && Math.abs(deltaAngle) < 1e-4) return [];
+
+  const revsFromR =
+    Math.abs(deltaR) > 1e-4 ? Math.ceil(Math.abs(deltaR) / radialStepPerRev) : 0;
+  const revsFromAngle =
+    Math.abs(deltaAngle) > 1e-4 ? Math.ceil(Math.abs(deltaAngle) / (2 * Math.PI)) : 0;
+  const revs = Math.max(1, revsFromR, revsFromAngle);
+  const totalSegments = revs * Math.max(8, segmentsPerRev);
+  const points: ToolpathPoint[] = [];
+
+  for (let i = 1; i <= totalSegments; i++) {
+    const t = i / totalSegments;
+    const r = startRadius + deltaR * t;
+    const angle = startAngle + deltaAngle * t;
+    points.push({
+      x: center.x + Math.cos(angle) * r,
+      y: center.y + Math.sin(angle) * r,
+      z,
+      feedRate,
+    });
+  }
+
+  return points;
+}
+
+/** Bore bottom → first lead-in trochoid sample via a spiral around the bore center. */
+export function generateBoreBottomToLeadInTransition(
+  boreCenter: { x: number; y: number },
+  boreBottomPt: { x: number; y: number },
+  firstLeadInPt: { x: number; y: number },
+  z: number,
+  radialStepPerRev: number,
+  rotDir: number,
+  segmentsPerRev: number,
+  feedRate?: number
+): ToolpathPoint[] {
+  const startR = Math.hypot(boreBottomPt.x - boreCenter.x, boreBottomPt.y - boreCenter.y);
+  const startAngle = Math.atan2(boreBottomPt.y - boreCenter.y, boreBottomPt.x - boreCenter.x);
+  const endR = Math.hypot(firstLeadInPt.x - boreCenter.x, firstLeadInPt.y - boreCenter.y);
+  const endAngle = Math.atan2(firstLeadInPt.y - boreCenter.y, firstLeadInPt.x - boreCenter.x);
+
+  return generateSpiralBetweenPolarPositions(
+    boreCenter,
+    startR,
+    startAngle,
+    endR,
+    endAngle,
+    z,
+    radialStepPerRev,
+    rotDir,
+    segmentsPerRev,
+    feedRate
+  );
 }
 
 /** 2D expanding spiral at fixed Z to widen a bore to the slot helix radius. */
