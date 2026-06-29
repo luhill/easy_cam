@@ -498,6 +498,40 @@ body {
   margin-top: 8px;
 }
 
+.viewer-webgl-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px 32px;
+  background: #0f1115;
+  color: var(--text-secondary);
+  z-index: 2;
+}
+
+.viewer-webgl-error-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.viewer-webgl-error-message {
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 520px;
+}
+
+.viewer-webgl-error-tips {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  max-width: 560px;
+}
+
 .geometry-submode,
 .settings-hint {
   font-size: 11px;

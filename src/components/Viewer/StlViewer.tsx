@@ -1,5 +1,5 @@
 import { useRef, useEffect, useMemo, useCallback, useState } from 'react';
-import { Canvas, useThree, useFrame } from '@react-three/fiber';
+import { Canvas, useThree, useFrame, type GLProps } from '@react-three/fiber';
 import { OrbitControls, Grid, GizmoHelper, GizmoViewport } from '@react-three/drei';
 import * as THREE from 'three';
 import { useAppStore } from '../../store/useAppStore';
@@ -48,6 +48,8 @@ import { ToolOriginMarker } from './ToolOriginMarker';
 import { EntryPointMarker, StockTopPlane } from './EntryPointMarker';
 import { resolveAdaptiveEntryPoint } from '../../lib/adaptiveOutline';
 import { loadStlGeometry } from '../../lib/stlLoader';
+import { createViewerRenderer, detectWebGLSupport } from '../../lib/webglSupport';
+import { WebGLFallback } from './WebGLFallback';
 
 function fitCameraToPartBounds(camera: THREE.PerspectiveCamera, bounds: PartBounds | null): void {
   if (!bounds) {
@@ -741,9 +743,40 @@ export function StlViewer() {
   const [indexStatus, setIndexStatus] = useState<{ ready: boolean; regions?: number }>({
     ready: false,
   });
+  const [webglReady, setWebglReady] = useState<boolean | null>(null);
+  const [webglError, setWebglError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const result = detectWebGLSupport();
+    setWebglReady(result.supported);
+    setWebglError(result.supported ? null : (result.message ?? 'WebGL is not available.'));
+  }, []);
 
   const handleIndexReady = useCallback((ready: boolean, regionCount?: number) => {
     setIndexStatus({ ready, regions: regionCount });
+  }, []);
+
+  const handleWebglCreated = useCallback(({ gl }: { gl: THREE.WebGLRenderer }) => {
+    const canvas = gl.domElement;
+    const onLost = (event: Event) => {
+      event.preventDefault();
+      setWebglReady(false);
+      setWebglError(
+        'WebGL context was lost. Reload the page or close other 3D tabs, then try again.'
+      );
+    };
+    canvas.addEventListener('webglcontextlost', onLost, false);
+  }, []);
+
+  const handleWebglRetry = useCallback(() => {
+    const result = detectWebGLSupport();
+    if (result.supported) {
+      setWebglReady(true);
+      setWebglError(null);
+      return;
+    }
+    setWebglReady(false);
+    setWebglError(result.message ?? 'WebGL is still unavailable.');
   }, []);
 
   const selectionHint = getSelectionHint(activeOperationType, selectionSubMode);
@@ -756,17 +789,25 @@ export function StlViewer() {
           <p className="viewer-axis-hint">Z+ up · build plate at Z=0 · top of part at +Z</p>
         </div>
       )}
-      {stlUrl && !indexStatus.ready && (
+      {stlUrl && !indexStatus.ready && webglReady && (
         <div className="viewer-processing">
           <p>Analyzing mesh geometry…</p>
         </div>
       )}
-      <Canvas
-        camera={{ fov: 45, near: 0.1, far: 1000, position: [60, -60, 60], up: [0, 0, 1] }}
-        style={{ background: '#0f1115', cursor: selectionMode ? 'crosshair' : 'default' }}
-      >
-        <SceneContent onIndexReady={handleIndexReady} />
-      </Canvas>
+      {webglReady === false && (
+        <WebGLFallback message={webglError ?? 'WebGL is not available.'} onRetry={handleWebglRetry} />
+      )}
+      {webglReady && (
+        <Canvas
+          gl={createViewerRenderer as GLProps}
+          dpr={[1, 1.5]}
+          camera={{ fov: 45, near: 0.1, far: 1000, position: [60, -60, 60], up: [0, 0, 1] }}
+          style={{ background: '#0f1115', cursor: selectionMode ? 'crosshair' : 'default' }}
+          onCreated={handleWebglCreated}
+        >
+          <SceneContent onIndexReady={handleIndexReady} />
+        </Canvas>
+      )}
       {selectionMode && indexStatus.ready && (
         <div className="selection-hint">{selectionHint} — right-drag to orbit</div>
       )}
