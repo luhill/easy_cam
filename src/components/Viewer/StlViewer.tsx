@@ -16,7 +16,6 @@ import {
 import {
   finalizePartPlacement,
   orientFaceToBottom,
-  processStlGeometry,
   loopCentroid,
   partDimensionsFromBounds,
   type PartBounds,
@@ -47,9 +46,10 @@ import { SelectionLoopLines } from './SelectionLoopLines';
 import { ToolOriginMarker } from './ToolOriginMarker';
 import { EntryPointMarker, StockTopPlane } from './EntryPointMarker';
 import { resolveAdaptiveEntryPoint } from '../../lib/adaptiveOutline';
-import { loadStlGeometry } from '../../lib/stlLoader';
 import { createViewerRenderer, detectWebGLSupport } from '../../lib/webglSupport';
 import { WebGLFallback } from './WebGLFallback';
+import { Viewer2D } from './Viewer2D';
+import { useProcessedStl } from '../../hooks/useProcessedStl';
 
 function fitCameraToPartBounds(camera: THREE.PerspectiveCamera, bounds: PartBounds | null): void {
   if (!bounds) {
@@ -86,8 +86,6 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
   const selectionSubMode = useAppStore((s) => s.selectionSubMode);
   const setSelectionSubMode = useAppStore((s) => s.setSelectionSubMode);
   const setSelectionMode = useAppStore((s) => s.setSelectionMode);
-  const setPartBounds = useAppStore((s) => s.setPartBounds);
-  const setToolOriginFromBounds = useSettingsStore((s) => s.setToolOriginFromBounds);
   const regenerateToolpaths = useAppStore((s) => s.regenerateToolpaths);
 
   const activeGeometry = useAppStore((s) => {
@@ -161,15 +159,6 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
   selectionModeRef.current = selectionMode;
   selectionSubModeRef.current = selectionSubMode;
   activeOperationTypeRef.current = activeOperationType;
-
-  const boundsSyncedKeyRef = useRef(-1);
-
-  useEffect(() => {
-    if (boundsSyncedKeyRef.current === meshKey) return;
-    boundsSyncedKeyRef.current = meshKey;
-    setPartBounds(partBounds);
-    setToolOriginFromBounds(partBounds);
-  }, [meshKey, partBounds, setPartBounds, setToolOriginFromBounds]);
 
   useEffect(() => {
     onIndexReady(false);
@@ -555,66 +544,17 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
   );
 }
 
-function LoadedStl({
-  url,
-  onIndexReady,
-}: {
-  url: string;
-  onIndexReady: (ready: boolean, regionCount?: number) => void;
-}) {
-  const [processedMesh, setProcessedMesh] = useState<ProcessedMesh | null>(null);
-  const [meshKey, setMeshKey] = useState(0);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setProcessedMesh(null);
-    setLoadError(null);
-    onIndexReady(false);
-
-    loadStlGeometry(url)
-      .then((rawGeometry) => {
-        if (cancelled) return;
-        const mesh = processStlGeometry(rawGeometry);
-        createFaceColorAttribute(mesh.geometry);
-        setProcessedMesh(mesh);
-        setMeshKey((k) => k + 1);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        console.error('STL load failed:', error);
-        setLoadError(error instanceof Error ? error.message : 'Failed to load STL');
-        onIndexReady(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [url, onIndexReady]);
-
-  const handleMeshUpdate = useCallback((mesh: ProcessedMesh) => {
-    setProcessedMesh(mesh);
-    setMeshKey((k) => k + 1);
-  }, []);
-
-  if (loadError || !processedMesh) return null;
-
-  return (
-    <StlMesh
-      processedMesh={processedMesh}
-      meshKey={meshKey}
-      onMeshUpdate={handleMeshUpdate}
-      onIndexReady={onIndexReady}
-    />
-  );
-}
-
 function SceneContent({
+  processedMesh,
+  meshKey,
+  onMeshUpdate,
   onIndexReady,
 }: {
+  processedMesh: ProcessedMesh;
+  meshKey: number;
+  onMeshUpdate: (mesh: ProcessedMesh) => void;
   onIndexReady: (ready: boolean, regionCount?: number) => void;
 }) {
-  const stlUrl = useAppStore((s) => s.stlUrl);
   const toolpaths = useAppStore((s) => s.toolpaths);
   const operations = useAppStore((s) => s.operations);
   const selectionMode = useAppStore((s) => s.selectionMode);
@@ -636,7 +576,7 @@ function SceneContent({
 
   useEffect(() => {
     fitCameraToPartBounds(camera as THREE.PerspectiveCamera, partBounds);
-  }, [camera, stlUrl, boundsKey, partBounds]);
+  }, [camera, boundsKey, partBounds]);
 
   const visiblePaths = useMemo(() => {
     const visibleIds = new Set(
@@ -684,7 +624,12 @@ function SceneContent({
         rotation={[Math.PI / 2, 0, 0]}
         position={[0, 0, 0]}
       />
-      {stlUrl && <LoadedStl key={stlUrl} url={stlUrl} onIndexReady={onIndexReady} />}
+      <StlMesh
+        processedMesh={processedMesh}
+        meshKey={meshKey}
+        onMeshUpdate={onMeshUpdate}
+        onIndexReady={onIndexReady}
+      />
       <ToolpathLines segments={visiblePaths} />
       <ToolPreview sample={simulationSample} toolDiameter={previewToolDiameter} />
       <ToolSimulationDriver
@@ -732,6 +677,9 @@ function SceneContent({
 
 export function StlViewer() {
   const stlUrl = useAppStore((s) => s.stlUrl);
+  const partBounds = useAppStore((s) => s.partBounds);
+  const toolpaths = useAppStore((s) => s.toolpaths);
+  const operations = useAppStore((s) => s.operations);
   const selectionMode = useAppStore((s) => s.selectionMode);
   const selectionSubMode = useAppStore((s) => s.selectionSubMode);
   const activeOperationType = useAppStore((s) => {
@@ -739,6 +687,13 @@ export function StlViewer() {
     if (!id) return null;
     return s.operations.find((o) => o.id === id)?.type ?? null;
   });
+
+  const { processedMesh, meshKey, loading, loadError, updateMesh } = useProcessedStl(stlUrl);
+
+  const visiblePaths = useMemo(() => {
+    const visibleIds = new Set(operations.filter((o) => o.visible).map((o) => o.id));
+    return toolpaths.filter((tp) => visibleIds.has(tp.operationId));
+  }, [toolpaths, operations]);
 
   const [indexStatus, setIndexStatus] = useState<{ ready: boolean; regions?: number }>({
     ready: false,
@@ -751,6 +706,12 @@ export function StlViewer() {
     setWebglReady(result.supported);
     setWebglError(result.supported ? null : (result.message ?? 'WebGL is not available.'));
   }, []);
+
+  useEffect(() => {
+    if (webglReady === false && processedMesh) {
+      setIndexStatus({ ready: true });
+    }
+  }, [webglReady, processedMesh]);
 
   const handleIndexReady = useCallback((ready: boolean, regionCount?: number) => {
     setIndexStatus({ ready, regions: regionCount });
@@ -789,15 +750,34 @@ export function StlViewer() {
           <p className="viewer-axis-hint">Z+ up · build plate at Z=0 · top of part at +Z</p>
         </div>
       )}
-      {stlUrl && !indexStatus.ready && webglReady && (
+      {stlUrl && loading && (
+        <div className="viewer-processing">
+          <p>Loading part…</p>
+        </div>
+      )}
+      {loadError && (
+        <div className="viewer-processing">
+          <p>{loadError}</p>
+        </div>
+      )}
+      {stlUrl && !loading && !loadError && webglReady && !indexStatus.ready && (
         <div className="viewer-processing">
           <p>Analyzing mesh geometry…</p>
         </div>
       )}
       {webglReady === false && (
-        <WebGLFallback message={webglError ?? 'WebGL is not available.'} onRetry={handleWebglRetry} />
+        <div className="viewer-fallback-layout">
+          <WebGLFallback
+            message={webglError ?? 'WebGL is not available.'}
+            onRetry={handleWebglRetry}
+            show2dHint={!!processedMesh}
+          />
+          {processedMesh && partBounds && (
+            <Viewer2D bounds={partBounds} toolpaths={visiblePaths} />
+          )}
+        </div>
       )}
-      {webglReady && (
+      {webglReady && processedMesh && (
         <Canvas
           gl={createViewerRenderer as GLProps}
           dpr={[1, 1.5]}
@@ -805,10 +785,15 @@ export function StlViewer() {
           style={{ background: '#0f1115', cursor: selectionMode ? 'crosshair' : 'default' }}
           onCreated={handleWebglCreated}
         >
-          <SceneContent onIndexReady={handleIndexReady} />
+          <SceneContent
+            processedMesh={processedMesh}
+            meshKey={meshKey}
+            onMeshUpdate={updateMesh}
+            onIndexReady={handleIndexReady}
+          />
         </Canvas>
       )}
-      {selectionMode && indexStatus.ready && (
+      {selectionMode && webglReady && indexStatus.ready && (
         <div className="selection-hint">{selectionHint} — right-drag to orbit</div>
       )}
       <ToolSimulationControls />
