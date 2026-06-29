@@ -189,6 +189,13 @@ body {
   gap: 8px;
 }
 
+.file-upload-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .file-name {
   max-width: 180px;
   overflow: hidden;

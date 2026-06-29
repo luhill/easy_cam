@@ -4,7 +4,8 @@ import { OPERATION_TEMPLATES } from '../types/operations';
 
 export function FileUpload() {
   const inputRef = useRef<HTMLInputElement>(null);
-  const { stlFile, setStlFile, clearStl } = useAppStore();
+  const { stlFileName, stlUrl, setStlFile, loadDefaultStl, clearStl } = useAppStore();
+  const isDev = import.meta.env.DEV;
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -22,19 +23,26 @@ export function FileUpload() {
         onChange={handleFile}
         hidden
       />
-      {stlFile ? (
+      {stlUrl ? (
         <div className="file-info">
-          <span className="file-name" title={stlFile.name}>
-            {stlFile.name}
+          <span className="file-name" title={stlFileName ?? 'STL model'}>
+            {stlFileName ?? 'STL model'}
           </span>
           <button className="btn-icon" onClick={clearStl} title="Remove file">
             ✕
           </button>
         </div>
       ) : (
-        <button className="btn btn-secondary" onClick={() => inputRef.current?.click()}>
-          Upload STL
-        </button>
+        <div className="file-upload-actions">
+          <button className="btn btn-secondary" onClick={() => inputRef.current?.click()}>
+            Upload STL
+          </button>
+          {isDev && (
+            <button className="btn btn-secondary" onClick={loadDefaultStl} title="Load bundled sample part">
+              Load sample
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

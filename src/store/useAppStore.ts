@@ -14,10 +14,16 @@ import {
 } from '../types/operations';
 import { clampOperationSettings } from '../lib/settingLimits';
 import { generateToolpaths } from '../lib/toolpaths';
+import { DEFAULT_DEV_STL_NAME, DEFAULT_DEV_STL_URL } from '../lib/defaultStl';
+
+function revokeStlUrl(url: string | null): void {
+  if (url?.startsWith('blob:')) URL.revokeObjectURL(url);
+}
 
 interface AppState {
   stlFile: File | null;
   stlUrl: string | null;
+  stlFileName: string | null;
   operations: Operation[];
   activeOperationId: string | null;
   selectionMode: boolean;
@@ -29,6 +35,7 @@ interface AppState {
   simulationSpeed: number;
 
   setStlFile: (file: File) => void;
+  loadDefaultStl: () => void;
   clearStl: () => void;
   addOperation: (type: OperationType) => void;
   removeOperation: (id: string) => void;
@@ -56,6 +63,7 @@ interface AppState {
 export const useAppStore = create<AppState>((set, get) => ({
   stlFile: null,
   stlUrl: null,
+  stlFileName: null,
   operations: [],
   activeOperationId: null,
   selectionMode: false,
@@ -68,17 +76,42 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setStlFile: (file) => {
     const prev = get().stlUrl;
-    if (prev) URL.revokeObjectURL(prev);
+    revokeStlUrl(prev);
     const url = URL.createObjectURL(file);
-    set({ stlFile: file, stlUrl: url, operations: [], toolpaths: [], partBounds: null, simulationDistance: 0, simulationPlaying: false });
+    set({
+      stlFile: file,
+      stlUrl: url,
+      stlFileName: file.name,
+      operations: [],
+      toolpaths: [],
+      partBounds: null,
+      simulationDistance: 0,
+      simulationPlaying: false,
+    });
+  },
+
+  loadDefaultStl: () => {
+    const prev = get().stlUrl;
+    revokeStlUrl(prev);
+    set({
+      stlFile: null,
+      stlUrl: DEFAULT_DEV_STL_URL,
+      stlFileName: DEFAULT_DEV_STL_NAME,
+      operations: [],
+      toolpaths: [],
+      partBounds: null,
+      simulationDistance: 0,
+      simulationPlaying: false,
+    });
   },
 
   clearStl: () => {
     const prev = get().stlUrl;
-    if (prev) URL.revokeObjectURL(prev);
+    revokeStlUrl(prev);
     set({
       stlFile: null,
       stlUrl: null,
+      stlFileName: null,
       operations: [],
       toolpaths: [],
       partBounds: null,
