@@ -27,6 +27,7 @@ export interface FourZoneParams {
   /** Skip this much arc length before cutting (e.g. connector already cleared join). */
   skipArcLength?: number;
   feedRate?: number;
+  sampleSpacing?: number;
 }
 
 const ANGLE_STEP = (4 * Math.PI) / 180;
@@ -175,7 +176,9 @@ export function generateFourZoneAdaptivePath(
   if (slotCenterGuide.length < 3) return [];
 
   const trochoidR = params.slotClearance / 2;
-  const sampleSpacing = Math.min(params.forwardIncrement / 4, trochoidR / 2, 0.5);
+  const sampleSpacing =
+    params.sampleSpacing ??
+    Math.min(params.forwardIncrement / 4, trochoidR / 2, 0.5);
   const guide = buildArcLengthGuide(slotCenterGuide, sampleSpacing);
   if (guide.totalLength <= 0) return [];
 
@@ -196,7 +199,9 @@ export function generateOpenTrochoidPath(
   if (openGuide.length < 2) return [];
 
   const trochoidR = params.slotClearance / 2;
-  const sampleSpacing = Math.min(params.forwardIncrement / 4, trochoidR / 2, 0.5);
+  const sampleSpacing =
+    params.sampleSpacing ??
+    Math.min(params.forwardIncrement / 4, trochoidR / 2, 0.5);
   const guide = buildOpenArcLengthGuide(openGuide, sampleSpacing, outwardCCW);
   if (guide.totalLength <= 0) return [];
 

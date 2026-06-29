@@ -16,6 +16,7 @@ import {
 import { clampOperationSettings } from '../lib/settingLimits';
 import { generateToolpaths } from '../lib/toolpaths';
 import { DEFAULT_DEV_STL_NAME, DEFAULT_DEV_STL_URL } from '../lib/defaultStl';
+import { useSettingsStore } from './useSettingsStore';
 
 function revokeStlUrl(url: string | null): void {
   if (url?.startsWith('blob:')) URL.revokeObjectURL(url);
@@ -250,7 +251,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   regenerateToolpaths: () => {
     const { operations, partBounds } = get();
-    const toolpaths = generateToolpaths(operations, partBounds);
+    const { safeHeight, toolpathResolution } = useSettingsStore.getState();
+    const toolpaths = generateToolpaths(operations, partBounds, {
+      safeHeight,
+      resolution: toolpathResolution,
+    });
     set({ toolpaths, simulationDistance: 0, simulationPlaying: false });
   },
 

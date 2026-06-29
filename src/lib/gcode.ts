@@ -9,7 +9,7 @@ export interface GcodeTemplateVars {
   spindleSpeed: number;
   feedRate: number;
   plungeRate: number;
-  clearance: number;
+  safeHeight: number;
   operationName: string;
 }
 
@@ -19,7 +19,9 @@ export function applyGcodeTemplate(
 ): string[] {
   const substituted = template.replace(/\{(\w+)\}/g, (_, key: string) => {
     const value = vars[key as keyof GcodeTemplateVars];
-    return value !== undefined ? String(value) : `{${key}}`;
+    if (value !== undefined) return String(value);
+    if (key === 'clearance' && vars.safeHeight !== undefined) return String(vars.safeHeight);
+    return `{${key}}`;
   });
 
   return substituted
@@ -33,7 +35,8 @@ export function generateGcode(
   toolpaths: ToolpathSegment[],
   templates: GcodeTemplates,
   toolOrigin: ToolOrigin = { x: 0, y: 0, z: DEFAULT_WCS_Z_ABOVE_STOCK },
-  stockTopWorldZ = 0
+  stockTopWorldZ = 0,
+  safeHeight = 10
 ): string {
   const enabledOps = operations.filter((op) => op.enabled);
   if (enabledOps.length === 0) {
@@ -44,7 +47,7 @@ export function generateGcode(
     '; Easy CAM G-code',
     `; Generated ${new Date().toISOString()}`,
     '',
-    ...applyGcodeTemplate(templates.startGcode, {}),
+    ...applyGcodeTemplate(templates.startGcode, { safeHeight }),
     '',
   ];
 
@@ -62,7 +65,7 @@ export function generateGcode(
       spindleSpeed: settings.spindleSpeed,
       feedRate: settings.feedRate,
       plungeRate: settings.plungeRate,
-      clearance: settings.clearance,
+      safeHeight,
       operationName: op.name,
     };
 
@@ -86,7 +89,7 @@ export function generateGcode(
       lines.push(`M3 S${settings.spindleSpeed} ; spindle on`);
     }
 
-    lines.push(`G0 Z${settings.clearance.toFixed(3)} ; safe Z`);
+    lines.push(`G0 Z${safeHeight.toFixed(3)} ; safe Z`);
 
     for (const pt of path.points) {
       const x = pt.x - toolOrigin.x;
@@ -101,12 +104,12 @@ export function generateGcode(
       }
     }
 
-    lines.push(`G0 Z${settings.clearance.toFixed(3)} ; retract`);
+    lines.push(`G0 Z${safeHeight.toFixed(3)} ; retract`);
     lines.push('M5 ; spindle off');
     lines.push('');
   }
 
-  lines.push(...applyGcodeTemplate(templates.endGcode, {}));
+  lines.push(...applyGcodeTemplate(templates.endGcode, { safeHeight }));
   return lines.join('\n');
 }
 

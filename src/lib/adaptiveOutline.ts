@@ -2,7 +2,7 @@ import type { LoopPoint } from '../types/operations';
 import type { OperationDefaults } from '../types/operations';
 import { offsetLoop2DMinkowski, distanceToLoop2D, closestPointOnLoop2D } from './geometryProcessing';
 import { adaptiveForwardIncrement } from './trochoidalPath';
-import { ensureEntryOutsidePart, minimumEntryStandoff } from './entryPath';
+import { ensureEntryOutsidePart, minimumEntryCenterDist } from './entryPath';
 
 export interface AdaptiveSlotGeometry {
   toolDiameter: number;
@@ -65,7 +65,7 @@ export function resolveAdaptiveSlotGeometry(
   };
 }
 
-/** Default helix entry in stock outside the adaptive slot (when user has not picked one). */
+/** Default helix entry: bore outer edge tangent to slot outer wall. */
 export function computeDefaultEntryPoint(
   partLoop: LoopPoint[],
   settings: OperationDefaults
@@ -74,27 +74,27 @@ export function computeDefaultEntryPoint(
 
   const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
   const guide = offsetLoop2DMinkowski(partLoop, slot.slotCenterOffset);
-  const minStandoff = minimumEntryStandoff(settings);
+  const centerDist = minimumEntryCenterDist(settings);
 
   let bestGuide = guide[0];
-  let bestDist = -Infinity;
+  let bestScore = Infinity;
   for (const p of guide) {
     const d = distanceToLoop2D(p.x, p.y, partLoop);
-    if (d > bestDist) {
-      bestDist = d;
+    const score = Math.abs(d - centerDist);
+    if (score < bestScore) {
+      bestScore = score;
       bestGuide = p;
     }
   }
 
   const outward = closestPointOnLoop2D(bestGuide.x, bestGuide.y, partLoop);
-  const extra = Math.max(settings.clearance, 2);
   return ensureEntryOutsidePart(
     partLoop,
     {
-      x: bestGuide.x + outward.outX * extra,
-      y: bestGuide.y + outward.outY * extra,
+      x: outward.x + outward.outX * centerDist,
+      y: outward.y + outward.outY * centerDist,
     },
-    minStandoff
+    centerDist * 0.98
   );
 }
 
@@ -103,9 +103,9 @@ export function resolveAdaptiveEntryPoint(
   settings: OperationDefaults,
   entry?: { x: number; y: number } | null
 ): { x: number; y: number } {
-  const minStandoff = minimumEntryStandoff(settings);
+  const minDist = minimumEntryCenterDist(settings);
   if (entry) {
-    return ensureEntryOutsidePart(partLoop, entry, minStandoff);
+    return ensureEntryOutsidePart(partLoop, entry, minDist);
   }
   return computeDefaultEntryPoint(partLoop, settings);
 }

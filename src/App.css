@@ -480,6 +480,12 @@ body {
   outline-offset: -2px;
 }
 
+.global-cam-settings {
+  flex-shrink: 0;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
 .part-setup {
   flex-shrink: 0;
   padding: 12px;

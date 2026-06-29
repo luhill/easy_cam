@@ -13,7 +13,6 @@ export interface OperationDefaults {
   stepDown: number;
   stepover: number;
   spindleSpeed: number;
-  clearance: number;
   /** Offset from part bottom for final cut (mm). + = above bottom, − = below. */
   depthOffset: number;
   /** Additional radial stock offset beyond tool radius (mm); negative allows finishing inside the line */
@@ -22,10 +21,12 @@ export interface OperationDefaults {
   slotWidthPercent: number;
   /** Adaptive outline: micro-retract / Z lift between trochoid passes (mm); 0 = no lift */
   liftAmount: number;
-  /** Adaptive outline: helix / lead-in circle diameter as % of tool diameter */
-  helixDiameterPercent: number;
-  /** Adaptive outline: helix ramp angle (degrees) */
+  /** Adaptive outline: outside bore diameter as % of tool diameter (150% ≈ former 50% helix ⌀) */
+  boreDiameterPercent: number;
+  /** Adaptive outline: helix ramp pitch angle (degrees) */
   helixAngleDeg: number;
+  /** Adaptive outline: bore wall taper below stock top (degrees); widens toward Z=0 */
+  boreTaperAngleDeg: number;
   /** Adaptive outline: feed rate for helix bore and toroidal lead-in (mm/min) */
   helixFeedRate: number;
   /** Adaptive outline: leave 0.1 mm on walls then run a final outline pass */
@@ -143,13 +144,13 @@ export const DEFAULT_SETTINGS: OperationDefaults = {
   stepDown: 2,
   stepover: 7,
   spindleSpeed: 10000,
-  clearance: 5,
   depthOffset: 0,
   radialOffset: 0,
   slotWidthPercent: 150,
   liftAmount: 0,
-  helixDiameterPercent: 50,
+  boreDiameterPercent: 150,
   helixAngleDeg: 1.5,
+  boreTaperAngleDeg: 2,
   helixFeedRate: 350,
   finishingPass: false,
   climbMilling: true,

@@ -2,6 +2,10 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { PartBounds, ToolOrigin } from '../lib/geometryProcessing';
 import { DEFAULT_WCS_Z_ABOVE_STOCK } from '../lib/cutDepth';
+import {
+  DEFAULT_SAFE_HEIGHT,
+  DEFAULT_TOOLPATH_RESOLUTION,
+} from '../lib/toolpathConfig';
 
 export interface GcodeTemplates {
   startGcode: string;
@@ -35,11 +39,15 @@ interface SettingsState {
   gcodeTemplates: GcodeTemplates;
   toolOrigin: ToolOrigin;
   toolOriginAuto: boolean;
+  safeHeight: number;
+  toolpathResolution: number;
   setGcodeTemplate: (key: keyof GcodeTemplates, value: string) => void;
   resetGcodeTemplates: () => void;
   setToolOrigin: (origin: Partial<ToolOrigin>) => void;
   setToolOriginFromBounds: (bounds: PartBounds) => void;
   setToolOriginAuto: (auto: boolean) => void;
+  setSafeHeight: (mm: number) => void;
+  setToolpathResolution: (factor: number) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -48,6 +56,8 @@ export const useSettingsStore = create<SettingsState>()(
       gcodeTemplates: DEFAULT_GCODE_TEMPLATES,
       toolOrigin: { x: 0, y: 0, z: DEFAULT_WCS_Z_ABOVE_STOCK },
       toolOriginAuto: true,
+      safeHeight: DEFAULT_SAFE_HEIGHT,
+      toolpathResolution: DEFAULT_TOOLPATH_RESOLUTION,
       setGcodeTemplate: (key, value) =>
         set((state) => ({
           gcodeTemplates: { ...state.gcodeTemplates, [key]: value },
@@ -72,6 +82,15 @@ export const useSettingsStore = create<SettingsState>()(
           return { toolOrigin: next };
         }),
       setToolOriginAuto: (auto) => set({ toolOriginAuto: auto }),
+      setSafeHeight: (mm) =>
+        set({ safeHeight: Math.max(0, Number.isFinite(mm) ? mm : DEFAULT_SAFE_HEIGHT) }),
+      setToolpathResolution: (factor) =>
+        set({
+          toolpathResolution: Math.min(
+            8,
+            Math.max(0.5, Number.isFinite(factor) ? factor : DEFAULT_TOOLPATH_RESOLUTION)
+          ),
+        }),
     }),
     { name: 'easy-cam-gcode-settings' }
   )

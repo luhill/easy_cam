@@ -5,12 +5,36 @@ import {
   pointInPolygon2D,
   signedLoopArea2D,
 } from './geometryProcessing';
+import { resolveAdaptiveSlotGeometry } from './adaptiveOutline';
 import { buildArcLengthGuide, sampleGuideAtS } from './trochoidalPath';
+import { helixSegmentsPerRev, pathSampleSpacing, type ToolpathGlobalOptions } from './toolpathConfig';
 
-/** Helix circle radius from diameter % of tool. */
-export function resolveHelixRadius(settings: OperationDefaults): number {
+/** Outside radius of the bored helix hole (mm). */
+export function resolveBoreOuterRadius(settings: OperationDefaults): number {
   const toolD = Math.max(settings.toolDiameter, 0.1);
-  return (settings.helixDiameterPercent / 100) * toolD / 2;
+  return (settings.boreDiameterPercent / 100) * toolD * 0.5;
+}
+
+/** Tool-center helix radius at stock top (max bore diameter). */
+export function resolveHelixRadius(settings: OperationDefaults): number {
+  const toolR = Math.max(settings.toolDiameter, 0.1) / 2;
+  return Math.max(resolveBoreOuterRadius(settings) - toolR, 0.05);
+}
+
+/** Tool-center helix radius at depth; taper applies below stock top (z < stockTopZ). */
+export function helixRadiusAtZ(
+  settings: OperationDefaults,
+  z: number,
+  stockTopZ: number
+): number {
+  const maxHelixR = resolveHelixRadius(settings);
+  if (z >= stockTopZ - 1e-6) return maxHelixR;
+
+  const depthBelowTop = stockTopZ - z;
+  const taperRad = (settings.boreTaperAngleDeg * Math.PI) / 180;
+  const boreOuterAtZ = resolveBoreOuterRadius(settings) - depthBelowTop * Math.tan(taperRad);
+  const toolR = Math.max(settings.toolDiameter, 0.1) / 2;
+  return Math.max(boreOuterAtZ - toolR, 0.05);
 }
 
 /** Pitch from helix angle for an arbitrary helix radius. */
@@ -87,8 +111,9 @@ export function buildEntryConnectorGuide(
   slotCenterGuide: LoopPoint[],
   joinS: number,
   _guideTraverseSign: number,
-  sampleSpacing = 0.4
+  globals: ToolpathGlobalOptions
 ): LoopPoint[] {
+  const sampleSpacing = pathSampleSpacing(globals.resolution);
   const guide = buildArcLengthGuide(slotCenterGuide, sampleSpacing);
   if (guide.totalLength <= 0) {
     return [{ x: entry.x, y: entry.y, z: 0 }];
@@ -116,15 +141,72 @@ export function buildEntryConnectorGuide(
   return points;
 }
 
-export function minimumEntryStandoff(settings: OperationDefaults): number {
-  const toolR = Math.max(settings.toolDiameter, 0.1) / 2;
-  const radialOffset = settings.radialOffset ?? 0;
-  const slotWidthPercent = Math.min(Math.max(settings.slotWidthPercent ?? 150, 125), 200);
-  const slotWidth = settings.toolDiameter * (slotWidthPercent / 100);
-  const maxCenterDist = radialOffset + slotWidth - toolR;
-  return maxCenterDist + Math.max(settings.clearance, 1);
+/**
+ * Minimum distance from part outline to bore center so the outside of the bore
+ * is tangent to the slot outer edge (radial offset + slot width).
+ */
+export function minimumEntryCenterDist(settings: OperationDefaults): number {
+  const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
+  const boreOuterR = resolveBoreOuterRadius(settings);
+  const slotOuterEdge = slot.radialOffset + slot.slotWidth;
+  return Math.max(slotOuterEdge - boreOuterR, slot.minCenterDist);
 }
 
 export function isGuideOutwardCCW(partLoop: LoopPoint[]): boolean {
   return signedLoopArea2D(partLoop) >= 0;
+}
+
+export interface HelixBoreOptions {
+  stockTopZ: number;
+  /** Apply bore taper below stock top */
+  taper: boolean;
+  helixR?: number;
+  globals: ToolpathGlobalOptions;
+}
+
+/** Helical bore from startZ down to targetZ. */
+export function generateHelixBorePoints(
+  center: { x: number; y: number },
+  settings: OperationDefaults,
+  startZ: number,
+  targetZ: number,
+  options: HelixBoreOptions
+): ToolpathPoint[] {
+  const feedRate = settings.helixFeedRate;
+  const rotDir = resolveHelixRotationDir(settings.climbMilling);
+  const segments = helixSegmentsPerRev(options.globals.resolution);
+  const defaultHelixR = options.helixR ?? resolveHelixRadius(settings);
+  const points: ToolpathPoint[] = [];
+
+  let z = startZ;
+  let angle = 0;
+  let iterations = 0;
+  const maxIterations = 500 * segments;
+
+  while (z > targetZ + 1e-6 && iterations < maxIterations) {
+    const helixR =
+      options.taper && z < options.stockTopZ - 1e-6
+        ? helixRadiusAtZ(settings, z, options.stockTopZ)
+        : defaultHelixR;
+    const pitch = helixPitchForRadius(helixR, settings.helixAngleDeg);
+
+    for (let i = 0; i < segments; i++) {
+      angle += rotDir * ((Math.PI * 2) / segments);
+      z = Math.max(z - pitch / segments, targetZ);
+      const r =
+        options.taper && z < options.stockTopZ - 1e-6
+          ? helixRadiusAtZ(settings, z, options.stockTopZ)
+          : defaultHelixR;
+      points.push({
+        x: center.x + Math.cos(angle) * r,
+        y: center.y + Math.sin(angle) * r,
+        z,
+        feedRate,
+      });
+      iterations++;
+      if (z <= targetZ + 1e-6) break;
+    }
+  }
+
+  return points;
 }

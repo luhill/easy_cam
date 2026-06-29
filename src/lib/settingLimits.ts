@@ -16,13 +16,13 @@ export const SETTING_LIMITS: Record<
   stepDown: { min: 0.05, max: 50 },
   stepover: { min: 1, max: 100 },
   spindleSpeed: { min: 100, max: 30000 },
-  clearance: { min: 0, max: 100 },
   depthOffset: { min: -50, max: 50 },
   radialOffset: { min: -50, max: 50 },
   slotWidthPercent: { min: 125, max: 200 },
   liftAmount: { min: 0, max: 20 },
-  helixDiameterPercent: { min: 25, max: 400 },
+  boreDiameterPercent: { min: 100, max: 400 },
   helixAngleDeg: { min: 0.5, max: 45 },
+  boreTaperAngleDeg: { min: 0, max: 15 },
   helixFeedRate: { min: 1, max: 5000 },
 };
 
@@ -38,10 +38,23 @@ export function clampSettingValue(
 }
 
 export function clampOperationSettings(
-  settings: Partial<OperationDefaults> & { depth?: number }
+  settings: Partial<OperationDefaults> & {
+    depth?: number;
+    clearance?: number;
+    helixDiameterPercent?: number;
+  }
 ): OperationDefaults {
-  const { depth: _legacyDepth, ...rest } = settings;
-  const merged = { ...DEFAULT_SETTINGS, ...rest };
+  const { depth: _legacyDepth, clearance: _legacyClearance, helixDiameterPercent, ...rest } =
+    settings;
+  const merged = { ...DEFAULT_SETTINGS, ...rest } as OperationDefaults & {
+    helixDiameterPercent?: number;
+  };
+  if (
+    helixDiameterPercent !== undefined &&
+    rest.boreDiameterPercent === undefined
+  ) {
+    merged.boreDiameterPercent = helixDiameterPercent * 3;
+  }
   for (const key of Object.keys(SETTING_LIMITS) as (keyof typeof SETTING_LIMITS)[]) {
     merged[key] = clampSettingValue(key, merged[key]);
   }

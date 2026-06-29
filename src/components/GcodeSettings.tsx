@@ -20,7 +20,7 @@ const TEMPLATE_FIELDS: {
     key: 'toolChangeGcode',
     label: 'Tool Change G-code',
     description:
-      'Inserted when the tool diameter changes between operations. Variables: {toolNumber}, {toolDiameter}, {spindleSpeed}, {feedRate}, {plungeRate}, {clearance}, {operationName}',
+      'Inserted when the tool diameter changes between operations. Variables: {toolNumber}, {toolDiameter}, {spindleSpeed}, {feedRate}, {plungeRate}, {safeHeight}, {operationName}',
     rows: 8,
   },
   {

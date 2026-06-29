@@ -23,7 +23,6 @@ const BASE_FIELDS: {
   { key: 'stepDown', label: 'Step Down', unit: 'mm', step: 0.1 },
   { key: 'stepover', label: 'Stepover', unit: '%', step: 1 },
   { key: 'spindleSpeed', label: 'Spindle Speed', unit: 'RPM', step: 500 },
-  { key: 'clearance', label: 'Clearance', unit: 'mm', step: 1 },
   { key: 'depthOffset', label: 'Depth Offset', unit: 'mm', step: 0.1 },
 ];
 
@@ -35,8 +34,9 @@ const ADAPTIVE_FIELDS: typeof BASE_FIELDS = [
   { key: 'radialOffset', label: 'Additional Offset', unit: 'mm', step: 0.1 },
   { key: 'slotWidthPercent', label: 'Slot Width', unit: '% of tool ⌀', step: 5 },
   { key: 'liftAmount', label: 'Pass Lift', unit: 'mm', step: 0.1 },
-  { key: 'helixDiameterPercent', label: 'Helix Diameter', unit: '% of tool ⌀', step: 5 },
-  { key: 'helixAngleDeg', label: 'Helix Angle', unit: '°', step: 0.1 },
+  { key: 'boreDiameterPercent', label: 'Bore Diameter', unit: '% of tool ⌀', step: 5 },
+  { key: 'helixAngleDeg', label: 'Helix Pitch Angle', unit: '°', step: 0.1 },
+  { key: 'boreTaperAngleDeg', label: 'Bore Taper', unit: '°', step: 0.5 },
   { key: 'helixFeedRate', label: 'Helix Feed Rate', unit: 'mm/min', step: 25 },
 ];
 

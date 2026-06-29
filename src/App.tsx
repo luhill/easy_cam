@@ -7,6 +7,7 @@ import { PartSetup } from './components/PartSetup';
 import { OperationList } from './components/Operations/OperationList';
 import { GcodeSettings } from './components/GcodeSettings';
 import { ToolOriginSettings } from './components/ToolOriginSettings';
+import { GlobalCamSettings } from './components/GlobalCamSettings';
 import { generateGcode, downloadGcode } from './lib/gcode';
 import './App.css';
 
@@ -15,12 +16,13 @@ function GcodePanel() {
   const toolpaths = useAppStore((s) => s.toolpaths);
   const gcodeTemplates = useSettingsStore((s) => s.gcodeTemplates);
   const toolOrigin = useSettingsStore((s) => s.toolOrigin);
+  const safeHeight = useSettingsStore((s) => s.safeHeight);
   const partBounds = useAppStore((s) => s.partBounds);
   const enabledCount = operations.filter((o) => o.enabled).length;
 
   const handleExport = () => {
     const stockTop = partBounds?.maxZ ?? 0;
-    const gcode = generateGcode(operations, toolpaths, gcodeTemplates, toolOrigin, stockTop);
+    const gcode = generateGcode(operations, toolpaths, gcodeTemplates, toolOrigin, stockTop, safeHeight);
     downloadGcode(gcode);
   };
 
@@ -61,6 +63,7 @@ export default function App() {
           <PartSetup />
           <OperationList />
           <ToolOriginSettings />
+          <GlobalCamSettings />
           <GcodeSettings />
         </aside>
         <section className="viewer-panel">
