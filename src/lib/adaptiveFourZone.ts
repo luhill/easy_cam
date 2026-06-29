@@ -26,6 +26,8 @@ export interface FourZoneParams {
   startS?: number;
   /** Skip this much arc length before cutting (e.g. connector already cleared join). */
   skipArcLength?: number;
+  /** First orbit sample already cut by entry spiral — omit duplicate at phase 0. */
+  omitFirstOrbitSample?: boolean;
   feedRate?: number;
   sampleSpacing?: number;
   /** Points per trochoid orbit; scales with global toolpath resolution. */
@@ -99,6 +101,102 @@ export function resolveOrbitRotSign(guideLoop: LoopPoint[], climbMilling: boolea
   return resolveGuideTraverseSign(guideLoop, climbMilling);
 }
 
+function sampleOrbitPoint(
+  sampleAtS: (s: number) => ReturnType<typeof sampleGuideAtS>,
+  s: number,
+  phase: number,
+  trochoidR: number,
+  rotSign: number,
+  z: number,
+  partLoop?: LoopPoint[],
+  minCenterDist?: number
+): ToolpathPoint {
+  const theta = trochoidOrbitAngleAtPhase(phase, rotSign);
+  const frame = normalizeFrame(sampleAtS(s));
+  let pt = orbitPoint(frame, trochoidR, theta, z);
+  if (partLoop && minCenterDist !== undefined) {
+    const c = clampToolCenterMinDistanceFromPart(partLoop, pt.x, pt.y, minCenterDist);
+    pt = { ...pt, x: c.x, y: c.y };
+  }
+  return pt;
+}
+
+/**
+ * Expanding spiral at a fixed guide station using the trochoid local frame so the
+ * final point matches phase 0 of the first slot-clearing micro-loop.
+ */
+export function generateTrochoidEntrySpiral(
+  sampleAtS: (s: number) => ReturnType<typeof sampleGuideAtS>,
+  joinS: number,
+  params: {
+    trochoidR: number;
+    rotSign: number;
+    z: number;
+    radialStepPerRev: number;
+    segmentsPerRev: number;
+    partLoop?: LoopPoint[];
+    minCenterDist?: number;
+    feedRate?: number;
+  }
+): ToolpathPoint[] {
+  const {
+    trochoidR,
+    rotSign,
+    z,
+    radialStepPerRev,
+    segmentsPerRev,
+    partLoop,
+    minCenterDist,
+    feedRate,
+  } = params;
+
+  const startR = 0.05;
+  if (trochoidR <= startR + 1e-4 || radialStepPerRev <= 0) return [];
+
+  const segments = Math.max(8, segmentsPerRev);
+  const dr = radialStepPerRev / segments;
+  const revs = Math.max(1, Math.ceil((trochoidR - startR) / radialStepPerRev));
+  const endTheta = trochoidOrbitAngleAtPhase(0, rotSign);
+  let angle = endTheta - rotSign * revs * 2 * Math.PI;
+  let r = startR;
+  const points: ToolpathPoint[] = [];
+
+  while (r < trochoidR - 1e-4) {
+    for (let i = 0; i < segments; i++) {
+      angle += rotSign * ((Math.PI * 2) / segments);
+      r = Math.min(r + dr, trochoidR);
+      const frame = normalizeFrame(sampleAtS(joinS));
+      let pt = orbitPoint(frame, r, angle, z);
+      if (partLoop && minCenterDist !== undefined) {
+        const c = clampToolCenterMinDistanceFromPart(partLoop, pt.x, pt.y, minCenterDist);
+        pt = { ...pt, x: c.x, y: c.y };
+      }
+      if (feedRate !== undefined) pt = { ...pt, feedRate };
+      points.push(pt);
+      if (r >= trochoidR - 1e-4) break;
+    }
+  }
+
+  const endPt = sampleOrbitPoint(
+    sampleAtS,
+    joinS,
+    0,
+    trochoidR,
+    rotSign,
+    z,
+    partLoop,
+    minCenterDist
+  );
+  if (feedRate !== undefined) endPt.feedRate = feedRate;
+  if (points.length > 0) {
+    points[points.length - 1] = endPt;
+  } else {
+    points.push(endPt);
+  }
+
+  return points;
+}
+
 function generateTrochoidAlongGuide(
   totalLength: number,
   closed: boolean,
@@ -148,7 +246,10 @@ function generateTrochoidAlongGuide(
       for (let i = 0; i <= steps; i++) {
         const phase = i / steps;
         const sAlong = arcProgress + phase * segLen;
-        emitOrbit(sAlong, phase, cycle > 0 && i === 0);
+        const skipDup =
+          (cycle > 0 && i === 0) ||
+          (cycle === 0 && i === 0 && params.omitFirstOrbitSample === true);
+        emitOrbit(sAlong, phase, skipDup);
       }
 
       arcProgress = segEnd;

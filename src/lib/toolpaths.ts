@@ -13,15 +13,14 @@ import { clampOperationSettings } from './settingLimits';
 import { resolveAdaptiveEntryPoint, resolveAdaptiveSlotGeometry } from './adaptiveOutline';
 import {
   generateFourZoneAdaptivePath,
+  generateTrochoidEntrySpiral,
   resolveGuideTraverseSign,
   resolveOrbitRotSign,
-  trochoidOrbitAngleAtPhase,
   wrapPathFromIndex,
 } from './adaptiveFourZone';
 import {
   closestPointIndexOnPath,
   generateExpandingSpiral,
-  generateExpandingSpiralToAngle,
   generateHelixBorePoints,
   helixRadiusAtZ,
   resolveHelixRotationDir,
@@ -210,7 +209,8 @@ function generateAdaptiveTrochoidalPath(
   globals: ToolpathGlobalOptions,
   roughing = true,
   startS?: number,
-  skipArcLength?: number
+  skipArcLength?: number,
+  omitFirstOrbitSample?: boolean
 ): ToolpathPoint[] {
   const slot = resolveAdaptiveSlotGeometry(settings, { roughing });
   const segLen = minkowskiSegmentLen(globals.resolution);
@@ -219,6 +219,7 @@ function generateAdaptiveTrochoidalPath(
     ...trochoidParams(partLoop, settings, slotCenterGuide, z, roughing, globals),
     startS,
     skipArcLength,
+    omitFirstOrbitSample,
   });
 }
 
@@ -374,11 +375,19 @@ function generateAdaptiveOutlinePath(
   const roughSlot = resolveAdaptiveSlotGeometry(settings, { roughing: true });
   const segLen = minkowskiSegmentLen(globals.resolution);
   const slotCenterGuide = offsetLoop2DMinkowski(loop, roughSlot.slotCenterOffset, segLen);
+  const trochSampleSpacing = trochoidSampleSpacing(
+    roughSlot.forwardIncrement,
+    roughSlot.trochoidRadius,
+    globals.resolution
+  );
   const arcGuide = buildArcLengthGuide(
     slotCenterGuide,
     pathSampleSpacing(globals.resolution)
   );
+  const trochArcGuide = buildArcLengthGuide(slotCenterGuide, trochSampleSpacing);
   const join = findClosestSOnGuide(arcGuide, entry);
+  const joinPt = sampleGuideAtS(arcGuide, join.s);
+  const trochoidStartS = findClosestSOnGuide(trochArcGuide, joinPt).s;
   const slotHelixR = resolveSlotHelixRadius(roughSlot.slotClearance);
   const trochoidR = roughSlot.trochoidRadius;
   const helixOpts = { stockTopZ: topZ, globals };
@@ -410,8 +419,8 @@ function generateAdaptiveOutlinePath(
     const prevZ = li > 0 ? layers[li - 1] : helixTarget;
 
     if (li > 0) {
-      if (!appendReturnToSlotCenter(points, arcGuide, join.s, prevZ)) break;
-      const slotCenter = sampleGuideAtS(arcGuide, join.s);
+      if (!appendReturnToSlotCenter(points, trochArcGuide, trochoidStartS, prevZ)) break;
+      const slotCenter = sampleGuideAtS(trochArcGuide, trochoidStartS);
       if (
         !appendPoints(
           points,
@@ -441,9 +450,8 @@ function generateAdaptiveOutlinePath(
     if (li === 0) {
       const bottomHelixR = helixRadiusAtZ(settings, layerZ, topZ);
       const rotSign = resolveOrbitRotSign(slotCenterGuide, settings.climbMilling);
-      const rotDir = resolveHelixRotationDir(settings.climbMilling);
       const segmentsPerRev = helixSegmentsPerRev(globals.resolution);
-      const slotCenter = sampleGuideAtS(arcGuide, join.s);
+      const slotCenter = sampleGuideAtS(trochArcGuide, trochoidStartS);
 
       if (bottomHelixR < slotHelixR - 1e-3) {
         const lastPt = lastPathPoint(points);
@@ -459,7 +467,7 @@ function generateAdaptiveOutlinePath(
               slotHelixR,
               layerZ,
               roughSlot.forwardIncrement,
-              rotDir,
+              resolveHelixRotationDir(settings.climbMilling),
               segmentsPerRev,
               startAngle,
               helixFeed
@@ -493,20 +501,22 @@ function generateAdaptiveOutlinePath(
         }
       }
 
-      const trochoidEntryAngle = trochoidOrbitAngleAtPhase(0, rotSign);
       if (
         !appendPoints(
           points,
-          generateExpandingSpiralToAngle(
-            slotCenter,
-            0.05,
-            trochoidR,
-            layerZ,
-            roughSlot.forwardIncrement,
-            rotDir,
-            segmentsPerRev,
-            trochoidEntryAngle,
-            helixFeed
+          generateTrochoidEntrySpiral(
+            (s) => sampleGuideAtS(trochArcGuide, s),
+            trochoidStartS,
+            {
+              trochoidR,
+              rotSign,
+              z: layerZ,
+              radialStepPerRev: roughSlot.forwardIncrement,
+              segmentsPerRev,
+              partLoop: loop,
+              minCenterDist: roughSlot.minCenterDist,
+              feedRate: helixFeed,
+            }
           )
         )
       ) {
@@ -514,7 +524,7 @@ function generateAdaptiveOutlinePath(
       }
     }
 
-    const startS = join.s;
+    const startS = trochoidStartS;
     const skipArc = 0;
     const troch = generateAdaptiveTrochoidalPath(
       loop,
@@ -523,7 +533,8 @@ function generateAdaptiveOutlinePath(
       globals,
       true,
       startS,
-      skipArc
+      skipArc,
+      li === 0
     );
     if (troch.length === 0) continue;
 
