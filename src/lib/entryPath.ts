@@ -6,7 +6,7 @@ import {
   signedLoopArea2D,
 } from './geometryProcessing';
 import { resolveAdaptiveSlotGeometry } from './adaptiveOutline';
-import { buildArcLengthGuide, sampleGuideAtS } from './trochoidalPath';
+import { buildArcLengthGuide, extractGuideArcSegment, sampleGuideAtS } from './trochoidalPath';
 import { helixSegmentsPerRev, pathSampleSpacing, type ToolpathGlobalOptions } from './toolpathConfig';
 
 /** Outside radius of the bored helix hole (mm). */
@@ -115,6 +115,38 @@ export function closestPointIndexOnPath(
     }
   }
   return bestIdx;
+}
+
+/**
+ * Open guide from the bore exit to the slot join — follows the slot-center loop
+ * when possible, with an initial leg from the last bore point when off-guide.
+ */
+export function buildBoreToSlotConnectorGuide(
+  lastPt: { x: number; y: number; z: number },
+  trochArcGuide: ReturnType<typeof buildArcLengthGuide>,
+  connectorStartS: number,
+  joinS: number,
+  guideTraverseSign: number,
+  sampleSpacing: number,
+  z: number
+): LoopPoint[] {
+  const guidePts = extractGuideArcSegment(
+    trochArcGuide,
+    connectorStartS,
+    joinS,
+    guideTraverseSign,
+    sampleSpacing,
+    z
+  );
+
+  if (guidePts.length === 0) return [];
+
+  const distToGuide = Math.hypot(lastPt.x - guidePts[0].x, lastPt.y - guidePts[0].y);
+  if (distToGuide > sampleSpacing * 1.2) {
+    return [{ x: lastPt.x, y: lastPt.y, z }, ...guidePts];
+  }
+
+  return guidePts;
 }
 
 /** Shortest open guide: straight entry to the join on the slot-center loop. */

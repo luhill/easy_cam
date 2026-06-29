@@ -225,6 +225,57 @@ export function findClosestSOnGuide(
   return { s: bestS, x: bestX, y: bestY, dist: bestDist };
 }
 
+/** Arc length between two stations on a closed guide, in one traverse direction. */
+export function guideArcLengthBetween(
+  totalLength: number,
+  fromS: number,
+  toS: number,
+  forward: boolean
+): number {
+  if (totalLength <= 0) return 0;
+  if (forward) {
+    if (toS >= fromS - 1e-6) return toS - fromS;
+    return totalLength - fromS + toS;
+  }
+  if (fromS >= toS - 1e-6) return fromS - toS;
+  return fromS + totalLength - toS;
+}
+
+/** Sample a closed guide between two arc-length stations. */
+export function extractGuideArcSegment(
+  guide: ArcLengthGuide,
+  fromS: number,
+  toS: number,
+  traverseSign: number,
+  sampleSpacing: number,
+  z: number
+): LoopPoint[] {
+  const total = guide.totalLength;
+  if (total <= 0) return [];
+
+  const forward = traverseSign >= 0;
+  const arcLen = guideArcLengthBetween(total, fromS, toS, forward);
+  const joinPt = sampleGuideAtS(guide, toS);
+
+  if (arcLen <= sampleSpacing * 0.5) {
+    return [{ x: joinPt.x, y: joinPt.y, z }];
+  }
+
+  const points: LoopPoint[] = [];
+  const steps = Math.max(1, Math.ceil(arcLen / sampleSpacing));
+
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const delta = t * arcLen;
+    let s = forward ? fromS + delta : fromS - delta;
+    s = ((s % total) + total) % total;
+    const pt = sampleGuideAtS(guide, s);
+    points.push({ x: pt.x, y: pt.y, z });
+  }
+
+  return points;
+}
+
 export function sampleGuideAtS(guide: ArcLengthGuide, s: number): GuideFrame {
   const { frames, totalLength } = guide;
   if (frames.length === 0) {

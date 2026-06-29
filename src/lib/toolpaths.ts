@@ -13,16 +13,18 @@ import { clampOperationSettings } from './settingLimits';
 import { resolveAdaptiveEntryPoint, resolveAdaptiveSlotGeometry } from './adaptiveOutline';
 import {
   generateFourZoneAdaptivePath,
-  generateTrochoidEntrySpiral,
+  generateOpenTrochoidPath,
   resolveGuideTraverseSign,
   resolveOrbitRotSign,
   wrapPathFromIndex,
 } from './adaptiveFourZone';
 import {
+  buildBoreToSlotConnectorGuide,
   closestPointIndexOnPath,
   generateExpandingSpiral,
   generateHelixBorePoints,
   helixRadiusAtZ,
+  isGuideOutwardCCW,
   resolveHelixRotationDir,
   resolveSlotHelixRadius,
 } from './entryPath';
@@ -389,8 +391,9 @@ function generateAdaptiveOutlinePath(
   const joinPt = sampleGuideAtS(arcGuide, join.s);
   const trochoidStartS = findClosestSOnGuide(trochArcGuide, joinPt).s;
   const slotHelixR = resolveSlotHelixRadius(roughSlot.slotClearance);
-  const trochoidR = roughSlot.trochoidRadius;
   const helixOpts = { stockTopZ: topZ, globals };
+  const guideTraverseSign = resolveGuideTraverseSign(slotCenterGuide, settings.climbMilling);
+  const outwardCCW = isGuideOutwardCCW(loop);
 
   points.push({ x: entry.x, y: entry.y, z: safeZ, rapid: true });
 
@@ -449,9 +452,16 @@ function generateAdaptiveOutlinePath(
 
     if (li === 0) {
       const bottomHelixR = helixRadiusAtZ(settings, layerZ, topZ);
-      const rotSign = resolveOrbitRotSign(slotCenterGuide, settings.climbMilling);
       const segmentsPerRev = helixSegmentsPerRev(globals.resolution);
-      const slotCenter = sampleGuideAtS(trochArcGuide, trochoidStartS);
+      const rotParams = trochoidParams(
+        loop,
+        settings,
+        slotCenterGuide,
+        layerZ,
+        true,
+        globals,
+        helixFeed
+      );
 
       if (bottomHelixR < slotHelixR - 1e-3) {
         const lastPt = lastPathPoint(points);
@@ -478,54 +488,34 @@ function generateAdaptiveOutlinePath(
         }
       }
 
-      const lastAtLayer = lastPathPoint(points);
-      if (
-        !lastAtLayer ||
-        Math.hypot(lastAtLayer.x - entry.x, lastAtLayer.y - entry.y) > 0.08
-      ) {
-        if (
-          !appendPoints(points, [{ x: entry.x, y: entry.y, z: layerZ, feedRate: helixFeed }])
-        ) {
-          break;
-        }
-      }
+      const lastPt = lastPathPoint(points);
+      if (lastPt) {
+        const connectorStartS = findClosestSOnGuide(trochArcGuide, lastPt).s;
+        const connectorGuide = buildBoreToSlotConnectorGuide(
+          { x: lastPt.x, y: lastPt.y, z: layerZ },
+          trochArcGuide,
+          connectorStartS,
+          trochoidStartS,
+          guideTraverseSign,
+          trochSampleSpacing,
+          layerZ
+        );
 
-      if (Math.hypot(entry.x - slotCenter.x, entry.y - slotCenter.y) > 0.08) {
-        if (
-          !appendPoints(
-            points,
-            [{ x: slotCenter.x, y: slotCenter.y, z: layerZ, feedRate: helixFeed }]
-          )
-        ) {
-          break;
+        if (connectorGuide.length >= 2) {
+          const connectorTroch = generateOpenTrochoidPath(
+            connectorGuide,
+            { ...rotParams, z: layerZ, liftAmount: 0 },
+            outwardCCW
+          );
+          if (connectorTroch.length > 0) {
+            if (!appendGeneratedPath(points, connectorTroch)) break;
+          }
         }
-      }
-
-      if (
-        !appendPoints(
-          points,
-          generateTrochoidEntrySpiral(
-            (s) => sampleGuideAtS(trochArcGuide, s),
-            trochoidStartS,
-            {
-              trochoidR,
-              rotSign,
-              z: layerZ,
-              radialStepPerRev: roughSlot.forwardIncrement,
-              segmentsPerRev,
-              partLoop: loop,
-              minCenterDist: roughSlot.minCenterDist,
-              feedRate: helixFeed,
-            }
-          )
-        )
-      ) {
-        break;
       }
     }
 
     const startS = trochoidStartS;
-    const skipArc = 0;
+    const skipArc = li === 0 ? roughSlot.forwardIncrement : 0;
     const troch = generateAdaptiveTrochoidalPath(
       loop,
       settings,
@@ -534,7 +524,7 @@ function generateAdaptiveOutlinePath(
       true,
       startS,
       skipArc,
-      li === 0
+      false
     );
     if (troch.length === 0) continue;
 
