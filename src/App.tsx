@@ -39,11 +39,7 @@ function GcodePanel() {
 
 export default function App() {
   useEffect(() => {
-    const store = useAppStore.getState();
-    store.regenerateToolpaths();
-    if (import.meta.env.DEV && !store.stlUrl) {
-      store.loadDefaultStl();
-    }
+    useAppStore.getState().regenerateToolpaths();
   }, []);
 
   return (

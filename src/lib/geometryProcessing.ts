@@ -83,6 +83,19 @@ export function partDimensionsFromBounds(bounds: PartBounds): {
   };
 }
 
+export function partBoundsEqual(a: PartBounds | null, b: PartBounds | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.minX === b.minX &&
+    a.maxX === b.maxX &&
+    a.minY === b.minY &&
+    a.maxY === b.maxY &&
+    a.minZ === b.minZ &&
+    a.maxZ === b.maxZ
+  );
+}
+
 /**
  * Rotate the model so the chosen face rests on the build plate (Z=0).
  * The face outward normal is aligned to -Z.

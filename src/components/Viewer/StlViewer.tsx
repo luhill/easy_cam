@@ -1,7 +1,6 @@
-import { useRef, useEffect, useMemo, useCallback, useState, Suspense } from 'react';
-import { Canvas, useThree, useLoader, useFrame } from '@react-three/fiber';
+import { useRef, useEffect, useMemo, useCallback, useState } from 'react';
+import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls, Grid, GizmoHelper, GizmoViewport } from '@react-three/drei';
-import { STLLoader } from 'three-stdlib';
 import * as THREE from 'three';
 import { useAppStore } from '../../store/useAppStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
@@ -48,6 +47,7 @@ import { SelectionLoopLines } from './SelectionLoopLines';
 import { ToolOriginMarker } from './ToolOriginMarker';
 import { EntryPointMarker, StockTopPlane } from './EntryPointMarker';
 import { resolveAdaptiveEntryPoint } from '../../lib/adaptiveOutline';
+import { loadStlGeometry } from '../../lib/stlLoader';
 
 function fitCameraToPartBounds(camera: THREE.PerspectiveCamera, bounds: PartBounds | null): void {
   if (!bounds) {
@@ -160,10 +160,14 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
   selectionSubModeRef.current = selectionSubMode;
   activeOperationTypeRef.current = activeOperationType;
 
+  const boundsSyncedKeyRef = useRef(-1);
+
   useEffect(() => {
+    if (boundsSyncedKeyRef.current === meshKey) return;
+    boundsSyncedKeyRef.current = meshKey;
     setPartBounds(partBounds);
     setToolOriginFromBounds(partBounds);
-  }, [partBounds, setPartBounds, setToolOriginFromBounds]);
+  }, [meshKey, partBounds, setPartBounds, setToolOriginFromBounds]);
 
   useEffect(() => {
     onIndexReady(false);
@@ -556,23 +560,42 @@ function LoadedStl({
   url: string;
   onIndexReady: (ready: boolean, regionCount?: number) => void;
 }) {
-  const rawGeometry = useLoader(STLLoader, url);
   const [processedMesh, setProcessedMesh] = useState<ProcessedMesh | null>(null);
   const [meshKey, setMeshKey] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
-    const mesh = processStlGeometry(rawGeometry);
-    createFaceColorAttribute(mesh.geometry);
-    setProcessedMesh(mesh);
-    setMeshKey((k) => k + 1);
-  }, [rawGeometry]);
+    let cancelled = false;
+    setProcessedMesh(null);
+    setLoadError(null);
+    onIndexReady(false);
+
+    loadStlGeometry(url)
+      .then((rawGeometry) => {
+        if (cancelled) return;
+        const mesh = processStlGeometry(rawGeometry);
+        createFaceColorAttribute(mesh.geometry);
+        setProcessedMesh(mesh);
+        setMeshKey((k) => k + 1);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error('STL load failed:', error);
+        setLoadError(error instanceof Error ? error.message : 'Failed to load STL');
+        onIndexReady(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [url, onIndexReady]);
 
   const handleMeshUpdate = useCallback((mesh: ProcessedMesh) => {
     setProcessedMesh(mesh);
     setMeshKey((k) => k + 1);
   }, []);
 
-  if (!processedMesh) return null;
+  if (loadError || !processedMesh) return null;
 
   return (
     <StlMesh
@@ -605,9 +628,13 @@ function SceneContent({
   const simulationDistanceRef = useRef(simulationDistance);
   simulationDistanceRef.current = simulationDistance;
 
+  const boundsKey = partBounds
+    ? `${partBounds.minX}:${partBounds.maxX}:${partBounds.minY}:${partBounds.maxY}:${partBounds.minZ}:${partBounds.maxZ}`
+    : null;
+
   useEffect(() => {
     fitCameraToPartBounds(camera as THREE.PerspectiveCamera, partBounds);
-  }, [camera, stlUrl, partBounds]);
+  }, [camera, stlUrl, boundsKey, partBounds]);
 
   const visiblePaths = useMemo(() => {
     const visibleIds = new Set(
@@ -655,11 +682,7 @@ function SceneContent({
         rotation={[Math.PI / 2, 0, 0]}
         position={[0, 0, 0]}
       />
-      {stlUrl && (
-        <Suspense fallback={null}>
-          <LoadedStl url={stlUrl} onIndexReady={onIndexReady} />
-        </Suspense>
-      )}
+      {stlUrl && <LoadedStl key={stlUrl} url={stlUrl} onIndexReady={onIndexReady} />}
       <ToolpathLines segments={visiblePaths} />
       <ToolPreview sample={simulationSample} toolDiameter={previewToolDiameter} />
       <ToolSimulationDriver

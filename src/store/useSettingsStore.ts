@@ -62,13 +62,14 @@ export const useSettingsStore = create<SettingsState>()(
       setToolOriginFromBounds: (bounds) =>
         set((state) => {
           if (!state.toolOriginAuto) return state;
-          return {
-            toolOrigin: {
-              x: (bounds.minX + bounds.maxX) / 2,
-              y: (bounds.minY + bounds.maxY) / 2,
-              z: DEFAULT_WCS_Z_ABOVE_STOCK,
-            },
+          const next = {
+            x: (bounds.minX + bounds.maxX) / 2,
+            y: (bounds.minY + bounds.maxY) / 2,
+            z: DEFAULT_WCS_Z_ABOVE_STOCK,
           };
+          const cur = state.toolOrigin;
+          if (cur.x === next.x && cur.y === next.y && cur.z === next.z) return state;
+          return { toolOrigin: next };
         }),
       setToolOriginAuto: (auto) => set({ toolOriginAuto: auto }),
     }),

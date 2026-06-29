@@ -8,6 +8,7 @@ import type {
   ToolpathSegment,
 } from '../types/operations';
 import type { PartBounds } from '../lib/geometryProcessing';
+import { partBoundsEqual } from '../lib/geometryProcessing';
 import {
   DEFAULT_SETTINGS,
   getOperationLabel,
@@ -19,6 +20,10 @@ import { DEFAULT_DEV_STL_NAME, DEFAULT_DEV_STL_URL } from '../lib/defaultStl';
 function revokeStlUrl(url: string | null): void {
   if (url?.startsWith('blob:')) URL.revokeObjectURL(url);
 }
+
+const devDefaultStl = import.meta.env.DEV
+  ? { stlUrl: DEFAULT_DEV_STL_URL, stlFileName: DEFAULT_DEV_STL_NAME }
+  : { stlUrl: null as string | null, stlFileName: null as string | null };
 
 interface AppState {
   stlFile: File | null;
@@ -62,8 +67,8 @@ interface AppState {
 
 export const useAppStore = create<AppState>((set, get) => ({
   stlFile: null,
-  stlUrl: null,
-  stlFileName: null,
+  stlUrl: devDefaultStl.stlUrl,
+  stlFileName: devDefaultStl.stlFileName,
   operations: [],
   activeOperationId: null,
   selectionMode: false,
@@ -238,6 +243,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setPartBounds: (bounds) => {
+    if (partBoundsEqual(get().partBounds, bounds)) return;
     set({ partBounds: bounds });
     get().regenerateToolpaths();
   },

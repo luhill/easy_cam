@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useEffect } from 'react';
 import * as THREE from 'three';
 import type { ToolOrigin } from '../../lib/geometryProcessing';
 
@@ -28,6 +28,8 @@ export function ToolOriginMarker({ origin, stockTopWorldZ = 0 }: ToolOriginMarke
     geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     return geo;
   }, [origin.x, origin.y, worldZ]);
+
+  useEffect(() => () => axes.dispose(), [axes]);
 
   return (
     <group>
