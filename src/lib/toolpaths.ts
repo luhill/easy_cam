@@ -10,6 +10,11 @@ import {
 } from './geometryProcessing';
 import { OPERATION_COLORS, getSelectedHoles } from '../types/operations';
 import { clampOperationSettings } from './settingLimits';
+import {
+  buildSlotCenterGuideWithCornerSpurs,
+  mapSpurRangesToArcGuide,
+  buildGuideRadiusSampler,
+} from './cornerSpurs';
 import { resolveAdaptiveSlotGeometry } from './adaptiveOutline';
 import {
   adaptiveEntryOverridesFromGeometry,
@@ -222,14 +227,34 @@ function generateAdaptiveTrochoidalPath(
   skipArcLength?: number,
   omitFirstOrbitSample?: boolean
 ): ToolpathPoint[] {
-  const slot = resolveAdaptiveSlotGeometry(settings, { roughing });
+  const roughSlot = resolveAdaptiveSlotGeometry(settings, { roughing });
+  const finishSlot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
   const segLen = minkowskiSegmentLen(globals.resolution);
-  const slotCenterGuide = offsetLoop2DMinkowski(partLoop, slot.slotCenterOffset, segLen);
+  const sampleSpacing = trochoidSampleSpacing(
+    roughSlot.forwardIncrement,
+    roughSlot.trochoidRadius,
+    globals.resolution
+  );
+  const { guide: slotCenterGuide, spurRanges: polySpurs } = buildSlotCenterGuideWithCornerSpurs(
+    partLoop,
+    roughSlot.slotCenterOffset,
+    finishSlot.innerCenterOffset,
+    segLen
+  );
+  const { arcGuide, spurRanges } = mapSpurRangesToArcGuide(
+    slotCenterGuide,
+    polySpurs,
+    sampleSpacing
+  );
   return generateFourZoneAdaptivePath(slotCenterGuide, {
     ...trochoidParams(partLoop, settings, slotCenterGuide, z, roughing, globals),
     startS,
     skipArcLength,
     omitFirstOrbitSample,
+    trochoidRAtGuide:
+      spurRanges.length > 0
+        ? buildGuideRadiusSampler(roughSlot.trochoidRadius, arcGuide.totalLength, spurRanges)
+        : undefined,
   });
 }
 
@@ -301,7 +326,12 @@ function generateFinishingOutline(
   const finishSlot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
   const segLen = minkowskiSegmentLen(globals.resolution);
   const finishGuide = offsetLoop2DMinkowski(partLoop, finishSlot.innerCenterOffset, segLen);
-  const roughCenterGuide = offsetLoop2DMinkowski(partLoop, roughSlot.slotCenterOffset, segLen);
+  const { guide: roughCenterGuide } = buildSlotCenterGuideWithCornerSpurs(
+    partLoop,
+    roughSlot.slotCenterOffset,
+    finishSlot.innerCenterOffset,
+    segLen
+  );
   if (finishGuide.length < 3) return [];
 
   const ccw = signedLoopArea2D(finishGuide) >= 0;
@@ -550,7 +580,8 @@ function generateAdaptiveOutlinePath(
           z: layerZ,
           feedRate: helixFeed,
         },
-        outwardCCW
+        outwardCCW,
+        entryLayout.cornerSpurRanges
       );
 
       if (layerTroch.length === 0) continue;

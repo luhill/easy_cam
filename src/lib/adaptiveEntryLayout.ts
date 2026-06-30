@@ -1,6 +1,10 @@
 import type { LoopPoint, OperationDefaults } from '../types/operations';
-import { offsetLoop2DMinkowski } from './geometryProcessing';
 import { resolveGuideTraverseSign } from './adaptiveFourZone';
+import {
+  buildSlotCenterGuideWithCornerSpurs,
+  mapSpurRangesToArcGuide,
+  type CornerSpurRange,
+} from './cornerSpurs';
 import {
   buildArcLengthGuide,
   findClosestSOnGuide,
@@ -28,6 +32,7 @@ export interface AdaptiveEntryLayout {
   guideTraverseSign: number;
   slotCenterGuide: LoopPoint[];
   trochArcGuide: ArcLengthGuide;
+  cornerSpurRanges: CornerSpurRange[];
   traverseTangent: { x: number; y: number };
 }
 
@@ -53,18 +58,25 @@ export function resolveAdaptiveEntryLayout(
   if (partLoop.length < 2) return null;
 
   const roughSlot = resolveAdaptiveSlotGeometry(settings, { roughing: true });
-  const slotCenterGuide = offsetLoop2DMinkowski(
-    partLoop,
-    roughSlot.slotCenterOffset,
-    centerGuideSegLen
-  );
+  const finishSlot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
+  const { guide: slotCenterGuide, spurRanges: polySpurRanges } =
+    buildSlotCenterGuideWithCornerSpurs(
+      partLoop,
+      roughSlot.slotCenterOffset,
+      finishSlot.innerCenterOffset,
+      centerGuideSegLen
+    );
   if (slotCenterGuide.length < 3) return null;
 
   const arcGuide = buildArcLengthGuide(
     slotCenterGuide,
     Math.max(centerGuideSegLen, 0.25)
   );
-  const trochArcGuide = buildArcLengthGuide(slotCenterGuide, trochSampleSpacing);
+  const { arcGuide: trochArcGuide, spurRanges: cornerSpurRanges } = mapSpurRangesToArcGuide(
+    slotCenterGuide,
+    polySpurRanges,
+    trochSampleSpacing
+  );
   const guideTraverseSign = resolveGuideTraverseSign(slotCenterGuide, settings.climbMilling);
   const forward = guideTraverseSign >= 0;
   const tangentSign = forward ? 1 : -1;
@@ -96,6 +108,7 @@ export function resolveAdaptiveEntryLayout(
     guideTraverseSign,
     slotCenterGuide,
     trochArcGuide,
+    cornerSpurRanges,
     traverseTangent,
   };
 }

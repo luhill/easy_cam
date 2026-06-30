@@ -11,6 +11,7 @@ import {
   type ArcLengthGuide,
 } from './trochoidalPath';
 import { clampToolCenterMinDistanceFromPart, signedLoopArea2D } from './geometryProcessing';
+import { trochoidRadiusAtGuideS, type CornerSpurRange } from './cornerSpurs';
 
 export interface FourZoneParams {
   forwardIncrement: number;
@@ -33,6 +34,8 @@ export interface FourZoneParams {
   sampleSpacing?: number;
   /** Points per trochoid orbit; scales with global toolpath resolution. */
   orbitStepsPerRev?: number;
+  /** Orbit radius vs guide arc length (for corner spur ramps). */
+  trochoidRAtGuide?: (guideS: number) => number;
 }
 
 const CUT_PHASE_START = 0.5;
@@ -237,7 +240,7 @@ function generateTrochoidAlongGuide(
 
   if (totalLength <= 0 || stepover <= 0 || slotClearance <= 0) return [];
 
-  const trochoidR = slotClearance / 2;
+  const baseTrochoidR = slotClearance / 2;
   const steps = Math.max(8, params.orbitStepsPerRev ?? 90);
   const points: ToolpathPoint[] = [];
   const { partLoop, minCenterDist } = params;
@@ -250,8 +253,16 @@ function generateTrochoidAlongGuide(
     const frame = normalizeFrame(sampleAtS(sSample));
     const { z, rapid } = orbitZProfile(phase, zCut, liftAmount);
 
-    let pt = orbitPoint(frame, trochoidR, theta, z);
-    if (partLoop && minCenterDist !== undefined) {
+    const orbitR = params.trochoidRAtGuide
+      ? params.trochoidRAtGuide(sSample)
+      : baseTrochoidR;
+
+    let pt = orbitPoint(frame, orbitR, theta, z);
+    if (
+      partLoop &&
+      minCenterDist !== undefined &&
+      orbitR > baseTrochoidR * 0.05
+    ) {
       const c = clampToolCenterMinDistanceFromPart(partLoop, pt.x, pt.y, minCenterDist);
       pt = { ...pt, x: c.x, y: c.y };
     }
@@ -361,7 +372,8 @@ export function generateContinuousEntryTrochoidPath(
   trochoidStartS: number,
   guideTraverseSign: number,
   params: FourZoneParams,
-  outwardCCW: boolean
+  outwardCCW: boolean,
+  loopSpurRanges: CornerSpurRange[] = []
 ): ToolpathPoint[] {
   if (trochArcGuide.totalLength <= 0) return [];
 
@@ -391,10 +403,23 @@ export function generateContinuousEntryTrochoidPath(
 
   // Always emit spline (tool start → slot join) then the loop so bore lead-in
   // connects to troch[0] near the entry; loop traverse follows guideTraverseSign.
+  const baseTrochoidR = params.slotClearance / 2;
+  let trochoidRAtGuide = params.trochoidRAtGuide;
+  if (loopSpurRanges.length > 0 && !trochoidRAtGuide) {
+    const loopTotal = trochArcGuide.totalLength;
+    trochoidRAtGuide = (globalS: number) => {
+      if (globalS < splineLen - 1e-5) return baseTrochoidR;
+      const loopDelta = globalS - splineLen;
+      const loopS = forward ? trochoidStartS + loopDelta : trochoidStartS - loopDelta;
+      return trochoidRadiusAtGuideS(loopS, loopTotal, baseTrochoidR, loopSpurRanges);
+    };
+  }
+
   return generateTrochoidAlongGuide(totalLength, false, sampleAtGlobalS, {
     ...params,
     guideSign: 1,
     startS: 0,
+    trochoidRAtGuide,
   });
 }
 

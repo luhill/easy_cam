@@ -18,7 +18,7 @@ import {
   type ToolpathGlobalOptions,
 } from './toolpathConfig';
 import { resolveAdaptiveSlotGeometry } from './adaptiveOutline';
-import { offsetLoop2DMinkowski } from './geometryProcessing';
+import { buildSlotCenterGuideWithCornerSpurs } from './cornerSpurs';
 
 export interface AdaptiveOutlineDebugGuides {
   slotCenterline: LoopPoint[];
@@ -113,8 +113,14 @@ export function buildSlotCenterlineArcGuide(
   globals: ToolpathGlobalOptions
 ) {
   const roughSlot = resolveAdaptiveSlotGeometry(settings, { roughing: true });
+  const finishSlot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
   const segLen = minkowskiSegmentLen(globals.resolution);
-  const slotCenterGuide = offsetLoop2DMinkowski(loop, roughSlot.slotCenterOffset, segLen);
+  const { guide: slotCenterGuide } = buildSlotCenterGuideWithCornerSpurs(
+    loop,
+    roughSlot.slotCenterOffset,
+    finishSlot.innerCenterOffset,
+    segLen
+  );
   return buildArcLengthGuide(slotCenterGuide, pathSampleSpacing(globals.resolution));
 }
 

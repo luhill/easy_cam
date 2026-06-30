@@ -193,6 +193,21 @@ export function offsetLoop2D(loop: LoopPoint[], offset: number): LoopPoint[] {
   return result;
 }
 
+/** Outward miter point for one loop vertex at a given tool-center offset. */
+export function offsetVertexMiter(
+  loop: LoopPoint[],
+  vertexIndex: number,
+  offset: number
+): LoopPoint {
+  const n = loop.length;
+  const prev = loop[(vertexIndex - 1 + n) % n];
+  const curr = loop[vertexIndex];
+  const next = loop[(vertexIndex + 1) % n];
+  const ccw = signedLoopArea2D(loop) >= 0;
+  const side = ccw ? 1 : -1;
+  return offsetMiterVertex(prev, curr, next, offset, side);
+}
+
 function offsetMiterVertex(
   prev: LoopPoint,
   curr: LoopPoint,
@@ -234,7 +249,7 @@ function offsetMiterVertex(
   };
 }
 
-function outwardEdgeNormal2D(
+export function outwardEdgeNormal2D(
   ax: number,
   ay: number,
   bx: number,
