@@ -36,9 +36,9 @@ export interface FourZoneParams {
   orbitStepsPerRev?: number;
 }
 
-const CUT_PHASE_END = 0.5;
-const RETURN_LIFT_START = 0.58;
-const RETURN_LIFT_END = 0.88;
+const CUT_PHASE_START = 0.5;
+const RETURN_LIFT_START = 0.08;
+const RETURN_LIFT_END = 0.38;
 
 function normalizeFrame(frame: ReturnType<typeof sampleGuideAtS>) {
   let tx = frame.tx;
@@ -72,7 +72,8 @@ function orbitZProfile(
   zCut: number,
   liftAmount: number
 ): { z: number; rapid: boolean } {
-  if (phase <= CUT_PHASE_END) {
+  // Return / lift on the first half of each micro-loop, cut on the second half.
+  if (phase >= CUT_PHASE_START) {
     return { z: zCut, rapid: false };
   }
   if (phase < RETURN_LIFT_START) {
@@ -90,7 +91,7 @@ function orbitZProfile(
 
 /** Trochoid orbit angle (radians) at a given phase within one micro-loop. */
 export function trochoidOrbitAngleAtPhase(phase: number, rotSign: number): number {
-  return -Math.PI / 2 + rotSign * (1 - phase) * 2 * Math.PI;
+  return -Math.PI / 2 + rotSign * (0.5 - phase) * 2 * Math.PI;
 }
 
 /** Climb milling on external CCW loops → clockwise tool motion around the part. */
@@ -158,7 +159,7 @@ export function generateTrochoidEntrySpiral(
   const segments = Math.max(8, segmentsPerRev);
   const dr = radialStepPerRev / segments;
   const revs = Math.max(1, Math.ceil((trochoidR - startR) / radialStepPerRev));
-  const endTheta = trochoidOrbitAngleAtPhase(0, rotSign);
+  const endTheta = trochoidOrbitAngleAtPhase(CUT_PHASE_START, rotSign);
   let angle = endTheta - rotSign * revs * 2 * Math.PI;
   let r = startR;
   const points: ToolpathPoint[] = [];
@@ -182,7 +183,7 @@ export function generateTrochoidEntrySpiral(
   const endPt = sampleOrbitPoint(
     sampleAtS,
     joinS,
-    0,
+    CUT_PHASE_START,
     trochoidR,
     rotSign,
     z,
@@ -380,11 +381,7 @@ export function generateContinuousEntryTrochoidPath(
 
   if (centerline.length < 2) return [];
 
-  return generateOpenTrochoidPath(
-    centerline,
-    { ...params, liftAmount: 0 },
-    outwardCCW
-  );
+  return generateOpenTrochoidPath(centerline, { ...params }, outwardCCW);
 }
 
 export function generateConstantEngagementTrochoid(

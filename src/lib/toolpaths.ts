@@ -477,7 +477,7 @@ function generateAdaptiveOutlinePath(
         trochArcGuide,
         trochoidStartS,
         entryLayout.guideTraverseSign,
-        { ...rotParams, z: layerZ, feedRate: helixFeed, liftAmount: 0 },
+        { ...rotParams, z: layerZ, feedRate: helixFeed },
         outwardCCW
       );
 
