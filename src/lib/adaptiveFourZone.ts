@@ -380,18 +380,22 @@ export function generateContinuousEntryTrochoidPath(
   const forward = guideTraverseSign >= 0;
   const sampleAtGlobalS = (s: number) => {
     if (splineArcGuide && s < splineLen - 1e-6) {
-      const frame = sampleOpenGuideAtS(splineArcGuide, Math.max(0, s));
-      if (!forward) {
-        return { ...frame, tx: -frame.tx, ty: -frame.ty, nx: -frame.nx, ny: -frame.ny };
-      }
-      return frame;
+      return sampleOpenGuideAtS(splineArcGuide, Math.max(0, s));
     }
     const loopDelta = Math.max(0, s - splineLen);
-    const loopS = trochoidStartS + loopDelta;
+    const loopS = forward
+      ? trochoidStartS + loopDelta
+      : trochoidStartS - loopDelta;
     return sampleGuideAtS(trochArcGuide, loopS);
   };
 
-  return generateTrochoidAlongGuide(totalLength, false, sampleAtGlobalS, params);
+  // Always emit spline (tool start → slot join) then the loop so bore lead-in
+  // connects to troch[0] near the entry; loop traverse follows guideTraverseSign.
+  return generateTrochoidAlongGuide(totalLength, false, sampleAtGlobalS, {
+    ...params,
+    guideSign: 1,
+    startS: 0,
+  });
 }
 
 export function generateConstantEngagementTrochoid(

@@ -354,10 +354,6 @@ function appendFreshSlotWidthBore(
       target.push({ x: at.x, y: at.y, z: startZ, feedRate: helixFeed });
       at = { x: at.x, y: at.y, z: startZ };
     }
-    if (Math.hypot(at.x - boreCenter.x, at.y - boreCenter.y) > 0.12) {
-      target.push({ x: boreCenter.x, y: boreCenter.y, z: startZ, feedRate: helixFeed });
-      at = { x: boreCenter.x, y: boreCenter.y, z: startZ };
-    }
     if (Math.hypot(at.x - boreStartX, at.y - boreStartY) > 0.12) {
       target.push({ x: boreStartX, y: boreStartY, z: startZ, feedRate: helixFeed });
     }
