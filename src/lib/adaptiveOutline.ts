@@ -31,6 +31,22 @@ export interface AdaptiveSlotOptions {
   roughing?: boolean;
 }
 
+/**
+ * Inner offset for corner spur tips during roughing.
+ * With finishing pass enabled, spurs stop at the rough envelope so the finish
+ * pass clears the remaining stock — avoids overshoot past the spur tip.
+ */
+export function resolveSpurTipInnerOffset(
+  settings: OperationDefaults,
+  roughing = true
+): number {
+  const finishSlot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
+  if (roughing && settings.finishingPass) {
+    return resolveAdaptiveSlotGeometry(settings, { roughing: true }).innerCenterOffset;
+  }
+  return finishSlot.innerCenterOffset;
+}
+
 export function resolveAdaptiveSlotGeometry(
   settings: OperationDefaults,
   options: AdaptiveSlotOptions = {}

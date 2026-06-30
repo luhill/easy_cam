@@ -20,8 +20,6 @@ export interface FourZoneParams {
   liftAmount?: number;
   partLoop?: LoopPoint[];
   minCenterDist?: number;
-  /** On corner spur ramps use finish-line standoff (roughing stock not applied). */
-  minCenterDistOnSpur?: number;
   /** Orbit micro-loop direction (+1 CCW / −1 CW within each station). */
   rotSign?: number;
   /** Progression along guide (+1 forward / −1 reverse for climb). */
@@ -245,7 +243,7 @@ function generateTrochoidAlongGuide(
   const baseTrochoidR = slotClearance / 2;
   const steps = Math.max(8, params.orbitStepsPerRev ?? 90);
   const points: ToolpathPoint[] = [];
-  const { partLoop, minCenterDist, minCenterDistOnSpur } = params;
+  const { partLoop, minCenterDist } = params;
   const defaultStartS = guideSign >= 0 ? 0 : totalLength;
   const startS = params.startS ?? defaultStartS;
 
@@ -259,7 +257,10 @@ function generateTrochoidAlongGuide(
       ? params.trochoidRAtGuide(sSample)
       : baseTrochoidR;
 
-    if (orbitR <= baseTrochoidR * 0.03) {
+    const onSpurRamp = params.trochoidRAtGuide !== undefined && orbitR < baseTrochoidR - 1e-4;
+    const collapseThreshold = onSpurRamp ? baseTrochoidR * 0.25 : baseTrochoidR * 0.03;
+
+    if (orbitR <= collapseThreshold) {
       if (phase >= CUT_PHASE_START && !skipDuplicate) {
         let tipPt: ToolpathPoint = { x: frame.x, y: frame.y, z };
         if (feedRate !== undefined) tipPt = { ...tipPt, feedRate };
@@ -269,13 +270,8 @@ function generateTrochoidAlongGuide(
     }
 
     let pt = orbitPoint(frame, orbitR, theta, z);
-    const onSpurRamp = params.trochoidRAtGuide !== undefined && orbitR < baseTrochoidR - 1e-4;
-    const standoff =
-      onSpurRamp && minCenterDistOnSpur !== undefined
-        ? minCenterDistOnSpur
-        : minCenterDist;
-    if (partLoop && standoff !== undefined && orbitR > baseTrochoidR * 0.05) {
-      const c = clampToolCenterMinDistanceFromPart(partLoop, pt.x, pt.y, standoff);
+    if (partLoop && minCenterDist !== undefined && !onSpurRamp && orbitR > baseTrochoidR * 0.05) {
+      const c = clampToolCenterMinDistanceFromPart(partLoop, pt.x, pt.y, minCenterDist);
       pt = { ...pt, x: c.x, y: c.y };
     }
     if (rapid) pt = { ...pt, rapid: true };

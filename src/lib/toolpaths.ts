@@ -15,7 +15,7 @@ import {
   mapSpurRangesToArcGuide,
   buildGuideRadiusSampler,
 } from './cornerSpurs';
-import { resolveAdaptiveSlotGeometry } from './adaptiveOutline';
+import { resolveAdaptiveSlotGeometry, resolveSpurTipInnerOffset } from './adaptiveOutline';
 import {
   adaptiveEntryOverridesFromGeometry,
   resolveAdaptiveEntryLayout,
@@ -197,10 +197,6 @@ function trochoidParams(
   feedRate?: number
 ) {
   const slot = resolveAdaptiveSlotGeometry(settings, { roughing });
-  const finishSlot =
-    roughing && settings.finishingPass
-      ? resolveAdaptiveSlotGeometry(settings, { roughing: false })
-      : null;
   const guideSign = resolveGuideTraverseSign(slotCenterGuide, settings.climbMilling);
   return {
     forwardIncrement: slot.forwardIncrement,
@@ -209,7 +205,6 @@ function trochoidParams(
     liftAmount: Math.max(settings.liftAmount ?? 0, 0),
     partLoop,
     minCenterDist: slot.minCenterDist,
-    minCenterDistOnSpur: finishSlot?.minCenterDist,
     rotSign: resolveOrbitRotSign(slotCenterGuide, settings.climbMilling),
     guideSign,
     feedRate,
@@ -233,7 +228,6 @@ function generateAdaptiveTrochoidalPath(
   omitFirstOrbitSample?: boolean
 ): ToolpathPoint[] {
   const roughSlot = resolveAdaptiveSlotGeometry(settings, { roughing });
-  const finishSlot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
   const segLen = minkowskiSegmentLen(globals.resolution);
   const sampleSpacing = trochoidSampleSpacing(
     roughSlot.forwardIncrement,
@@ -243,7 +237,7 @@ function generateAdaptiveTrochoidalPath(
   const { guide: slotCenterGuide, spurMarkers } = buildSlotCenterGuideWithCornerSpurs(
     partLoop,
     roughSlot.slotCenterOffset,
-    finishSlot.innerCenterOffset,
+    resolveSpurTipInnerOffset(settings, true),
     segLen
   );
   const { arcGuide, spurRanges } = mapSpurRangesToArcGuide(
@@ -334,7 +328,7 @@ function generateFinishingOutline(
   const { guide: roughCenterGuide } = buildSlotCenterGuideWithCornerSpurs(
     partLoop,
     roughSlot.slotCenterOffset,
-    finishSlot.innerCenterOffset,
+    resolveSpurTipInnerOffset(settings, true),
     segLen
   );
   if (finishGuide.length < 3) return [];
