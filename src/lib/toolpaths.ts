@@ -28,7 +28,6 @@ import {
   closestPointIndexOnPath,
   generateBoreBottomToLeadInTransition,
   generateHelixBorePoints,
-  generateSpiralBetweenPolarPositions,
   helixRadiusAtZ,
   isGuideOutwardCCW,
   resolveHelixRotationDir,
@@ -333,39 +332,26 @@ function generateFinishingOutline(
   return pts;
 }
 
-function appendTrochoidToBoreTransition(
+function appendDirectToFreshBoreStart(
   target: ToolpathPoint[],
   boreCenter: { x: number; y: number },
   z: number,
   slotHelixR: number,
-  radialStepPerRev: number,
-  rotDir: number,
-  segmentsPerRev: number,
-  helixFeed: number,
-  targetAngle: number
+  startAngle: number,
+  feedRate?: number
 ): void {
   const last = lastPathPoint(target);
   if (!last) return;
 
-  const startR = Math.hypot(last.x - boreCenter.x, last.y - boreCenter.y);
-  if (startR <= slotHelixR + 0.08) return;
+  const x = boreCenter.x + Math.cos(startAngle) * slotHelixR;
+  const y = boreCenter.y + Math.sin(startAngle) * slotHelixR;
 
-  const startAngle = Math.atan2(last.y - boreCenter.y, last.x - boreCenter.x);
-  appendPoints(
-    target,
-    generateSpiralBetweenPolarPositions(
-      boreCenter,
-      startR,
-      startAngle,
-      slotHelixR,
-      targetAngle,
-      z,
-      radialStepPerRev,
-      rotDir,
-      segmentsPerRev,
-      helixFeed
-    )
-  );
+  if (Math.abs(last.z - z) > 1e-4) {
+    target.push({ x: last.x, y: last.y, z, feedRate });
+  }
+  if (Math.hypot(last.x - x, last.y - y) > 0.12 || Math.abs(last.z - z) > 1e-4) {
+    target.push({ x, y, z, feedRate });
+  }
 }
 
 function appendBoreBottomWidenAndLeadIn(
@@ -589,23 +575,21 @@ function generateAdaptiveOutlinePath(
         false
       );
 
-      appendTrochoidToBoreTransition(
+      const freshBoreStartAngle = 0;
+      appendDirectToFreshBoreStart(
         points,
         boreCenter,
         prevZ,
         slotHelixR,
-        stepoverIncrement,
-        rotDir,
-        segmentsPerRev,
-        helixFeed,
-        boreHelixAngle
+        freshBoreStartAngle,
+        helixFeed
       );
 
       const layerBore = generateHelixBorePoints(boreCenter, settings, prevZ, layerZ, {
         ...helixOpts,
         taper: true,
         helixR: slotHelixR,
-        startAngle: boreHelixAngle,
+        startAngle: freshBoreStartAngle,
       });
       if (!appendPoints(points, layerBore.points)) {
         break;
