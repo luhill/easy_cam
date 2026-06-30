@@ -15,12 +15,15 @@ import {
   trochoidRadiusAtGuideS,
   spurPeakHoldAtGuideS,
   spurFrameFromLinear,
+  spurLinearParams,
   resolveSpurLinearState,
   spurOrbitRadius,
   clampCutPointToSpur,
   clampCutPointPastSpurTips,
+  clampCutInwardOfSpurPeak,
   clampArcEndToSpurBoundaries,
   clampOpenArcEndToSpurBoundaries,
+  resolveSpurGuardBuffer,
   loopSpurGuideS,
   nextSpurBoundaryAlongClosedLoop,
   nextSpurBoundaryAlongOpenPath,
@@ -283,6 +286,10 @@ function generateTrochoidAlongGuide(
   const openSpurSnap = params.openSpurSnap;
   const loopLength = params.guideLoopLength ?? openSpurSnap?.loopLength ?? totalLength;
   const spurRanges = params.spurRanges ?? [];
+  const spurGuardBuffer =
+    spurRanges.length > 0
+      ? resolveSpurGuardBuffer(baseTrochoidR, stepover, loopLength)
+      : 0;
 
   const advancePastZeroSegment = (
     arcProgress: number,
@@ -323,7 +330,8 @@ function generateTrochoidAlongGuide(
           startS,
           guideSign,
           loopLength,
-          spurRanges
+          spurRanges,
+          spurGuardBuffer
         );
       } else if (openSpurSnap) {
         segEnd = clampOpenArcEndToSpurBoundaries(
@@ -333,7 +341,8 @@ function generateTrochoidAlongGuide(
           openSpurSnap.trochoidStartS,
           openSpurSnap.forward,
           openSpurSnap.loopLength,
-          spurRanges
+          spurRanges,
+          spurGuardBuffer
         );
       }
     }
@@ -348,10 +357,14 @@ function generateTrochoidAlongGuide(
     const { z, rapid } = orbitZProfile(phase, zCut, liftAmount);
 
     const spurLoopS = loopSpurGuideS(sSample, loopLength, openSpurSnap);
-    const spurLinear =
+    const arcSpur =
       spurLoopS !== null && spurRanges.length > 0
+        ? spurLinearParams(spurLoopS, loopLength, spurRanges)
+        : null;
+    const spurLinear =
+      arcSpur !== null
         ? resolveSpurLinearState(
-            spurLoopS,
+            spurLoopS!,
             sampled.x,
             sampled.y,
             loopLength,
@@ -359,35 +372,36 @@ function generateTrochoidAlongGuide(
             baseTrochoidR * 1.25
           )
         : null;
+    const spurState = spurLinear ?? arcSpur;
 
-    const spurFrame = spurLinear
-      ? spurFrameFromLinear(spurLinear, sampled.z)
+    const spurFrame = spurState
+      ? spurFrameFromLinear(spurState, sampled.z)
       : params.spurFrameHold?.(sSample, sampled.z) ?? null;
 
     const frame = spurFrame
       ? normalizeFrame({ ...sampled, ...spurFrame, s: sampled.s })
       : normalizeFrame(sampled);
 
-    const orbitR = spurLinear
-      ? spurOrbitRadius(spurLinear, baseTrochoidR)
+    const orbitR = spurState
+      ? spurOrbitRadius(spurState, baseTrochoidR)
       : params.trochoidRAtGuide && spurLoopS !== null
         ? params.trochoidRAtGuide(spurLoopS)
         : baseTrochoidR;
 
     if (orbitR <= baseTrochoidR * 0.02) {
       if (phase >= CUT_PHASE_START && !skipDuplicate) {
-        const cx = spurLinear
-          ? spurLinear.leg === 'out' && spurLinear.u >= 1 - 1e-4
-            ? spurLinear.spur.peakX
-            : spurLinear.leg === 'in' && spurLinear.u <= 1e-4
-              ? spurLinear.spur.peakX
+        const cx = spurState
+          ? spurState.leg === 'out' && spurState.u >= 1 - 1e-4
+            ? spurState.spur.peakX
+            : spurState.leg === 'in' && spurState.u <= 1e-4
+              ? spurState.spur.peakX
               : frame.x
           : (params.spurPeakHold?.(sSample)?.x ?? frame.x);
-        const cy = spurLinear
-          ? spurLinear.leg === 'out' && spurLinear.u >= 1 - 1e-4
-            ? spurLinear.spur.peakY
-            : spurLinear.leg === 'in' && spurLinear.u <= 1e-4
-              ? spurLinear.spur.peakY
+        const cy = spurState
+          ? spurState.leg === 'out' && spurState.u >= 1 - 1e-4
+            ? spurState.spur.peakY
+            : spurState.leg === 'in' && spurState.u <= 1e-4
+              ? spurState.spur.peakY
               : frame.y
           : (params.spurPeakHold?.(sSample)?.y ?? frame.y);
         let tipPt: ToolpathPoint = { x: cx, y: cy, z };
@@ -398,17 +412,31 @@ function generateTrochoidAlongGuide(
     }
 
     let pt = orbitPoint(frame, orbitR, theta, z);
-    if (spurLinear && phase >= CUT_PHASE_START && !rapid) {
-      let clamped = clampCutPointToSpur(pt.x, pt.y, spurLinear);
+    if (spurState && phase >= CUT_PHASE_START && !rapid) {
+      let clamped = clampCutPointToSpur(pt.x, pt.y, spurState);
       clamped = clampCutPointPastSpurTips(
         clamped.x,
         clamped.y,
-        [spurLinear.spur],
+        [spurState.spur],
         baseTrochoidR
       );
+      if (partLoop) {
+        clamped = clampCutInwardOfSpurPeak(
+          clamped.x,
+          clamped.y,
+          spurState.spur,
+          partLoop
+        );
+      }
       pt = { ...pt, x: clamped.x, y: clamped.y };
     }
-    if (partLoop && minCenterDist !== undefined && phase >= CUT_PHASE_START && !rapid) {
+    if (
+      partLoop &&
+      minCenterDist !== undefined &&
+      !spurState &&
+      phase >= CUT_PHASE_START &&
+      !rapid
+    ) {
       const c = clampToolCenterMinDistanceFromPart(partLoop, pt.x, pt.y, minCenterDist);
       pt = { ...pt, x: c.x, y: c.y };
     }
@@ -434,7 +462,8 @@ function generateTrochoidAlongGuide(
           startS,
           guideSign,
           loopLength,
-          spurRanges
+          spurRanges,
+          spurGuardBuffer
         );
       }
       const segLen = segEnd - arcProgress;
@@ -473,7 +502,8 @@ function generateTrochoidAlongGuide(
         openSpurSnap.trochoidStartS,
         openSpurSnap.forward,
         openSpurSnap.loopLength,
-        spurRanges
+        spurRanges,
+        spurGuardBuffer
       );
     }
     let segLen = segEnd - arcProgress;

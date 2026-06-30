@@ -8,6 +8,7 @@ import {
   offsetVertexMiter,
   signedLoopArea2D,
   outwardEdgeNormal2D,
+  closestPointOnLoop2D,
 } from './geometryProcessing';
 import {
   buildArcLengthGuide,
@@ -237,14 +238,11 @@ export function buildSlotCenterGuideWithCornerSpurs(
 
       const internalAngle = vertexInternalAngleDeg(prev, curr, next);
       if (internalAngle < maxInternalAngleDeg) {
-        let tipOffset = roughTipInnerOffset ?? finishInnerOffset;
-        if (roughTipInnerOffset !== undefined && internalAngle > 130) {
-          const blend = Math.max(0, Math.min(1, (internalAngle - 130) / 30));
-          tipOffset = roughTipInnerOffset + blend * (finishInnerOffset - roughTipInnerOffset);
-        }
+        const tipOffset = roughTipInnerOffset ?? finishInnerOffset;
         const spurTipMiter = offsetVertexMiter(partLoop, i, tipOffset);
         const spurLen = Math.hypot(spurTipMiter.x - slotMiter.x, spurTipMiter.y - slotMiter.y);
-        if (spurLen >= minSpurLength) {
+        const minLen = roughTipInnerOffset !== undefined ? 0.02 : minSpurLength;
+        if (spurLen >= minLen) {
           spurTip = spurTipMiter;
         }
       }
@@ -322,7 +320,8 @@ export function buildSlotCenterGuideWithCornerSpurs(
         );
         const returnIdx = result.length - 1;
         const inboundLen = openPolylineLength(result) - outboundStartLen;
-        if (inboundLen >= minSpurLength * 2) {
+        const minMarkerLen = roughTipInnerOffset !== undefined ? 0.04 : minSpurLength * 2;
+        if (inboundLen >= minMarkerLen) {
           spurMarkers.push({ miterIdx, peakIdx, returnIdx });
         }
       }
@@ -429,11 +428,11 @@ function projectOntoSegment(
 
 /** Guard band before/after spur so full trochoid orbits do not bulge into the corner. */
 export function resolveSpurGuardBuffer(
-  _baseTrochoidR: number,
-  _forwardIncrement: number,
+  baseTrochoidR: number,
+  forwardIncrement: number,
   _spurSpan: number
 ): number {
-  return 0;
+  return Math.min(baseTrochoidR * 0.85, Math.max(forwardIncrement * 0.35, 0.04));
 }
 
 function isGuideSInExpandedSpurInterval(
@@ -617,6 +616,25 @@ export function clampCutPointToSpur(
   }
   if (proj.t < -1e-4) {
     return { x: spur.miterX, y: spur.miterY };
+  }
+  return { x, y };
+}
+
+/** Prevent tool center from cutting inside the rough spur tip standoff from the part. */
+export function clampCutInwardOfSpurPeak(
+  x: number,
+  y: number,
+  spur: CornerSpurRange,
+  partLoop: LoopPoint[]
+): { x: number; y: number } {
+  const peakAtPart = closestPointOnLoop2D(spur.peakX, spur.peakY, partLoop);
+  const peakStandoff = peakAtPart.dist;
+  const ptAtPart = closestPointOnLoop2D(x, y, partLoop);
+  if (ptAtPart.dist + 1e-3 < peakStandoff) {
+    return {
+      x: ptAtPart.x + ptAtPart.outX * peakStandoff,
+      y: ptAtPart.y + ptAtPart.outY * peakStandoff,
+    };
   }
   return { x, y };
 }

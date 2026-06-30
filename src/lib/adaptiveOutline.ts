@@ -37,8 +37,8 @@ export interface AdaptiveSlotOptions {
  */
 export function cornerSpurOptionsForRoughing(settings: OperationDefaults): CornerSpurOptions {
   if (!settings.finishingPass) return {};
-  const roughSlot = resolveAdaptiveSlotGeometry(settings, { roughing: true });
-  return { roughTipInnerOffset: roughSlot.innerCenterOffset };
+  const finish = resolveAdaptiveSlotGeometry(settings, { roughing: false });
+  return { roughTipInnerOffset: finish.innerCenterOffset + FINISHING_STOCK_ALLOWANCE };
 }
 
 export function resolveAdaptiveSlotGeometry(
