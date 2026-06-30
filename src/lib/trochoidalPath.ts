@@ -235,21 +235,8 @@ export function advanceGuideArcLength(
   if (distance <= 0 || guide.totalLength <= 0) return fromS;
 
   const total = guide.totalLength;
-  let s = fromS;
-  let traveled = 0;
-  let prev = sampleGuideAtS(guide, s);
-  const stepLen = Math.max(Math.min(distance / 24, 0.08), 0.01);
-
-  while (traveled < distance - 1e-6) {
-    const ds = Math.min(stepLen, distance - traveled);
-    s = forward ? s + ds : s - ds;
-    s = ((s % total) + total) % total;
-    const pt = sampleGuideAtS(guide, s);
-    traveled += Math.hypot(pt.x - prev.x, pt.y - prev.y);
-    prev = pt;
-  }
-
-  return s;
+  const next = forward ? fromS + distance : fromS - distance;
+  return ((next % total) + total) % total;
 }
 
 /** Arc length between two stations on a closed guide, in one traverse direction. */

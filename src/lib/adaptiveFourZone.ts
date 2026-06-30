@@ -4,7 +4,6 @@
 
 import type { LoopPoint, ToolpathPoint } from '../types/operations';
 import {
-  advanceGuideArcLength,
   buildArcLengthGuide,
   buildOpenArcLengthGuide,
   sampleGuideAtS,
@@ -381,7 +380,7 @@ export function generateContinuousEntryTrochoidPath(
       return sampleOpenGuideAtS(splineArcGuide, Math.max(0, s));
     }
     const loopDelta = Math.max(0, s - splineLen);
-    const loopS = advanceGuideArcLength(trochArcGuide, trochoidStartS, loopDelta, forward);
+    const loopS = forward ? trochoidStartS + loopDelta : trochoidStartS - loopDelta;
     return sampleGuideAtS(trochArcGuide, loopS);
   };
 
