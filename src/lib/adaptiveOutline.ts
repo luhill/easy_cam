@@ -2,7 +2,7 @@ import type { LoopPoint } from '../types/operations';
 import type { OperationDefaults } from '../types/operations';
 import { offsetLoop2DMinkowski, distanceToLoop2D, closestPointOnLoop2D } from './geometryProcessing';
 import { adaptiveForwardIncrement } from './trochoidalPath';
-import { ensureEntryOutsidePart, boreCenterOffsetFromInnerGuide, minimumEntryCenterDist } from './entryPath';
+import { ensureEntryOutsidePart, resolveBoreOuterRadius } from './entryPath';
 
 export interface AdaptiveSlotGeometry {
   toolDiameter: number;
@@ -63,6 +63,33 @@ export function resolveAdaptiveSlotGeometry(
     minCenterDist,
     maxCenterDist,
   };
+}
+
+/**
+ * Largest tool-center radius from bore center during entry — derived from the
+ * greater of bore outer diameter and slot width so the widen spiral cannot
+ * cross the inner slot path.
+ */
+export function resolveMaxEntryHelixRadius(settings: OperationDefaults): number {
+  const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
+  const boreOuterD = 2 * resolveBoreOuterRadius(settings);
+  const effectiveDiameter = Math.max(boreOuterD, slot.slotWidth);
+  return Math.max(effectiveDiameter / 2 - slot.toolRadius, 0.05);
+}
+
+/**
+ * Minimum distance from part outline to bore center.
+ * Clears the inner slot path for the largest tool orbit during entry (bore
+ * helix or bottom widen spiral, whichever is greater).
+ */
+export function minimumEntryCenterDist(settings: OperationDefaults): number {
+  const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
+  return slot.minCenterDist + resolveMaxEntryHelixRadius(settings);
+}
+
+/** Outward offset from the inner slot guide to the bore center. */
+export function boreCenterOffsetFromInnerGuide(settings: OperationDefaults): number {
+  return resolveMaxEntryHelixRadius(settings);
 }
 
 /** Default helix entry: bore hugging inner slot path, as close to the part as allowed. */
