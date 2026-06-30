@@ -3,14 +3,14 @@ import {
   adaptiveEntryOverridesFromGeometry,
   resolveAdaptiveEntryLayout,
 } from './adaptiveEntryLayout';
-import { buildSplineEntryGuide } from './entryPath';
+import { buildSplineToSlotTrochoidGuide } from './entryPath';
 import {
   createCutZContext,
   cutLayersWorldZ,
   finalCutWorldZ,
   type CutZContext,
 } from './cutDepth';
-import { buildArcLengthGuide } from './trochoidalPath';
+import { adaptiveForwardIncrement, buildArcLengthGuide } from './trochoidalPath';
 import {
   minkowskiSegmentLen,
   pathSampleSpacing,
@@ -75,11 +75,19 @@ export function computeAdaptiveOutlineDebugGuides(
   const guideCtx = resolveGuideContext(loop, op.settings, op.geometry, ctx, globals);
   if (!guideCtx) return null;
 
-  const { entryLayout, trochSampleSpacing, layerZ } = guideCtx;
-  const leadInGuide = buildSplineEntryGuide(
+  const { entryLayout, trochSampleSpacing, layerZ, roughSlot } = guideCtx;
+  const stepoverIncrement = adaptiveForwardIncrement(
+    roughSlot.toolDiameter,
+    op.settings.stepover
+  );
+  const leadInGuide = buildSplineToSlotTrochoidGuide(
     entryLayout.toolStart,
     entryLayout.slotJoin,
     entryLayout.traverseTangent,
+    entryLayout.trochArcGuide,
+    entryLayout.trochoidStartS,
+    entryLayout.guideTraverseSign,
+    stepoverIncrement,
     trochSampleSpacing,
     layerZ
   );

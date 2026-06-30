@@ -28,6 +28,10 @@ export interface FourZoneParams {
   skipArcLength?: number;
   /** First orbit sample already cut by entry spiral — omit duplicate at phase 0. */
   omitFirstOrbitSample?: boolean;
+  /** End open guide at total length with phase 0 for closed-loop trochoid handoff. */
+  openTerminalHandoff?: boolean;
+  openTerminalS?: number;
+  openTerminalPhase?: number;
   feedRate?: number;
   sampleSpacing?: number;
   /** Points per trochoid orbit; scales with global toolpath resolution. */
@@ -286,6 +290,12 @@ function generateTrochoidAlongGuide(
   }
 
   const numCycles = Math.ceil(totalLength / stepover);
+  const terminalS = params.openTerminalHandoff
+    ? totalLength
+    : params.openTerminalS;
+  const terminalPhase = params.openTerminalPhase ?? 0;
+  let terminalEmitted = false;
+
   for (let cycle = 0; cycle < numCycles; cycle++) {
     const sStart = cycle * stepover;
 
@@ -293,10 +303,40 @@ function generateTrochoidAlongGuide(
       const phase = i / steps;
       const sAlong = sStart + phase * stepover;
       if (sAlong > totalLength + stepover * 0.01) break;
+      if (terminalS !== undefined && sAlong > terminalS + 1e-5) break;
+
       emitOrbit(sAlong, phase, cycle > 0 && i === 0);
+
+      if (
+        terminalS !== undefined &&
+        Math.abs(sAlong - terminalS) <= Math.max(stepover / steps, 1e-4) &&
+        Math.abs(phase - terminalPhase) <= 1 / steps + 1e-4
+      ) {
+        terminalEmitted = true;
+        return points;
+      }
     }
 
     if (sStart + stepover >= totalLength - 1e-6) break;
+    if (terminalS !== undefined && sStart + stepover >= terminalS - 1e-6) break;
+  }
+
+  if (terminalS !== undefined && !terminalEmitted && terminalS <= totalLength + 1e-4) {
+    const prevLen = points.length;
+    emitOrbit(terminalS, terminalPhase, false);
+    if (
+      prevLen > 0 &&
+      points.length > prevLen &&
+      Math.hypot(
+        points[prevLen - 1].x - points[prevLen].x,
+        points[prevLen - 1].y - points[prevLen].y
+      ) < 0.08
+    ) {
+      points.pop();
+    }
+    if (points.length > prevLen) {
+      terminalEmitted = true;
+    }
   }
 
   return points;

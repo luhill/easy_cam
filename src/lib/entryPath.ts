@@ -729,6 +729,55 @@ export function buildSplineEntryGuide(
 }
 
 /**
+ * Hermite spline lead-in plus one loop stepover on the slot centerline so open
+ * trochoids can hand off to the closed outline path without a straight stitch.
+ */
+export function buildSplineToSlotTrochoidGuide(
+  toolStart: { x: number; y: number },
+  slotJoin: { x: number; y: number },
+  exitTangent: { x: number; y: number },
+  trochArcGuide: ReturnType<typeof buildArcLengthGuide>,
+  trochoidStartS: number,
+  guideTraverseSign: number,
+  loopStepover: number,
+  sampleSpacing: number,
+  z: number
+): LoopPoint[] {
+  const spline = buildSplineEntryGuide(
+    toolStart,
+    slotJoin,
+    exitTangent,
+    sampleSpacing,
+    z
+  );
+  if (loopStepover <= 1e-6 || trochArcGuide.totalLength <= 0) return spline;
+
+  const forward = guideTraverseSign >= 0;
+  const loopEndS = advanceGuideArcLength(
+    trochArcGuide,
+    trochoidStartS,
+    loopStepover,
+    forward
+  );
+  const loopTail = extractGuideArcSegment(
+    trochArcGuide,
+    trochoidStartS,
+    loopEndS,
+    guideTraverseSign,
+    sampleSpacing,
+    z
+  );
+  if (loopTail.length === 0) return spline;
+
+  const last = spline[spline.length - 1];
+  const joinDist = Math.hypot(last.x - loopTail[0].x, last.y - loopTail[0].y);
+  if (joinDist <= sampleSpacing * 0.75) {
+    return [...spline, ...loopTail.slice(1)];
+  }
+  return [...spline, ...loopTail];
+}
+
+/**
  * Lead-in centerline from the bore center to the outline join station on the
  * slot center guide, with an optional fillet onto the guide.
  */

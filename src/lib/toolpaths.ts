@@ -20,10 +20,11 @@ import {
   generateOpenTrochoidPath,
   resolveGuideTraverseSign,
   resolveOrbitRotSign,
+  sampleTrochoidOrbitPoint,
   wrapPathFromIndex,
 } from './adaptiveFourZone';
 import {
-  buildSplineEntryGuide,
+  buildSplineToSlotTrochoidGuide,
   adjustBoreRadiusToSlotWidth,
   closestPointIndexOnPath,
   generateBoreBottomToLeadInTransition,
@@ -36,6 +37,7 @@ import {
 import {
   adaptiveForwardIncrement,
   buildArcLengthGuide,
+  advanceGuideArcLength,
   sampleGuideAtS,
 } from './trochoidalPath';
 import {
@@ -466,19 +468,51 @@ function generateAdaptiveOutlinePath(
         helixFeed
       );
 
-      const leadInGuide = buildSplineEntryGuide(
+      const leadInGuide = buildSplineToSlotTrochoidGuide(
         toolStart,
         entryLayout.slotJoin,
         entryLayout.traverseTangent,
+        trochArcGuide,
+        trochoidStartS,
+        entryLayout.guideTraverseSign,
+        stepoverIncrement,
         trochSampleSpacing,
         layerZ
       );
 
       const leadInTroch = generateOpenTrochoidPath(
         leadInGuide,
-        { ...rotParams, z: layerZ, liftAmount: 0 },
+        { ...rotParams, z: layerZ, liftAmount: 0, openTerminalHandoff: true },
         outwardCCW
       );
+
+      const joinHandoffS = advanceGuideArcLength(
+        trochArcGuide,
+        trochoidStartS,
+        stepoverIncrement,
+        entryLayout.guideTraverseSign >= 0
+      );
+      const handoffPt = sampleTrochoidOrbitPoint(slotCenterGuide, {
+        ...rotParams,
+        startS: joinHandoffS,
+        phase: 0,
+        z: layerZ,
+        feedRate: helixFeed,
+      });
+      if (handoffPt && leadInTroch.length > 0) {
+        while (leadInTroch.length > 1) {
+          const last = leadInTroch[leadInTroch.length - 1];
+          const prev = leadInTroch[leadInTroch.length - 2];
+          const lastDist = Math.hypot(last.x - handoffPt.x, last.y - handoffPt.y);
+          const prevDist = Math.hypot(prev.x - handoffPt.x, prev.y - handoffPt.y);
+          if (lastDist >= prevDist - 1e-4) {
+            leadInTroch.pop();
+          } else {
+            break;
+          }
+        }
+        leadInTroch[leadInTroch.length - 1] = handoffPt;
+      }
 
       if (leadInTroch.length > 0) {
         const boreBottom = lastPathPoint(points);
