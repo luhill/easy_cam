@@ -363,8 +363,32 @@ export function mapSpurRangesToArcGuide(
   return { arcGuide, spurRanges };
 }
 
-function wrapGuideS(guideS: number, totalLength: number): number {
+export function wrapGuideS(guideS: number, totalLength: number): number {
   return ((guideS % totalLength) + totalLength) % totalLength;
+}
+
+export interface OpenSpurSnap {
+  splineLen: number;
+  trochoidStartS: number;
+  forward: boolean;
+  loopLength: number;
+}
+
+/** Loop-local arc length for spur logic (null on spline lead-in before slot join). */
+export function loopSpurGuideS(
+  sSample: number,
+  loopLength: number,
+  openSpurSnap?: OpenSpurSnap
+): number | null {
+  if (openSpurSnap) {
+    if (sSample < openSpurSnap.splineLen - 1e-5) return null;
+    const loopDelta = sSample - openSpurSnap.splineLen;
+    const raw = openSpurSnap.forward
+      ? openSpurSnap.trochoidStartS + loopDelta
+      : openSpurSnap.trochoidStartS - loopDelta;
+    return wrapGuideS(raw, openSpurSnap.loopLength);
+  }
+  return wrapGuideS(sSample, loopLength);
 }
 
 function lerp2(
@@ -511,11 +535,18 @@ export function spurFrameFromLinear(
   z: number
 ): { x: number; y: number; z: number; tx: number; ty: number; nx: number; ny: number } {
   const { spur, u, leg } = linear;
+  const atPeak =
+    (leg === 'out' && u >= 1 - 1e-4) || (leg === 'in' && u <= 1e-4);
+
   let tx: number;
   let ty: number;
   let center: { x: number; y: number };
 
-  if (leg === 'out') {
+  if (atPeak) {
+    center = { x: spur.peakX, y: spur.peakY };
+    tx = spur.peakX - spur.miterX;
+    ty = spur.peakY - spur.miterY;
+  } else if (leg === 'out') {
     center = lerp2(spur.miterX, spur.miterY, spur.peakX, spur.peakY, u);
     tx = spur.peakX - spur.miterX;
     ty = spur.peakY - spur.miterY;
@@ -540,7 +571,7 @@ export function spurFrameFromLinear(
   };
 }
 
-/** Detect spur state from XY projection (resolution-independent) with arc-length fallback. */
+/** Arc-length gates spur mode; XY projection only refines u on the active spur leg. */
 export function resolveSpurLinearState(
   guideS: number,
   x: number,
@@ -549,49 +580,20 @@ export function resolveSpurLinearState(
   spurRanges: CornerSpurRange[],
   maxPerpDist: number
 ): { spur: CornerSpurRange; u: number; leg: 'out' | 'in' } | null {
-  let best: { spur: CornerSpurRange; u: number; leg: 'out' | 'in'; perp: number } | null =
-    null;
+  const arcState = spurLinearParams(guideS, totalLength, spurRanges);
+  if (!arcState) return null;
 
-  for (const spur of spurRanges) {
-    const out = projectOntoSegment(
-      x,
-      y,
-      spur.miterX,
-      spur.miterY,
-      spur.peakX,
-      spur.peakY
-    );
-    if (out.perpDist <= maxPerpDist && out.t >= -0.05 && out.t <= 1.05) {
-      if (!best || out.perpDist < best.perp) {
-        best = { spur, u: Math.min(1, Math.max(0, out.t)), leg: 'out', perp: out.perpDist };
-      }
-    }
+  const { spur, leg } = arcState;
+  const proj =
+    leg === 'out'
+      ? projectOntoSegment(x, y, spur.miterX, spur.miterY, spur.peakX, spur.peakY)
+      : projectOntoSegment(x, y, spur.peakX, spur.peakY, spur.miterX, spur.miterY);
 
-    const inbound = projectOntoSegment(
-      x,
-      y,
-      spur.peakX,
-      spur.peakY,
-      spur.miterX,
-      spur.miterY
-    );
-    if (inbound.perpDist <= maxPerpDist && inbound.t >= -0.05 && inbound.t <= 1.05) {
-      if (!best || inbound.perpDist < best.perp) {
-        best = {
-          spur,
-          u: Math.min(1, Math.max(0, inbound.t)),
-          leg: 'in',
-          perp: inbound.perpDist,
-        };
-      }
-    }
+  if (proj.perpDist <= maxPerpDist) {
+    return { spur, leg, u: Math.min(1, Math.max(0, proj.t)) };
   }
 
-  if (best) {
-    return { spur: best.spur, u: best.u, leg: best.leg };
-  }
-
-  return spurLinearParams(guideS, totalLength, spurRanges);
+  return arcState;
 }
 
 /** Clamp a cut point so it cannot extend past the spur tip along the bisector. */
@@ -794,6 +796,77 @@ export function clampArcEndToSpurBoundaries(
   }
 
   return nearestEnd;
+}
+
+/** Next spur boundary along a closed loop traverse (for zero-length clamp recovery). */
+export function nextSpurBoundaryAlongClosedLoop(
+  arcProgress: number,
+  startS: number,
+  guideSign: number,
+  loopLength: number,
+  spurRanges: CornerSpurRange[]
+): number | null {
+  if (spurRanges.length === 0 || loopLength <= 0) return null;
+
+  const guideSAt = (sAlong: number) => {
+    const raw = guideSign >= 0 ? startS + sAlong : startS - sAlong;
+    return wrapGuideS(raw, loopLength);
+  };
+
+  const gs0 = guideSAt(arcProgress);
+  const forward = guideSign >= 0;
+  let bestAlong: number | null = null;
+  let bestDelta = Infinity;
+
+  for (const spur of spurRanges) {
+    for (const boundary of [spur.sStart, spur.sPeak, spur.sEnd]) {
+      const delta = guideSDeltaAlongPath(gs0, boundary, loopLength, forward);
+      if (delta > 1e-6 && delta < bestDelta) {
+        bestDelta = delta;
+        bestAlong = arcProgress + delta;
+      }
+    }
+  }
+
+  return bestAlong;
+}
+
+/** Next spur boundary along open entry path loop section. */
+export function nextSpurBoundaryAlongOpenPath(
+  arcProgress: number,
+  splineLen: number,
+  trochoidStartS: number,
+  forward: boolean,
+  loopLength: number,
+  spurRanges: CornerSpurRange[]
+): number | null {
+  if (spurRanges.length === 0 || loopLength <= 0 || arcProgress < splineLen - 1e-5) {
+    return null;
+  }
+
+  const loopSAt = (globalAlong: number) => {
+    const loopDelta = globalAlong - splineLen;
+    return wrapGuideS(
+      forward ? trochoidStartS + loopDelta : trochoidStartS - loopDelta,
+      loopLength
+    );
+  };
+
+  const gs0 = loopSAt(arcProgress);
+  let bestAlong: number | null = null;
+  let bestDelta = Infinity;
+
+  for (const spur of spurRanges) {
+    for (const boundary of [spur.sStart, spur.sPeak, spur.sEnd]) {
+      const delta = guideSDeltaAlongPath(gs0, boundary, loopLength, forward);
+      if (delta > 1e-6 && delta < bestDelta) {
+        bestDelta = delta;
+        bestAlong = arcProgress + delta;
+      }
+    }
+  }
+
+  return bestAlong;
 }
 
 /** Spur boundary snapping for open entry paths (spline + loop composite arc length). */

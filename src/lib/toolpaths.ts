@@ -275,8 +275,10 @@ function appendGeneratedPath(
 ): boolean {
   if (generated.length === 0) return true;
   const last = target[target.length - 1];
-  const start =
-    last && Math.hypot(generated[0].x - last.x, generated[0].y - last.y) < 0.12 ? 1 : 0;
+  const first = generated[0];
+  const dist = last ? Math.hypot(first.x - last.x, first.y - last.y) : Infinity;
+  const sameZ = last ? Math.abs((first.z ?? 0) - (last.z ?? 0)) < 1e-4 : false;
+  const start = last && dist < 0.02 && sameZ ? 1 : 0;
   return appendPoints(target, generated.slice(start));
 }
 

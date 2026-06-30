@@ -20,6 +20,9 @@ import {
   clampCutPointToSpur,
   clampArcEndToSpurBoundaries,
   clampOpenArcEndToSpurBoundaries,
+  loopSpurGuideS,
+  nextSpurBoundaryAlongClosedLoop,
+  nextSpurBoundaryAlongOpenPath,
   type CornerSpurRange,
 } from './cornerSpurs';
 
@@ -276,8 +279,66 @@ function generateTrochoidAlongGuide(
   const { partLoop, minCenterDist } = params;
   const defaultStartS = guideSign >= 0 ? 0 : totalLength;
   const startS = params.startS ?? defaultStartS;
-  const loopLength = params.guideLoopLength ?? totalLength;
+  const openSpurSnap = params.openSpurSnap;
+  const loopLength = params.guideLoopLength ?? openSpurSnap?.loopLength ?? totalLength;
   const spurRanges = params.spurRanges ?? [];
+
+  const advancePastZeroSegment = (
+    arcProgress: number,
+    arcTarget: number,
+    closedLoop: boolean
+  ): number => {
+    const minStep = Math.max(stepover * 0.05, 0.02);
+    let segEnd = Math.min(arcProgress + minStep, arcTarget);
+
+    if (spurRanges.length > 0) {
+      const nextBoundary = closedLoop
+        ? nextSpurBoundaryAlongClosedLoop(
+            arcProgress,
+            startS,
+            guideSign,
+            loopLength,
+            spurRanges
+          )
+        : openSpurSnap
+          ? nextSpurBoundaryAlongOpenPath(
+              arcProgress,
+              openSpurSnap.splineLen,
+              openSpurSnap.trochoidStartS,
+              openSpurSnap.forward,
+              openSpurSnap.loopLength,
+              spurRanges
+            )
+          : null;
+
+      if (nextBoundary !== null && nextBoundary > arcProgress + 1e-8) {
+        segEnd = Math.min(nextBoundary, arcTarget);
+      }
+
+      if (closedLoop) {
+        segEnd = clampArcEndToSpurBoundaries(
+          arcProgress,
+          segEnd,
+          startS,
+          guideSign,
+          loopLength,
+          spurRanges
+        );
+      } else if (openSpurSnap) {
+        segEnd = clampOpenArcEndToSpurBoundaries(
+          arcProgress,
+          segEnd,
+          openSpurSnap.splineLen,
+          openSpurSnap.trochoidStartS,
+          openSpurSnap.forward,
+          openSpurSnap.loopLength,
+          spurRanges
+        );
+      }
+    }
+
+    return segEnd;
+  };
 
   const emitOrbit = (sAlong: number, phase: number, skipDuplicate: boolean) => {
     const sSample = guideSign >= 0 ? startS + sAlong : startS - sAlong;
@@ -285,10 +346,11 @@ function generateTrochoidAlongGuide(
     const sampled = sampleAtS(sSample);
     const { z, rapid } = orbitZProfile(phase, zCut, liftAmount);
 
+    const spurLoopS = loopSpurGuideS(sSample, loopLength, openSpurSnap);
     const spurLinear =
-      spurRanges.length > 0
+      spurLoopS !== null && spurRanges.length > 0
         ? resolveSpurLinearState(
-            sSample,
+            spurLoopS,
             sampled.x,
             sampled.y,
             loopLength,
@@ -370,7 +432,7 @@ function generateTrochoidAlongGuide(
       }
       const segLen = segEnd - arcProgress;
       if (segLen <= 1e-8) {
-        segEnd = Math.min(arcProgress + Math.max(stepover * 0.05, 0.02), arcTarget);
+        segEnd = advancePastZeroSegment(arcProgress, arcTarget, true);
         if (segEnd <= arcProgress + 1e-8) break;
       }
 
@@ -393,7 +455,6 @@ function generateTrochoidAlongGuide(
 
   let arcProgress = 0;
   let cycle = 0;
-  const openSpurSnap = params.openSpurSnap;
 
   while (arcProgress < totalLength - 1e-5) {
     let segEnd = Math.min(arcProgress + stepover, totalLength);
@@ -410,7 +471,7 @@ function generateTrochoidAlongGuide(
     }
     let segLen = segEnd - arcProgress;
     if (segLen <= 1e-8) {
-      segEnd = Math.min(arcProgress + Math.max(stepover * 0.05, 0.02), totalLength);
+      segEnd = advancePastZeroSegment(arcProgress, totalLength, false);
       segLen = segEnd - arcProgress;
       if (segLen <= 1e-8) break;
     }
@@ -548,6 +609,7 @@ export function generateContinuousEntryTrochoidPath(
     ...params,
     guideSign: 1,
     startS: 0,
+    guideLoopLength: loopTotal,
     trochoidRAtGuide,
     spurRanges: loopSpurRanges,
     openSpurSnap:
