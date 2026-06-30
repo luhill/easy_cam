@@ -127,7 +127,8 @@ function filletGuideCorner(
   straightLeg: LoopPoint[],
   arcLeg: LoopPoint[],
   filletRadius: number,
-  sampleSpacing: number
+  sampleSpacing: number,
+  outTangent?: { x: number; y: number }
 ): LoopPoint[] {
   if (straightLeg.length < 2 || arcLeg.length < 2 || filletRadius <= sampleSpacing * 0.05) {
     if (straightLeg.length === 0) return arcLeg;
@@ -145,8 +146,13 @@ function filletGuideCorner(
 
   const inX = corner.x - before.x;
   const inY = corner.y - before.y;
-  const outX = after.x - corner.x;
-  const outY = after.y - corner.y;
+  let outX = after.x - corner.x;
+  let outY = after.y - corner.y;
+  if (outTangent) {
+    const tLen = Math.hypot(outTangent.x, outTangent.y) || 1;
+    outX = (outTangent.x / tLen) * Math.max(Math.hypot(outX, outY), sampleSpacing);
+    outY = (outTangent.y / tLen) * Math.max(Math.hypot(outX, outY), sampleSpacing);
+  }
   const inLen = Math.hypot(inX, inY);
   const outLen = Math.hypot(outX, outY);
   if (inLen < 1e-6 || outLen < 1e-6) {
@@ -251,7 +257,12 @@ export function buildBoreLeadInGuide(
   if (arcPts.length === 0) return straightLeg;
 
   if (filletRadius > 0 && straightLeg.length >= 2 && arcPts.length >= 2) {
-    return filletGuideCorner(straightLeg, arcPts, filletRadius, sampleSpacing);
+    const frame = sampleGuideAtS(trochArcGuide, nearest.s);
+    const tangentSign = guideTraverseSign >= 0 ? 1 : -1;
+    return filletGuideCorner(straightLeg, arcPts, filletRadius, sampleSpacing, {
+      x: frame.tx * tangentSign,
+      y: frame.ty * tangentSign,
+    });
   }
 
   const last = straightLeg[straightLeg.length - 1];

@@ -20,14 +20,17 @@ import {
 } from './adaptiveFourZone';
 import {
   buildBoreLeadInGuide,
+  adjustBoreRadiusToSlotWidth,
   closestPointIndexOnPath,
   generateBoreBottomToLeadInTransition,
   generateHelixBorePoints,
+  helixRadiusAtZ,
   isGuideOutwardCCW,
   resolveHelixRotationDir,
   resolveSlotHelixRadius,
 } from './entryPath';
 import {
+  adaptiveForwardIncrement,
   buildArcLengthGuide,
   findClosestSOnGuide,
   sampleGuideAtS,
@@ -442,8 +445,10 @@ function generateAdaptiveOutlinePath(
     let skipArc = 0;
 
     if (li === 0) {
+      const bottomHelixR = helixRadiusAtZ(settings, layerZ, topZ);
       const segmentsPerRev = helixSegmentsPerRev(globals.resolution);
       const rotDir = resolveHelixRotationDir(settings.climbMilling);
+      const stepoverIncrement = adaptiveForwardIncrement(settings.toolDiameter, settings.stepover);
       const rotParams = trochoidParams(
         loop,
         settings,
@@ -473,16 +478,38 @@ function generateAdaptiveOutlinePath(
       if (leadInTroch.length > 0) {
         const boreBottom = lastPathPoint(points);
         if (boreBottom) {
+          const boreStartAngle = Math.atan2(boreBottom.y - entry.y, boreBottom.x - entry.x);
+
+          if (
+            !appendPoints(
+              points,
+              adjustBoreRadiusToSlotWidth(
+                entry,
+                bottomHelixR,
+                slotHelixR,
+                layerZ,
+                stepoverIncrement,
+                rotDir,
+                segmentsPerRev,
+                boreStartAngle,
+                helixFeed
+              )
+            )
+          ) {
+            break;
+          }
+
+          const afterRadius = lastPathPoint(points) ?? boreBottom;
           const firstLeadIn = leadInTroch[0];
           if (
             !appendPoints(
               points,
               generateBoreBottomToLeadInTransition(
                 entry,
-                boreBottom,
+                afterRadius,
                 firstLeadIn,
                 layerZ,
-                roughSlot.forwardIncrement,
+                stepoverIncrement,
                 rotDir,
                 segmentsPerRev,
                 helixFeed
@@ -497,7 +524,7 @@ function generateAdaptiveOutlinePath(
           break;
         }
         omitFirstOrbitSample = true;
-        skipArc = roughSlot.forwardIncrement;
+        skipArc = stepoverIncrement;
       }
     } else {
       skipArc = 0;

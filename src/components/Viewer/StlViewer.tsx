@@ -34,6 +34,7 @@ import {
   type SelectionGroup,
 } from '../../lib/meshSelection';
 import { ToolpathLines } from './ToolpathLines';
+import { DebugGuideLines } from './DebugGuideLines';
 import { ToolPreview, ToolSimulationDriver } from './ToolPreview';
 import { ToolSimulationControls } from './ToolSimulationControls';
 import {
@@ -47,6 +48,7 @@ import { SelectionLoopLines } from './SelectionLoopLines';
 import { ToolOriginMarker } from './ToolOriginMarker';
 import { EntryPointMarker, StockTopPlane } from './EntryPointMarker';
 import { resolveAdaptiveEntryPoint } from '../../lib/adaptiveOutline';
+import { computeAdaptiveOutlineDebugGuidesFromBounds } from '../../lib/adaptiveGuides';
 import { createViewerRenderer, detectWebGLSupport } from '../../lib/webglSupport';
 import { WebGLFallback } from './WebGLFallback';
 import { Viewer2D } from './Viewer2D';
@@ -570,6 +572,8 @@ function SceneContent({
   const activeOperationId = useAppStore((s) => s.activeOperationId);
   const partBounds = useAppStore((s) => s.partBounds);
   const toolOrigin = useSettingsStore((s) => s.toolOrigin);
+  const safeHeight = useSettingsStore((s) => s.safeHeight);
+  const toolpathResolution = useSettingsStore((s) => s.toolpathResolution);
   const { camera } = useThree();
   const simulationDistanceRef = useRef(simulationDistance);
   simulationDistanceRef.current = simulationDistance;
@@ -631,6 +635,25 @@ function SceneContent({
     [operations, visiblePaths]
   );
 
+  const adaptiveDebugGuides = useMemo(() => {
+    if (!partBounds) return null;
+    const globals = { safeHeight, resolution: toolpathResolution };
+    const adaptiveOps = operations.filter(
+      (op) => op.visible && op.enabled && op.type === 'adaptive-outline' && op.geometry?.loops?.[0]
+    );
+    if (adaptiveOps.length === 0) return null;
+
+    const active =
+      adaptiveOps.find((op) => op.id === activeOperationId) ?? adaptiveOps[0];
+    return computeAdaptiveOutlineDebugGuidesFromBounds(active, partBounds, globals);
+  }, [
+    operations,
+    activeOperationId,
+    partBounds,
+    safeHeight,
+    toolpathResolution,
+  ]);
+
   const previewFeedRate = useMemo(() => {
     const visible = operations.filter((o) => o.visible);
     if (visible.length === 0) return 1200;
@@ -662,6 +685,12 @@ function SceneContent({
         onIndexReady={onIndexReady}
       />
       <ToolpathLines segments={previewPaths} />
+      {adaptiveDebugGuides && (
+        <DebugGuideLines
+          slotCenterline={adaptiveDebugGuides.slotCenterline}
+          leadInGuide={adaptiveDebugGuides.leadInGuide}
+        />
+      )}
       {toolInPreviewWindow && (
         <ToolPreview
           sample={simulationSample}
