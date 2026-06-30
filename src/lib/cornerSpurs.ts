@@ -237,7 +237,11 @@ export function buildSlotCenterGuideWithCornerSpurs(
 
       const internalAngle = vertexInternalAngleDeg(prev, curr, next);
       if (internalAngle < maxInternalAngleDeg) {
-        const tipOffset = roughTipInnerOffset ?? finishInnerOffset;
+        let tipOffset = roughTipInnerOffset ?? finishInnerOffset;
+        if (roughTipInnerOffset !== undefined && internalAngle > 130) {
+          const blend = Math.max(0, Math.min(1, (internalAngle - 130) / 30));
+          tipOffset = roughTipInnerOffset + blend * (finishInnerOffset - roughTipInnerOffset);
+        }
         const spurTipMiter = offsetVertexMiter(partLoop, i, tipOffset);
         const spurLen = Math.hypot(spurTipMiter.x - slotMiter.x, spurTipMiter.y - slotMiter.y);
         if (spurLen >= minSpurLength) {

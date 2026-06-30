@@ -18,6 +18,7 @@ import {
   resolveSpurLinearState,
   spurOrbitRadius,
   clampCutPointToSpur,
+  clampCutPointPastSpurTips,
   clampArcEndToSpurBoundaries,
   clampOpenArcEndToSpurBoundaries,
   loopSpurGuideS,
@@ -398,10 +399,16 @@ function generateTrochoidAlongGuide(
 
     let pt = orbitPoint(frame, orbitR, theta, z);
     if (spurLinear && phase >= CUT_PHASE_START && !rapid) {
-      const clamped = clampCutPointToSpur(pt.x, pt.y, spurLinear);
+      let clamped = clampCutPointToSpur(pt.x, pt.y, spurLinear);
+      clamped = clampCutPointPastSpurTips(
+        clamped.x,
+        clamped.y,
+        [spurLinear.spur],
+        baseTrochoidR
+      );
       pt = { ...pt, x: clamped.x, y: clamped.y };
     }
-    if (partLoop && minCenterDist !== undefined && !spurLinear && orbitR > baseTrochoidR * 0.05) {
+    if (partLoop && minCenterDist !== undefined && phase >= CUT_PHASE_START && !rapid) {
       const c = clampToolCenterMinDistanceFromPart(partLoop, pt.x, pt.y, minCenterDist);
       pt = { ...pt, x: c.x, y: c.y };
     }
