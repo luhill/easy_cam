@@ -11,7 +11,6 @@ import {
   type ArcLengthGuide,
 } from './trochoidalPath';
 import { clampToolCenterMinDistanceFromPart, signedLoopArea2D } from './geometryProcessing';
-import { buildUnifiedEntryCenterlineGuide } from './entryPath';
 
 export interface FourZoneParams {
   forwardIncrement: number;
@@ -348,13 +347,13 @@ export function generateOpenTrochoidPath(
     guide.totalLength,
     false,
     (s) => sampleOpenGuideAtS(guide, s),
-    { ...params, guideSign: 1 }
+    params
   );
 }
 
 /**
  * Continuous trochoid roughing from a spline lead-in into a full slot-center loop.
- * One uninterrupted stream of micro-loops on a single merged centerline guide.
+ * Loop section uses closed-guide frames (same as deeper layers) for consistent lift.
  */
 export function generateContinuousEntryTrochoidPath(
   splineGuide: LoopPoint[],
@@ -370,18 +369,29 @@ export function generateContinuousEntryTrochoidPath(
     params.sampleSpacing ??
     Math.min(params.forwardIncrement / 4, params.slotClearance / 4, 0.5);
 
-  const centerline = buildUnifiedEntryCenterlineGuide(
-    splineGuide,
-    trochArcGuide,
-    trochoidStartS,
-    guideTraverseSign,
-    sampleSpacing,
-    params.z
-  );
+  const splineArcGuide =
+    splineGuide.length >= 2
+      ? buildOpenArcLengthGuide(splineGuide, sampleSpacing, outwardCCW)
+      : null;
+  const splineLen = splineArcGuide?.totalLength ?? 0;
+  const totalLength = splineLen + trochArcGuide.totalLength;
+  if (totalLength <= 0) return [];
 
-  if (centerline.length < 2) return [];
+  const forward = guideTraverseSign >= 0;
+  const sampleAtGlobalS = (s: number) => {
+    if (splineArcGuide && s < splineLen - 1e-6) {
+      const frame = sampleOpenGuideAtS(splineArcGuide, Math.max(0, s));
+      if (!forward) {
+        return { ...frame, tx: -frame.tx, ty: -frame.ty, nx: -frame.nx, ny: -frame.ny };
+      }
+      return frame;
+    }
+    const loopDelta = Math.max(0, s - splineLen);
+    const loopS = trochoidStartS + loopDelta;
+    return sampleGuideAtS(trochArcGuide, loopS);
+  };
 
-  return generateOpenTrochoidPath(centerline, { ...params }, outwardCCW);
+  return generateTrochoidAlongGuide(totalLength, false, sampleAtGlobalS, params);
 }
 
 export function generateConstantEngagementTrochoid(
