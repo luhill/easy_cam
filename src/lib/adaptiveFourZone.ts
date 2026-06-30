@@ -369,8 +369,8 @@ function generateTrochoidAlongGuide(
 
     const orbitR = spurLinear
       ? spurOrbitRadius(spurLinear, baseTrochoidR)
-      : params.trochoidRAtGuide
-        ? params.trochoidRAtGuide(sSample)
+      : params.trochoidRAtGuide && spurLoopS !== null
+        ? params.trochoidRAtGuide(spurLoopS)
         : baseTrochoidR;
 
     if (orbitR <= baseTrochoidR * 0.02) {
