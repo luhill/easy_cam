@@ -17,6 +17,7 @@ import {
   spurFrameFromLinear,
   spurLinearParams,
   resolveSpurLinearState,
+  spurLinearParamsFromGeometry,
   spurOrbitRadius,
   clampCutPointToSpur,
   clampCutPointPastSpurTips,
@@ -361,18 +362,29 @@ function generateTrochoidAlongGuide(
       spurLoopS !== null && spurRanges.length > 0
         ? spurLinearParams(spurLoopS, loopLength, spurRanges)
         : null;
-    const spurLinear =
-      arcSpur !== null
-        ? resolveSpurLinearState(
-            spurLoopS!,
-            sampled.x,
-            sampled.y,
-            loopLength,
-            spurRanges,
-            baseTrochoidR * 1.25
-          )
-        : null;
-    const spurState = spurLinear ?? arcSpur;
+    let spurState = arcSpur;
+    if (arcSpur !== null) {
+      spurState =
+        resolveSpurLinearState(
+          spurLoopS!,
+          sampled.x,
+          sampled.y,
+          loopLength,
+          spurRanges,
+          baseTrochoidR * 1.25
+        ) ?? arcSpur;
+    } else if (
+      spurRanges.length > 0 &&
+      spurLoopS !== null &&
+      (!openSpurSnap || sSample >= openSpurSnap.splineLen - 1e-5)
+    ) {
+      spurState = spurLinearParamsFromGeometry(
+        sampled.x,
+        sampled.y,
+        spurRanges,
+        baseTrochoidR * 1.25
+      );
+    }
 
     const spurFrame = spurState
       ? spurFrameFromLinear(spurState, sampled.z)

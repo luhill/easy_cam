@@ -62,14 +62,18 @@ function densifyLoop(loop: LoopPoint[], maxSegmentLen: number): LoopPoint[] {
 /** Build arc-length parameterized guide with smooth tangents and outward normals. */
 export function buildArcLengthGuide(
   guideLoop: LoopPoint[],
-  sampleSpacing: number
+  sampleSpacing: number,
+  options?: { preserveShortFeatures?: boolean }
 ): ArcLengthGuide {
   if (guideLoop.length < 3) {
     return { frames: [], totalLength: 0 };
   }
 
   const ccw = signedLoopArea2D(guideLoop) >= 0;
-  const dense = densifyLoop(guideLoop, Math.max(sampleSpacing, 0.1));
+  const densifySpacing = options?.preserveShortFeatures
+    ? Math.max(sampleSpacing, 0.02)
+    : Math.max(sampleSpacing, 0.1);
+  const dense = densifyLoop(guideLoop, densifySpacing);
   const n = dense.length;
   const frames: GuideFrame[] = [];
   let s = 0;
