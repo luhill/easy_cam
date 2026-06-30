@@ -4,10 +4,12 @@
 
 import type { LoopPoint, ToolpathPoint } from '../types/operations';
 import {
+  advanceGuideArcLength,
   buildArcLengthGuide,
   buildOpenArcLengthGuide,
   sampleGuideAtS,
   sampleOpenGuideAtS,
+  type ArcLengthGuide,
 } from './trochoidalPath';
 import { clampToolCenterMinDistanceFromPart, signedLoopArea2D } from './geometryProcessing';
 
@@ -384,6 +386,168 @@ export function generateOpenTrochoidPath(
     (s) => sampleOpenGuideAtS(guide, s),
     { ...params, guideSign: 1 }
   );
+}
+
+/** Trochoid along a finite arc of a closed slot-center guide (loop frames throughout). */
+export function generateLoopSegmentTrochoidPath(
+  trochArcGuide: ArcLengthGuide,
+  fromS: number,
+  arcLength: number,
+  forward: boolean,
+  params: FourZoneParams
+): ToolpathPoint[] {
+  if (arcLength <= 0 || trochArcGuide.totalLength <= 0) return [];
+
+  return generateTrochoidAlongGuide(
+    arcLength,
+    false,
+    (delta) => {
+      const loopS = advanceGuideArcLength(trochArcGuide, fromS, delta, forward);
+      return sampleGuideAtS(trochArcGuide, loopS);
+    },
+    { ...params, guideSign: 1 }
+  );
+}
+
+function appendTrochoidPathSegments(
+  first: ToolpathPoint[],
+  second: ToolpathPoint[],
+  bridge?: ToolpathPoint[]
+): ToolpathPoint[] {
+  if (first.length === 0) return second;
+  if (second.length === 0) return first;
+
+  const last = first[first.length - 1];
+  let startIdx =
+    last && Math.hypot(second[0].x - last.x, second[0].y - last.y) < 0.12 ? 1 : 0;
+
+  if (startIdx === 0 && last && bridge && bridge.length > 0) {
+    return [...first, ...bridge, ...second];
+  }
+
+  return [...first, ...second.slice(startIdx)];
+}
+
+/** Sample one trochoid orbit point on an existing arc-length guide. */
+export function sampleOrbitOnArcGuide(
+  arcGuide: ArcLengthGuide,
+  s: number,
+  phase: number,
+  params: Pick<
+    FourZoneParams,
+    'slotClearance' | 'rotSign' | 'z' | 'partLoop' | 'minCenterDist' | 'feedRate'
+  >
+): ToolpathPoint {
+  const trochoidR = params.slotClearance / 2;
+  const pt = sampleOrbitPoint(
+    (station) => sampleGuideAtS(arcGuide, station),
+    s,
+    phase,
+    trochoidR,
+    params.rotSign ?? -1,
+    params.z,
+    params.partLoop,
+    params.minCenterDist
+  );
+  if (params.feedRate !== undefined) pt.feedRate = params.feedRate;
+  return pt;
+}
+
+function bridgeTrochoidOrbitGap(
+  arcGuide: ArcLengthGuide,
+  fromS: number,
+  fromPhase: number,
+  toPhase: number,
+  params: FourZoneParams,
+  steps = 6
+): ToolpathPoint[] {
+  if (steps <= 0) return [];
+  const points: ToolpathPoint[] = [];
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const phase = fromPhase + (toPhase - fromPhase) * t;
+    points.push(
+      sampleOrbitOnArcGuide(arcGuide, fromS, phase, {
+        slotClearance: params.slotClearance,
+        rotSign: params.rotSign,
+        z: params.z,
+        partLoop: params.partLoop,
+        minCenterDist: params.minCenterDist,
+        feedRate: params.feedRate,
+      })
+    );
+  }
+  return points;
+}
+
+/**
+ * Lead-in trochoid: spline approach, then one stepover on the slot centerline using
+ * the same loop frames as the closed outline path. Keeps the splice at a cycle
+ * boundary so micro-loops never cross the spline→loop transition mid-orbit.
+ */
+export function generateSplineLoopLeadInTrochoid(
+  splineGuide: LoopPoint[],
+  trochArcGuide: ArcLengthGuide,
+  trochoidStartS: number,
+  guideTraverseSign: number,
+  loopStepover: number,
+  params: FourZoneParams,
+  outwardCCW: boolean
+): ToolpathPoint[] {
+  if (splineGuide.length < 2 || loopStepover <= 0) {
+    return generateOpenTrochoidPath(splineGuide, params, outwardCCW);
+  }
+
+  const forward = guideTraverseSign >= 0;
+  const splineTroch = generateOpenTrochoidPath(
+    splineGuide,
+    {
+      ...params,
+      liftAmount: 0,
+      openTerminalHandoff: true,
+      openTerminalPhase: 0,
+    },
+    outwardCCW
+  );
+
+  if (splineTroch.length > 0) {
+    const joinPt = sampleOrbitOnArcGuide(trochArcGuide, trochoidStartS, 0, params);
+    splineTroch[splineTroch.length - 1] = joinPt;
+  }
+
+  const loopTroch = generateLoopSegmentTrochoidPath(
+    trochArcGuide,
+    trochoidStartS,
+    loopStepover,
+    forward,
+    {
+      ...params,
+      liftAmount: 0,
+      omitFirstOrbitSample: true,
+      openTerminalHandoff: true,
+      openTerminalPhase: 0,
+    }
+  );
+
+  const last = splineTroch[splineTroch.length - 1];
+  const loopStart = loopTroch[0];
+  let bridge: ToolpathPoint[] | undefined;
+  if (
+    last &&
+    loopStart &&
+    Math.hypot(loopStart.x - last.x, loopStart.y - last.y) > 0.15
+  ) {
+    const steps = params.orbitStepsPerRev ?? 90;
+    bridge = bridgeTrochoidOrbitGap(
+      trochArcGuide,
+      trochoidStartS,
+      0,
+      1 / Math.max(steps, 1),
+      params
+    );
+  }
+
+  return appendTrochoidPathSegments(splineTroch, loopTroch, bridge);
 }
 
 export function generateConstantEngagementTrochoid(
