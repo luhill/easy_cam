@@ -10,6 +10,7 @@ import {
   buildArcLengthGuide,
   extractGuideArcSegment,
   findClosestSOnGuide,
+  guideArcLengthBetween,
   sampleGuideAtS,
 } from './trochoidalPath';
 import { helixSegmentsPerRev, pathSampleSpacing, type ToolpathGlobalOptions } from './toolpathConfig';
@@ -122,61 +123,69 @@ export function closestPointIndexOnPath(
   return bestIdx;
 }
 
-/** Circular fillet between a straight leg and the following guide segment. */
+function polylineLength(pts: LoopPoint[]): number {
+  let len = 0;
+  for (let i = 1; i < pts.length; i++) {
+    len += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+  }
+  return len;
+}
+
+/** Circular fillet between a straight leg and the slot outline tangent. */
 function filletGuideCorner(
   straightLeg: LoopPoint[],
   arcLeg: LoopPoint[],
   filletRadius: number,
   sampleSpacing: number,
-  outTangent?: { x: number; y: number }
+  outTangent: { x: number; y: number },
+  arcLengthAvailable: number
 ): LoopPoint[] {
-  if (straightLeg.length < 2 || arcLeg.length < 2 || filletRadius <= sampleSpacing * 0.05) {
+  if (straightLeg.length < 2 || filletRadius <= 0) {
     if (straightLeg.length === 0) return arcLeg;
     if (arcLeg.length === 0) return straightLeg;
     const last = straightLeg[straightLeg.length - 1];
     const dup =
+      arcLeg.length > 0 &&
       Math.hypot(last.x - arcLeg[0].x, last.y - arcLeg[0].y) < sampleSpacing * 0.3;
     return dup ? [...straightLeg, ...arcLeg.slice(1)] : [...straightLeg, ...arcLeg];
   }
 
   const corner = straightLeg[straightLeg.length - 1];
-  const before = straightLeg[straightLeg.length - 2];
-  const after = arcLeg[1] ?? arcLeg[0];
+  const start = straightLeg[0];
   const z = corner.z;
 
-  const inX = corner.x - before.x;
-  const inY = corner.y - before.y;
-  let outX = after.x - corner.x;
-  let outY = after.y - corner.y;
-  if (outTangent) {
-    const tLen = Math.hypot(outTangent.x, outTangent.y) || 1;
-    outX = (outTangent.x / tLen) * Math.max(Math.hypot(outX, outY), sampleSpacing);
-    outY = (outTangent.y / tLen) * Math.max(Math.hypot(outX, outY), sampleSpacing);
-  }
-  const inLen = Math.hypot(inX, inY);
-  const outLen = Math.hypot(outX, outY);
-  if (inLen < 1e-6 || outLen < 1e-6) {
+  const inX = corner.x - start.x;
+  const inY = corner.y - start.y;
+  const inAvail = Math.hypot(inX, inY);
+  if (inAvail < sampleSpacing * 0.1) {
     return [...straightLeg, ...arcLeg.slice(1)];
   }
 
-  const d1x = inX / inLen;
-  const d1y = inY / inLen;
-  const d2x = outX / outLen;
-  const d2y = outY / outLen;
+  const d1x = inX / inAvail;
+  const d1y = inY / inAvail;
+
+  const tLen = Math.hypot(outTangent.x, outTangent.y) || 1;
+  const d2x = outTangent.x / tLen;
+  const d2y = outTangent.y / tLen;
+
   const cross = d1x * d2y - d1y * d2x;
   const dot = Math.max(-1, Math.min(1, d1x * d2x + d1y * d2y));
   const turn = Math.acos(dot);
-  if (turn < 1e-3 || turn > Math.PI - 1e-3) {
+  if (turn < (2 * Math.PI) / 180 || turn > Math.PI - (2 * Math.PI) / 180) {
     return [...straightLeg, ...arcLeg.slice(1)];
   }
 
   const half = turn / 2;
   let trim = filletRadius / Math.tan(half);
-  const maxTrim = Math.min(inLen, outLen) * 0.95;
+  const outAvail = Math.max(arcLengthAvailable, polylineLength(arcLeg), sampleSpacing);
+  const maxTrim = Math.min(inAvail, outAvail) * 0.95;
   let r = filletRadius;
   if (trim > maxTrim) {
-    r = maxTrim * Math.tan(half);
+    r = Math.max(maxTrim * Math.tan(half), sampleSpacing * 0.05);
     trim = maxTrim;
+  }
+  if (r < sampleSpacing * 0.05) {
+    return [...straightLeg, ...arcLeg.slice(1)];
   }
 
   const t1 = { x: corner.x - d1x * trim, y: corner.y - d1y * trim, z };
@@ -194,8 +203,8 @@ function filletGuideCorner(
     while (sweep >= -1e-6) sweep -= 2 * Math.PI;
   }
 
-  const arcLen = Math.abs(sweep) * r;
-  const steps = Math.max(2, Math.ceil(arcLen / sampleSpacing));
+  const filletArcLen = Math.abs(sweep) * r;
+  const steps = Math.max(4, Math.ceil(filletArcLen / sampleSpacing));
   const filletPts: LoopPoint[] = [t1];
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
@@ -203,15 +212,34 @@ function filletGuideCorner(
     filletPts.push({ x: cx + Math.cos(ang) * r, y: cy + Math.sin(ang) * r, z });
   }
 
-  let arcStartIdx = 1;
-  for (let i = 1; i < arcLeg.length; i++) {
-    if (Math.hypot(arcLeg[i].x - corner.x, arcLeg[i].y - corner.y) >= trim - 1e-4) {
-      arcStartIdx = i;
-      break;
+  let arcStartIdx = 0;
+  if (arcLeg.length > 0) {
+    arcStartIdx = 1;
+    for (let i = 1; i < arcLeg.length; i++) {
+      if (Math.hypot(arcLeg[i].x - corner.x, arcLeg[i].y - corner.y) >= trim - 1e-4) {
+        arcStartIdx = i;
+        break;
+      }
+    }
+    if (
+      arcStartIdx === 1 &&
+      arcLeg.length === 1 &&
+      Math.hypot(arcLeg[0].x - corner.x, arcLeg[0].y - corner.y) < trim
+    ) {
+      arcStartIdx = 1;
     }
   }
 
-  return [...straightLeg.slice(0, -1), ...filletPts, ...arcLeg.slice(arcStartIdx)];
+  const trimmedStraight: LoopPoint[] = [];
+  const keepTrim = inAvail - trim;
+  for (const p of straightLeg.slice(0, -1)) {
+    const proj = (p.x - start.x) * d1x + (p.y - start.y) * d1y;
+    if (proj <= keepTrim + 1e-4) {
+      trimmedStraight.push(p);
+    }
+  }
+
+  return [...trimmedStraight, ...filletPts, ...arcLeg.slice(arcStartIdx)];
 }
 
 /**
@@ -256,13 +284,23 @@ export function buildBoreLeadInGuide(
   );
   if (arcPts.length === 0) return straightLeg;
 
-  if (filletRadius > 0 && straightLeg.length >= 2 && arcPts.length >= 2) {
+  if (filletRadius > 0 && straightLeg.length >= 2) {
     const frame = sampleGuideAtS(trochArcGuide, nearest.s);
     const tangentSign = guideTraverseSign >= 0 ? 1 : -1;
-    return filletGuideCorner(straightLeg, arcPts, filletRadius, sampleSpacing, {
-      x: frame.tx * tangentSign,
-      y: frame.ty * tangentSign,
-    });
+    const arcLengthAvailable = guideArcLengthBetween(
+      trochArcGuide.totalLength,
+      nearest.s,
+      joinS,
+      guideTraverseSign >= 0
+    );
+    return filletGuideCorner(
+      straightLeg,
+      arcPts,
+      filletRadius,
+      sampleSpacing,
+      { x: frame.tx * tangentSign, y: frame.ty * tangentSign },
+      arcLengthAvailable
+    );
   }
 
   const last = straightLeg[straightLeg.length - 1];
