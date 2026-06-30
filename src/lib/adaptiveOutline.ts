@@ -1,5 +1,5 @@
-import type { LoopPoint } from '../types/operations';
-import type { OperationDefaults } from '../types/operations';
+import type { LoopPoint, OperationDefaults } from '../types/operations';
+import type { CornerSpurOptions } from './cornerSpurs';
 import { offsetLoop2DMinkowski, distanceToLoop2D, closestPointOnLoop2D } from './geometryProcessing';
 import { adaptiveForwardIncrement } from './trochoidalPath';
 import { ensureEntryOutsidePart, resolveBoreOuterRadius } from './entryPath';
@@ -32,19 +32,16 @@ export interface AdaptiveSlotOptions {
 }
 
 /**
- * Inner offset for corner spur tips during roughing.
- * With finishing pass enabled, spurs stop at the rough envelope so the finish
- * pass clears the remaining stock — avoids overshoot past the spur tip.
+ * Corner spur options when roughing with finishing pass enabled.
+ * Sharp corners reach finish depth; wide corners stop at rough stock to avoid overshoot.
  */
-export function resolveSpurTipInnerOffset(
-  settings: OperationDefaults,
-  roughing = true
-): number {
-  const finishSlot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
-  if (roughing && settings.finishingPass) {
-    return resolveAdaptiveSlotGeometry(settings, { roughing: true }).innerCenterOffset;
-  }
-  return finishSlot.innerCenterOffset;
+export function cornerSpurOptionsForRoughing(settings: OperationDefaults): CornerSpurOptions {
+  if (!settings.finishingPass) return {};
+  const roughSlot = resolveAdaptiveSlotGeometry(settings, { roughing: true });
+  return {
+    roughTipInnerOffset: roughSlot.innerCenterOffset,
+    sharpAngleThresholdDeg: 100,
+  };
 }
 
 export function resolveAdaptiveSlotGeometry(

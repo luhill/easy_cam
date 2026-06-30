@@ -23,6 +23,9 @@ export interface CornerSpurRange {
   sPeak: number;
   /** Arc length where spur rejoins the main slot centerline (0 → full radius). */
   sEnd: number;
+  /** Exact bisector tip XY — used to prevent U-turn frame overshoot. */
+  peakX: number;
+  peakY: number;
 }
 
 interface CornerSpurMarker {
@@ -41,6 +44,13 @@ export interface CornerSpurOptions {
   maxInternalAngleDeg?: number;
   /** Minimum bisector spur length to insert (mm). Default 0.08. */
   minSpurLength?: number;
+  /**
+   * With finishing pass: internal angle above this uses roughTipInnerOffset instead
+   * of finishInnerOffset (prevents wide-corner overshoot). Sharp corners keep finish depth.
+   */
+  sharpAngleThresholdDeg?: number;
+  /** Rough inner offset for wide corners when finishing pass leaves stock. */
+  roughTipInnerOffset?: number;
 }
 
 function appendDensifiedSegment(
@@ -149,7 +159,7 @@ function mapSpurMarkerToArcRange(
     return null;
   }
 
-  return { sStart, sPeak, sEnd };
+  return { sStart, sPeak, sEnd, peakX: tip.x, peakY: tip.y };
 }
 
 /**
@@ -165,6 +175,8 @@ export function buildSlotCenterGuideWithCornerSpurs(
 ): SlotCenterGuideResult {
   const maxInternalAngleDeg = options.maxInternalAngleDeg ?? 160;
   const minSpurLength = options.minSpurLength ?? 0.08;
+  const sharpAngleThresholdDeg = options.sharpAngleThresholdDeg ?? 100;
+  const roughTipInnerOffset = options.roughTipInnerOffset;
 
   const n = partLoop.length;
   if (n < 3 || Math.abs(slotCenterOffset) < 1e-9) {
@@ -224,10 +236,14 @@ export function buildSlotCenterGuideWithCornerSpurs(
 
       const internalAngle = vertexInternalAngleDeg(prev, curr, next);
       if (internalAngle < maxInternalAngleDeg) {
-        const finishMiter = offsetVertexMiter(partLoop, i, finishInnerOffset);
-        const spurLen = Math.hypot(finishMiter.x - slotMiter.x, finishMiter.y - slotMiter.y);
+        const tipOffset =
+          roughTipInnerOffset !== undefined && internalAngle > sharpAngleThresholdDeg
+            ? roughTipInnerOffset
+            : finishInnerOffset;
+        const spurTipMiter = offsetVertexMiter(partLoop, i, tipOffset);
+        const spurLen = Math.hypot(spurTipMiter.x - slotMiter.x, spurTipMiter.y - slotMiter.y);
         if (spurLen >= minSpurLength) {
-          spurTip = finishMiter;
+          spurTip = spurTipMiter;
         }
       }
 
@@ -346,6 +362,37 @@ export function mapSpurRangesToArcGuide(
   return { arcGuide, spurRanges };
 }
 
+function spurPeakHalfBand(span: number): number {
+  return Math.max(0.05, span * 0.15);
+}
+
+function wrappedArcDistance(a: number, b: number, totalLength: number): number {
+  let d = Math.abs(a - b);
+  if (totalLength > 0 && d > totalLength * 0.5) d = totalLength - d;
+  return d;
+}
+
+/** When guide arc length is inside a spur peak deadband, return the exact tip XY. */
+export function spurPeakHoldAtGuideS(
+  guideS: number,
+  totalLength: number,
+  spurRanges: CornerSpurRange[]
+): { x: number; y: number } | null {
+  if (spurRanges.length === 0 || totalLength <= 0) return null;
+
+  const w = ((guideS % totalLength) + totalLength) % totalLength;
+
+  for (const spur of spurRanges) {
+    const span = spur.sEnd - spur.sStart;
+    const halfBand = spurPeakHalfBand(span);
+    if (wrappedArcDistance(w, spur.sPeak, totalLength) <= halfBand) {
+      return { x: spur.peakX, y: spur.peakY };
+    }
+  }
+
+  return null;
+}
+
 /** Trochoid orbit radius at a guide arc-length station (ramps on corner spurs only). */
 export function trochoidRadiusAtGuideS(
   s: number,
@@ -361,18 +408,22 @@ export function trochoidRadiusAtGuideS(
   }
 
   for (const spur of spurRanges) {
-    if (w > spur.sStart + 1e-4 && w < spur.sPeak - 1e-4) {
-      const span = spur.sPeak - spur.sStart;
-      const t = (w - spur.sStart) / span;
-      return baseRadius * (1 - t);
-    }
-    if (Math.abs(w - spur.sPeak) <= 1e-3) {
+    const span = spur.sEnd - spur.sStart;
+    const halfBand = spurPeakHalfBand(span);
+
+    if (wrappedArcDistance(w, spur.sPeak, totalLength) <= halfBand) {
       return 0;
     }
-    if (w > spur.sPeak + 1e-4 && w < spur.sEnd - 1e-4) {
-      const span = spur.sEnd - spur.sPeak;
-      const t = (w - spur.sPeak) / span;
-      return baseRadius * t;
+
+    if (w > spur.sStart + 1e-4 && w < spur.sPeak - halfBand) {
+      const rampSpan = spur.sPeak - spur.sStart - halfBand;
+      const t = rampSpan > 1e-6 ? (w - spur.sStart) / rampSpan : 1;
+      return baseRadius * (1 - Math.min(1, Math.max(0, t)));
+    }
+    if (w > spur.sPeak + halfBand && w < spur.sEnd - 1e-4) {
+      const rampSpan = spur.sEnd - spur.sPeak - halfBand;
+      const t = rampSpan > 1e-6 ? (w - spur.sPeak - halfBand) / rampSpan : 1;
+      return baseRadius * Math.min(1, Math.max(0, t));
     }
   }
 

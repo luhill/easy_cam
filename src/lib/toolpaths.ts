@@ -15,7 +15,7 @@ import {
   mapSpurRangesToArcGuide,
   buildGuideRadiusSampler,
 } from './cornerSpurs';
-import { resolveAdaptiveSlotGeometry, resolveSpurTipInnerOffset } from './adaptiveOutline';
+import { resolveAdaptiveSlotGeometry, cornerSpurOptionsForRoughing } from './adaptiveOutline';
 import {
   adaptiveEntryOverridesFromGeometry,
   resolveAdaptiveEntryLayout,
@@ -228,6 +228,7 @@ function generateAdaptiveTrochoidalPath(
   omitFirstOrbitSample?: boolean
 ): ToolpathPoint[] {
   const roughSlot = resolveAdaptiveSlotGeometry(settings, { roughing });
+  const finishSlot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
   const segLen = minkowskiSegmentLen(globals.resolution);
   const sampleSpacing = trochoidSampleSpacing(
     roughSlot.forwardIncrement,
@@ -237,24 +238,29 @@ function generateAdaptiveTrochoidalPath(
   const { guide: slotCenterGuide, spurMarkers } = buildSlotCenterGuideWithCornerSpurs(
     partLoop,
     roughSlot.slotCenterOffset,
-    resolveSpurTipInnerOffset(settings, true),
-    segLen
+    finishSlot.innerCenterOffset,
+    segLen,
+    cornerSpurOptionsForRoughing(settings)
   );
   const { arcGuide, spurRanges } = mapSpurRangesToArcGuide(
     slotCenterGuide,
     spurMarkers,
     sampleSpacing
   );
-  return generateFourZoneAdaptivePath(slotCenterGuide, {
-    ...trochoidParams(partLoop, settings, slotCenterGuide, z, roughing, globals),
-    startS,
-    skipArcLength,
-    omitFirstOrbitSample,
-    trochoidRAtGuide:
-      spurRanges.length > 0
-        ? buildGuideRadiusSampler(roughSlot.trochoidRadius, arcGuide.totalLength, spurRanges)
-        : undefined,
-  });
+  return generateFourZoneAdaptivePath(
+    slotCenterGuide,
+    {
+      ...trochoidParams(partLoop, settings, slotCenterGuide, z, roughing, globals),
+      startS,
+      skipArcLength,
+      omitFirstOrbitSample,
+      trochoidRAtGuide:
+        spurRanges.length > 0
+          ? buildGuideRadiusSampler(roughSlot.trochoidRadius, arcGuide.totalLength, spurRanges)
+          : undefined,
+    },
+    spurRanges
+  );
 }
 
 function appendGeneratedPath(
@@ -328,8 +334,9 @@ function generateFinishingOutline(
   const { guide: roughCenterGuide } = buildSlotCenterGuideWithCornerSpurs(
     partLoop,
     roughSlot.slotCenterOffset,
-    resolveSpurTipInnerOffset(settings, true),
-    segLen
+    finishSlot.innerCenterOffset,
+    segLen,
+    cornerSpurOptionsForRoughing(settings)
   );
   if (finishGuide.length < 3) return [];
 

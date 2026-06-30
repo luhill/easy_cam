@@ -11,7 +11,7 @@ import {
   type ArcLengthGuide,
 } from './trochoidalPath';
 import { clampToolCenterMinDistanceFromPart, signedLoopArea2D } from './geometryProcessing';
-import { trochoidRadiusAtGuideS, type CornerSpurRange } from './cornerSpurs';
+import { trochoidRadiusAtGuideS, spurPeakHoldAtGuideS, type CornerSpurRange } from './cornerSpurs';
 
 export interface FourZoneParams {
   forwardIncrement: number;
@@ -36,6 +36,8 @@ export interface FourZoneParams {
   orbitStepsPerRev?: number;
   /** Orbit radius vs guide arc length (for corner spur ramps). */
   trochoidRAtGuide?: (guideS: number) => number;
+  /** Snap tool center to exact spur tip inside peak deadband (prevents U-turn overshoot). */
+  spurPeakHold?: (guideS: number) => { x: number; y: number } | null;
 }
 
 const CUT_PHASE_START = 0.5;
@@ -258,11 +260,14 @@ function generateTrochoidAlongGuide(
       : baseTrochoidR;
 
     const onSpurRamp = params.trochoidRAtGuide !== undefined && orbitR < baseTrochoidR - 1e-4;
-    const collapseThreshold = onSpurRamp ? baseTrochoidR * 0.25 : baseTrochoidR * 0.03;
+    const peakHold = params.spurPeakHold?.(sSample);
+    const collapseThreshold = onSpurRamp ? baseTrochoidR * 0.35 : baseTrochoidR * 0.03;
 
-    if (orbitR <= collapseThreshold) {
+    if (peakHold || orbitR <= collapseThreshold) {
       if (phase >= CUT_PHASE_START && !skipDuplicate) {
-        let tipPt: ToolpathPoint = { x: frame.x, y: frame.y, z };
+        const cx = peakHold?.x ?? frame.x;
+        const cy = peakHold?.y ?? frame.y;
+        let tipPt: ToolpathPoint = { x: cx, y: cy, z };
         if (feedRate !== undefined) tipPt = { ...tipPt, feedRate };
         points.push(tipPt);
       }
@@ -328,7 +333,8 @@ function generateTrochoidAlongGuide(
 
 export function generateFourZoneAdaptivePath(
   slotCenterGuide: LoopPoint[],
-  params: FourZoneParams
+  params: FourZoneParams,
+  spurRanges: CornerSpurRange[] = []
 ): ToolpathPoint[] {
   if (slotCenterGuide.length < 3) return [];
 
@@ -339,11 +345,17 @@ export function generateFourZoneAdaptivePath(
   const guide = buildArcLengthGuide(slotCenterGuide, sampleSpacing);
   if (guide.totalLength <= 0) return [];
 
+  const loopTotal = guide.totalLength;
+  const spurPeakHold =
+    spurRanges.length > 0
+      ? (guideS: number) => spurPeakHoldAtGuideS(guideS, loopTotal, spurRanges)
+      : undefined;
+
   return generateTrochoidAlongGuide(
     guide.totalLength,
     true,
     (s) => sampleGuideAtS(guide, s),
-    params
+    { ...params, spurPeakHold }
   );
 }
 
@@ -412,9 +424,9 @@ export function generateContinuousEntryTrochoidPath(
   // Always emit spline (tool start → slot join) then the loop so bore lead-in
   // connects to troch[0] near the entry; loop traverse follows guideTraverseSign.
   const baseTrochoidR = params.slotClearance / 2;
+  const loopTotal = trochArcGuide.totalLength;
   let trochoidRAtGuide = params.trochoidRAtGuide;
   if (loopSpurRanges.length > 0 && !trochoidRAtGuide) {
-    const loopTotal = trochArcGuide.totalLength;
     trochoidRAtGuide = (globalS: number) => {
       if (globalS < splineLen - 1e-5) return baseTrochoidR;
       const loopDelta = globalS - splineLen;
@@ -428,6 +440,17 @@ export function generateContinuousEntryTrochoidPath(
     guideSign: 1,
     startS: 0,
     trochoidRAtGuide,
+    spurPeakHold:
+      loopSpurRanges.length > 0
+        ? (globalS: number) => {
+            if (globalS < splineLen - 1e-5) return null;
+            const loopDelta = globalS - splineLen;
+            const loopS = forward
+              ? trochoidStartS + loopDelta
+              : trochoidStartS - loopDelta;
+            return spurPeakHoldAtGuideS(loopS, loopTotal, loopSpurRanges);
+          }
+        : undefined,
   });
 }
 
