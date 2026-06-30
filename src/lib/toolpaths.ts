@@ -248,7 +248,6 @@ function generateAdaptiveTrochoidalPath(
     sampleSpacing,
     { trochoidR: roughSlot.trochoidRadius, resolution: globals.resolution }
   );
-  const innerGuide = offsetLoop2DMinkowski(partLoop, roughSlot.innerCenterOffset, segLen);
   return generateFourZoneAdaptivePath(
     slotCenterGuide,
     {
@@ -261,8 +260,7 @@ function generateAdaptiveTrochoidalPath(
           ? buildGuideRadiusSampler(
               roughSlot.trochoidRadius,
               arcGuide.totalLength,
-              spurRanges,
-              innerGuide
+              spurRanges
             )
           : undefined,
     },
@@ -552,14 +550,12 @@ function generateAdaptiveOutlinePath(
   const segmentsPerRev = helixSegmentsPerRev(globals.resolution);
   const rotDir = resolveHelixRotationDir(settings.climbMilling);
   const slotJoinCenter = sampleGuideAtS(trochArcGuide, trochoidStartS);
-  const innerGuide = offsetLoop2DMinkowski(loop, roughSlot.innerCenterOffset, segLen);
   const spurRadiusSampler =
     entryLayout.cornerSpurRanges.length > 0
       ? buildGuideRadiusSampler(
           roughSlot.trochoidRadius,
           trochArcGuide.totalLength,
-          entryLayout.cornerSpurRanges,
-          innerGuide
+          entryLayout.cornerSpurRanges
         )
       : undefined;
 

@@ -8,7 +8,6 @@ import {
   offsetVertexMiter,
   signedLoopArea2D,
   outwardEdgeNormal2D,
-  distanceToLoop2D,
 } from './geometryProcessing';
 import {
   buildArcLengthGuide,
@@ -431,38 +430,108 @@ function isGuideSInExpandedSpurInterval(
   return w >= loW - 1e-4 || w <= hiW + 1e-4;
 }
 
-/** Tool center on the bisector spur at this guide station (null if off spur). */
-export function spurCenterAtGuideS(
+/** Linear progress along a spur: outbound miter→peak or inbound peak→miter. */
+export function spurLinearParams(
   guideS: number,
   totalLength: number,
   spurRanges: CornerSpurRange[]
-): { x: number; y: number } | null {
+): { spur: CornerSpurRange; u: number; leg: 'out' | 'in' } | null {
   if (spurRanges.length === 0 || totalLength <= 0) return null;
 
   const w = wrapGuideS(guideS, totalLength);
 
   for (const spur of spurRanges) {
-    const span = spur.sEnd - spur.sStart;
-    const halfBand = spurPeakHalfBand(span);
-
     if (w < spur.sStart - 1e-4 || w > spur.sEnd + 1e-4) continue;
 
-    if (wrappedArcDistance(w, spur.sPeak, totalLength) <= halfBand) {
-      return { x: spur.peakX, y: spur.peakY };
-    }
-
     if (w <= spur.sPeak + 1e-4) {
-      const leg = Math.max(spur.sPeak - spur.sStart - halfBand, 1e-6);
-      const t = Math.min(1, Math.max(0, (w - spur.sStart) / leg));
-      return lerp2(spur.miterX, spur.miterY, spur.peakX, spur.peakY, t);
+      const span = spur.sPeak - spur.sStart;
+      const u = span > 1e-6 ? Math.min(1, Math.max(0, (w - spur.sStart) / span)) : 1;
+      return { spur, u, leg: 'out' };
     }
 
-    const leg = Math.max(spur.sEnd - spur.sPeak - halfBand, 1e-6);
-    const t = Math.min(1, Math.max(0, (w - spur.sPeak - halfBand) / leg));
-    return lerp2(spur.peakX, spur.peakY, spur.miterX, spur.miterY, t);
+    const span = spur.sEnd - spur.sPeak;
+    const u = span > 1e-6 ? Math.min(1, Math.max(0, (w - spur.sPeak) / span)) : 1;
+    return { spur, u, leg: 'in' };
   }
 
   return null;
+}
+
+/** Trochoid orbit radius on spurs: linear full→0 outbound, 0→full inbound. */
+export function trochoidRadiusAtGuideS(
+  s: number,
+  totalLength: number,
+  baseRadius: number,
+  spurRanges: CornerSpurRange[]
+): number {
+  const linear = spurLinearParams(s, totalLength, spurRanges);
+  if (!linear) return baseRadius;
+  return linear.leg === 'out' ? baseRadius * (1 - linear.u) : baseRadius * linear.u;
+}
+
+export function buildGuideRadiusSampler(
+  baseRadius: number,
+  totalLength: number,
+  spurRanges: CornerSpurRange[]
+): (guideS: number) => number {
+  if (spurRanges.length === 0) return () => baseRadius;
+  return (guideS) => trochoidRadiusAtGuideS(guideS, totalLength, baseRadius, spurRanges);
+}
+
+/** Tool center locked to bisector segment (never past peak). */
+export function spurCenterAtGuideS(
+  guideS: number,
+  totalLength: number,
+  spurRanges: CornerSpurRange[]
+): { x: number; y: number } | null {
+  const linear = spurLinearParams(guideS, totalLength, spurRanges);
+  if (!linear) return null;
+
+  const { spur, u, leg } = linear;
+  if (leg === 'out') {
+    return lerp2(spur.miterX, spur.miterY, spur.peakX, spur.peakY, u);
+  }
+  return lerp2(spur.peakX, spur.peakY, spur.miterX, spur.miterY, u);
+}
+
+/** Local frame on spur bisector — center from linear interpolation, tangent along bisector. */
+export function spurFrameAtGuideS(
+  guideS: number,
+  totalLength: number,
+  spurRanges: CornerSpurRange[],
+  z: number
+): { x: number; y: number; z: number; tx: number; ty: number; nx: number; ny: number } | null {
+  const linear = spurLinearParams(guideS, totalLength, spurRanges);
+  if (!linear) return null;
+
+  const { spur, u, leg } = linear;
+  let tx: number;
+  let ty: number;
+  let center: { x: number; y: number };
+
+  if (leg === 'out') {
+    center = lerp2(spur.miterX, spur.miterY, spur.peakX, spur.peakY, u);
+    tx = spur.peakX - spur.miterX;
+    ty = spur.peakY - spur.miterY;
+  } else {
+    center = lerp2(spur.peakX, spur.peakY, spur.miterX, spur.miterY, u);
+    tx = spur.miterX - spur.peakX;
+    ty = spur.miterY - spur.peakY;
+  }
+
+  const tlen = Math.hypot(tx, ty) || 1;
+  tx /= tlen;
+  ty /= tlen;
+
+  return {
+    x: center.x,
+    y: center.y,
+    z,
+    tx,
+    ty,
+    nx: ty,
+    ny: -tx,
+  };
 }
 
 /**
@@ -516,88 +585,21 @@ function spurGuardBoundaries(spur: CornerSpurRange, buffer: number, totalLength:
   return raw.map((s) => wrapGuideS(s, totalLength));
 }
 
-function spurPeakHalfBand(span: number): number {
-  return Math.max(0.05, span * 0.15);
-}
-
-function wrappedArcDistance(a: number, b: number, totalLength: number): number {
-  let d = Math.abs(a - b);
-  if (totalLength > 0 && d > totalLength * 0.5) d = totalLength - d;
-  return d;
-}
-
-/** When guide arc length is inside a spur peak deadband, return the exact tip XY. */
+/** When at spur tip, return exact peak XY. */
 export function spurPeakHoldAtGuideS(
   guideS: number,
   totalLength: number,
   spurRanges: CornerSpurRange[]
 ): { x: number; y: number } | null {
-  if (spurRanges.length === 0 || totalLength <= 0) return null;
-
-  const w = ((guideS % totalLength) + totalLength) % totalLength;
-
-  for (const spur of spurRanges) {
-    const span = spur.sEnd - spur.sStart;
-    const halfBand = spurPeakHalfBand(span);
-    if (wrappedArcDistance(w, spur.sPeak, totalLength) <= halfBand) {
-      return { x: spur.peakX, y: spur.peakY };
-    }
+  const linear = spurLinearParams(guideS, totalLength, spurRanges);
+  if (!linear) return null;
+  if (linear.leg === 'out' && linear.u >= 1 - 1e-4) {
+    return { x: linear.spur.peakX, y: linear.spur.peakY };
   }
-
+  if (linear.leg === 'in' && linear.u <= 1e-4) {
+    return { x: linear.spur.peakX, y: linear.spur.peakY };
+  }
   return null;
-}
-
-/** Trochoid orbit radius on corner spurs — capped by distance to inner slot guide. */
-export function trochoidRadiusAtGuideS(
-  s: number,
-  totalLength: number,
-  baseRadius: number,
-  spurRanges: CornerSpurRange[],
-  innerGuide?: LoopPoint[]
-): number {
-  if (baseRadius <= 0 || totalLength <= 0 || spurRanges.length === 0) return baseRadius;
-
-  const w = wrapGuideS(s, totalLength);
-
-  for (const spur of spurRanges) {
-    if (w < spur.sStart - 1e-4 || w > spur.sEnd + 1e-4) continue;
-
-    const center = spurCenterAtGuideS(s, totalLength, [spur]);
-    if (!center) continue;
-
-    if (innerGuide && innerGuide.length >= 3) {
-      const clearance = distanceToLoop2D(center.x, center.y, innerGuide);
-      return Math.min(baseRadius, Math.max(0, clearance));
-    }
-
-    const span = spur.sEnd - spur.sStart;
-    const halfBand = spurPeakHalfBand(span);
-    if (wrappedArcDistance(w, spur.sPeak, totalLength) <= halfBand) return 0;
-
-    if (w > spur.sStart + 1e-4 && w < spur.sPeak - halfBand) {
-      const rampSpan = spur.sPeak - spur.sStart - halfBand;
-      const t = rampSpan > 1e-6 ? (w - spur.sStart) / rampSpan : 1;
-      return baseRadius * (1 - Math.min(1, Math.max(0, t)));
-    }
-    if (w > spur.sPeak + halfBand && w < spur.sEnd - 1e-4) {
-      const rampSpan = spur.sEnd - spur.sPeak - halfBand;
-      const t = rampSpan > 1e-6 ? (w - spur.sPeak - halfBand) / rampSpan : 1;
-      return baseRadius * Math.min(1, Math.max(0, t));
-    }
-  }
-
-  return baseRadius;
-}
-
-export function buildGuideRadiusSampler(
-  baseRadius: number,
-  totalLength: number,
-  spurRanges: CornerSpurRange[],
-  innerGuide?: LoopPoint[]
-): (guideS: number) => number {
-  if (spurRanges.length === 0) return () => baseRadius;
-  return (guideS) =>
-    trochoidRadiusAtGuideS(guideS, totalLength, baseRadius, spurRanges, innerGuide);
 }
 
 /** True when guide arc length is inside the spur (optionally with approach/departure guard band). */

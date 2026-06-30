@@ -14,6 +14,7 @@ import { clampToolCenterMinDistanceFromPart, signedLoopArea2D } from './geometry
 import {
   trochoidRadiusAtGuideS,
   spurPeakHoldAtGuideS,
+  spurFrameAtGuideS,
   clampArcEndToSpurBoundaries,
   clampOpenArcEndToSpurBoundaries,
   type CornerSpurRange,
@@ -44,6 +45,11 @@ export interface FourZoneParams {
   trochoidRAtGuide?: (guideS: number) => number;
   /** Snap tool center to exact spur tip inside peak deadband (prevents U-turn overshoot). */
   spurPeakHold?: (guideS: number) => { x: number; y: number } | null;
+  /** Bisector-local frame on spur (center + tangent locked to miter→peak segment). */
+  spurFrameHold?: (
+    guideS: number,
+    z: number
+  ) => ReturnType<typeof spurFrameAtGuideS>;
   /** Spur ranges for boundary-aligned stepover snapping (closed loop only). */
   spurRanges?: CornerSpurRange[];
   /** Closed loop length paired with spurRanges for boundary snapping. */
@@ -271,8 +277,17 @@ function generateTrochoidAlongGuide(
   const emitOrbit = (sAlong: number, phase: number, skipDuplicate: boolean) => {
     const sSample = guideSign >= 0 ? startS + sAlong : startS - sAlong;
     const theta = -Math.PI / 2 + rotSign * (1 - phase) * 2 * Math.PI;
-    const frame = normalizeFrame(sampleAtS(sSample));
+    const sampled = sampleAtS(sSample);
     const { z, rapid } = orbitZProfile(phase, zCut, liftAmount);
+
+    const spurFrame =
+      params.spurFrameHold?.(sSample, sampled.z) ??
+      (spurRanges.length > 0
+        ? spurFrameAtGuideS(sSample, loopLength, spurRanges, sampled.z)
+        : null);
+    const frame = spurFrame
+      ? normalizeFrame({ ...sampled, ...spurFrame, s: sampled.s })
+      : normalizeFrame(sampled);
 
     const orbitR = params.trochoidRAtGuide
       ? params.trochoidRAtGuide(sSample)
@@ -291,7 +306,7 @@ function generateTrochoidAlongGuide(
     }
 
     let pt = orbitPoint(frame, orbitR, theta, z);
-    if (partLoop && minCenterDist !== undefined && orbitR > baseTrochoidR * 0.05) {
+    if (partLoop && minCenterDist !== undefined && !spurFrame && orbitR > baseTrochoidR * 0.05) {
       const c = clampToolCenterMinDistanceFromPart(partLoop, pt.x, pt.y, minCenterDist);
       pt = { ...pt, x: c.x, y: c.y };
     }
@@ -399,6 +414,10 @@ export function generateFourZoneAdaptivePath(
     spurRanges.length > 0
       ? (guideS: number) => spurPeakHoldAtGuideS(guideS, loopTotal, spurRanges)
       : undefined;
+  const spurFrameHold =
+    spurRanges.length > 0
+      ? (guideS: number, z: number) => spurFrameAtGuideS(guideS, loopTotal, spurRanges, z)
+      : undefined;
 
   return generateTrochoidAlongGuide(
     guide.totalLength,
@@ -407,6 +426,7 @@ export function generateFourZoneAdaptivePath(
     {
       ...params,
       spurPeakHold,
+      spurFrameHold,
       spurRanges,
       guideLoopLength: loopTotal,
     }
@@ -509,6 +529,13 @@ export function generateContinuousEntryTrochoidPath(
         ? (globalS: number) => {
             if (globalS < splineLen - 1e-5) return null;
             return spurPeakHoldAtGuideS(toLoopS(globalS), loopTotal, loopSpurRanges);
+          }
+        : undefined,
+    spurFrameHold:
+      loopSpurRanges.length > 0
+        ? (globalS: number, z: number) => {
+            if (globalS < splineLen - 1e-5) return null;
+            return spurFrameAtGuideS(toLoopS(globalS), loopTotal, loopSpurRanges, z);
           }
         : undefined,
   });
