@@ -15,6 +15,7 @@ import {
   sampleGuideAtS,
   type ArcLengthGuide,
 } from './trochoidalPath';
+import { SPUR_ARC_MAP_SPACING } from './toolpathConfig';
 
 export interface CornerSpurRange {
   /** Arc length where spur leaves the main slot centerline (full trochoid radius). */
@@ -343,16 +344,10 @@ export function buildSlotCenterGuideWithCornerSpurs(
 export function mapSpurRangesToArcGuide(
   polyline: LoopPoint[],
   spurMarkers: CornerSpurMarker[],
-  sampleSpacing: number,
-  mapOptions?: { trochoidR?: number; resolution?: number }
+  _sampleSpacing: number,
+  _mapOptions?: { trochoidR?: number; resolution?: number }
 ): { arcGuide: ArcLengthGuide; spurRanges: CornerSpurRange[] } {
-  const mapStep =
-    mapOptions?.trochoidR !== undefined
-      ? Math.min(
-          0.1,
-          Math.max(0.06, (mapOptions.trochoidR / 8) * Math.max(mapOptions.resolution ?? 2, 0.5))
-        )
-      : Math.max(Math.min(sampleSpacing, 0.12), 0.06);
+  const mapStep = SPUR_ARC_MAP_SPACING;
 
   const arcGuide = buildArcLengthGuide(polyline, mapStep);
   if (arcGuide.totalLength <= 0 || spurMarkers.length === 0) {
@@ -457,7 +452,23 @@ export function spurLinearParams(
   return null;
 }
 
-/** Trochoid orbit radius on spurs: linear full→0 outbound, 0→full inbound. */
+/** Trochoid orbit radius on spurs: linear ramp capped so the orbit cannot extend past the peak. */
+export function spurOrbitRadius(
+  linear: { spur: CornerSpurRange; u: number; leg: 'out' | 'in' },
+  baseRadius: number
+): number {
+  const legLen = Math.hypot(
+    linear.spur.peakX - linear.spur.miterX,
+    linear.spur.peakY - linear.spur.miterY
+  );
+  if (legLen <= 1e-9) return 0;
+
+  const linearR =
+    linear.leg === 'out' ? baseRadius * (1 - linear.u) : baseRadius * linear.u;
+  const forwardCap = linear.leg === 'out' ? (1 - linear.u) * legLen : linear.u * legLen;
+  return Math.max(0, Math.min(linearR, forwardCap));
+}
+
 export function trochoidRadiusAtGuideS(
   s: number,
   totalLength: number,
@@ -466,7 +477,7 @@ export function trochoidRadiusAtGuideS(
 ): number {
   const linear = spurLinearParams(s, totalLength, spurRanges);
   if (!linear) return baseRadius;
-  return linear.leg === 'out' ? baseRadius * (1 - linear.u) : baseRadius * linear.u;
+  return spurOrbitRadius(linear, baseRadius);
 }
 
 export function buildGuideRadiusSampler(
@@ -494,16 +505,11 @@ export function spurCenterAtGuideS(
   return lerp2(spur.peakX, spur.peakY, spur.miterX, spur.miterY, u);
 }
 
-/** Local frame on spur bisector — center from linear interpolation, tangent along bisector. */
-export function spurFrameAtGuideS(
-  guideS: number,
-  totalLength: number,
-  spurRanges: CornerSpurRange[],
+/** Local frame on spur bisector from linear spur state. */
+export function spurFrameFromLinear(
+  linear: { spur: CornerSpurRange; u: number; leg: 'out' | 'in' },
   z: number
-): { x: number; y: number; z: number; tx: number; ty: number; nx: number; ny: number } | null {
-  const linear = spurLinearParams(guideS, totalLength, spurRanges);
-  if (!linear) return null;
-
+): { x: number; y: number; z: number; tx: number; ty: number; nx: number; ny: number } {
   const { spur, u, leg } = linear;
   let tx: number;
   let ty: number;
@@ -532,6 +538,93 @@ export function spurFrameAtGuideS(
     nx: ty,
     ny: -tx,
   };
+}
+
+/** Detect spur state from XY projection (resolution-independent) with arc-length fallback. */
+export function resolveSpurLinearState(
+  guideS: number,
+  x: number,
+  y: number,
+  totalLength: number,
+  spurRanges: CornerSpurRange[],
+  maxPerpDist: number
+): { spur: CornerSpurRange; u: number; leg: 'out' | 'in' } | null {
+  let best: { spur: CornerSpurRange; u: number; leg: 'out' | 'in'; perp: number } | null =
+    null;
+
+  for (const spur of spurRanges) {
+    const out = projectOntoSegment(
+      x,
+      y,
+      spur.miterX,
+      spur.miterY,
+      spur.peakX,
+      spur.peakY
+    );
+    if (out.perpDist <= maxPerpDist && out.t >= -0.05 && out.t <= 1.05) {
+      if (!best || out.perpDist < best.perp) {
+        best = { spur, u: Math.min(1, Math.max(0, out.t)), leg: 'out', perp: out.perpDist };
+      }
+    }
+
+    const inbound = projectOntoSegment(
+      x,
+      y,
+      spur.peakX,
+      spur.peakY,
+      spur.miterX,
+      spur.miterY
+    );
+    if (inbound.perpDist <= maxPerpDist && inbound.t >= -0.05 && inbound.t <= 1.05) {
+      if (!best || inbound.perpDist < best.perp) {
+        best = {
+          spur,
+          u: Math.min(1, Math.max(0, inbound.t)),
+          leg: 'in',
+          perp: inbound.perpDist,
+        };
+      }
+    }
+  }
+
+  if (best) {
+    return { spur: best.spur, u: best.u, leg: best.leg };
+  }
+
+  return spurLinearParams(guideS, totalLength, spurRanges);
+}
+
+/** Clamp a cut point so it cannot extend past the spur tip along the bisector. */
+export function clampCutPointToSpur(
+  x: number,
+  y: number,
+  linear: { spur: CornerSpurRange; u: number; leg: 'out' | 'in' }
+): { x: number; y: number } {
+  const { spur, leg } = linear;
+  const proj =
+    leg === 'out'
+      ? projectOntoSegment(x, y, spur.miterX, spur.miterY, spur.peakX, spur.peakY)
+      : projectOntoSegment(x, y, spur.peakX, spur.peakY, spur.miterX, spur.miterY);
+
+  if (proj.t > 1 + 1e-4) {
+    return { x: spur.peakX, y: spur.peakY };
+  }
+  if (proj.t < -1e-4) {
+    return { x: spur.miterX, y: spur.miterY };
+  }
+  return { x, y };
+}
+
+/** Local frame on spur bisector — center from linear interpolation, tangent along bisector. */
+export function spurFrameAtGuideS(
+  guideS: number,
+  totalLength: number,
+  spurRanges: CornerSpurRange[],
+  z: number
+): { x: number; y: number; z: number; tx: number; ty: number; nx: number; ny: number } | null {
+  const linear = spurLinearParams(guideS, totalLength, spurRanges);
+  if (!linear) return null;
+  return spurFrameFromLinear(linear, z);
 }
 
 /**

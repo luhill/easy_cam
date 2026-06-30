@@ -255,6 +255,7 @@ function generateAdaptiveTrochoidalPath(
       startS,
       skipArcLength,
       omitFirstOrbitSample,
+      arcGuide,
       trochoidRAtGuide:
         spurRanges.length > 0
           ? buildGuideRadiusSampler(
@@ -599,6 +600,7 @@ function generateAdaptiveOutlinePath(
           ),
           z: layerZ,
           feedRate: helixFeed,
+          arcGuide: trochArcGuide,
           trochoidRAtGuide: spurRadiusSampler,
         },
         outwardCCW,

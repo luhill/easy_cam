@@ -53,8 +53,9 @@ export function GlobalCamSettings() {
         Toolpath points: {totalPoints.toLocaleString()} / {MAX_TOOLPATH_POINTS.toLocaleString()}
       </p>
       <p className="settings-hint">
-        Safe height is used at the start and end of every operation. Resolution 2× (default) uses
-        half as many points as the original fine setting — raise it if toolpaths are too dense.
+        Safe height is used at the start and end of every operation. Resolution 1× is finest; 2×
+        (default) uses half as many points. Values below 1× are allowed but increase point count
+        sharply — raise resolution if toolpaths look jagged or hit the point limit.
       </p>
     </div>
   );
