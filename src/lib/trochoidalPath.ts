@@ -275,13 +275,22 @@ export function extractGuideArcSegment(
   toS: number,
   traverseSign: number,
   sampleSpacing: number,
-  z: number
+  z: number,
+  /** When true, take the shorter arc if the traverse-direction arc wraps past half the loop. */
+  preferShortArc = false
 ): LoopPoint[] {
   const total = guide.totalLength;
   if (total <= 0) return [];
 
-  const forward = traverseSign >= 0;
-  const arcLen = guideArcLengthBetween(total, fromS, toS, forward);
+  let forward = traverseSign >= 0;
+  let arcLen = guideArcLengthBetween(total, fromS, toS, forward);
+  if (preferShortArc) {
+    const reverseLen = guideArcLengthBetween(total, fromS, toS, !forward);
+    if (reverseLen + 1e-6 < arcLen) {
+      forward = !forward;
+      arcLen = reverseLen;
+    }
+  }
   const joinPt = sampleGuideAtS(guide, toS);
 
   if (arcLen <= sampleSpacing * 0.5) {
