@@ -17,7 +17,7 @@ import {
 } from './adaptiveEntryLayout';
 import {
   generateFourZoneAdaptivePath,
-  generateSplineLoopLeadInTrochoid,
+  generateContinuousEntryTrochoidPath,
   resolveGuideTraverseSign,
   resolveOrbitRotSign,
   wrapPathFromIndex,
@@ -448,14 +448,12 @@ function generateAdaptiveOutlinePath(
       boreHelixAngle = layerBore.endAngle;
     }
 
-    let omitFirstOrbitSample = false;
-    let skipArc = 0;
+    let layerTroch: ToolpathPoint[] = [];
 
     if (li === 0) {
       const bottomHelixR = helixRadiusAtZ(settings, layerZ, topZ);
       const segmentsPerRev = helixSegmentsPerRev(globals.resolution);
       const rotDir = resolveHelixRotationDir(settings.climbMilling);
-      const stepoverIncrement = adaptiveForwardIncrement(settings.toolDiameter, settings.stepover);
       const rotParams = trochoidParams(
         loop,
         settings,
@@ -474,22 +472,25 @@ function generateAdaptiveOutlinePath(
         layerZ
       );
 
-      const leadInTroch = generateSplineLoopLeadInTrochoid(
+      layerTroch = generateContinuousEntryTrochoidPath(
         leadInGuide,
         trochArcGuide,
         trochoidStartS,
         entryLayout.guideTraverseSign,
-        stepoverIncrement,
-        { ...rotParams, z: layerZ, feedRate: helixFeed },
+        { ...rotParams, z: layerZ, feedRate: helixFeed, liftAmount: 0 },
         outwardCCW
       );
 
-      if (leadInTroch.length > 0) {
+      if (layerTroch.length > 0) {
         const boreBottom = lastPathPoint(points);
         if (boreBottom) {
           const boreStartAngle = Math.atan2(
             boreBottom.y - toolStart.y,
             boreBottom.x - toolStart.x
+          );
+          const stepoverIncrement = adaptiveForwardIncrement(
+            settings.toolDiameter,
+            settings.stepover
           );
 
           if (
@@ -512,7 +513,7 @@ function generateAdaptiveOutlinePath(
           }
 
           const afterRadius = lastPathPoint(points) ?? boreBottom;
-          const firstLeadIn = leadInTroch[0];
+          const firstLeadIn = layerTroch[0];
           if (
             !appendPoints(
               points,
@@ -531,31 +532,22 @@ function generateAdaptiveOutlinePath(
             break;
           }
         }
-
-        if (!appendGeneratedPath(points, leadInTroch)) {
-          break;
-        }
-        omitFirstOrbitSample = true;
-        skipArc = stepoverIncrement;
       }
     } else {
-      skipArc = 0;
+      layerTroch = generateAdaptiveTrochoidalPath(
+        loop,
+        settings,
+        layerZ,
+        globals,
+        true,
+        trochoidStartS,
+        0,
+        false
+      );
     }
 
-    const startS = trochoidStartS;
-    const troch = generateAdaptiveTrochoidalPath(
-      loop,
-      settings,
-      layerZ,
-      globals,
-      true,
-      startS,
-      skipArc,
-      omitFirstOrbitSample
-    );
-    if (troch.length === 0) continue;
-
-    if (!appendGeneratedPath(points, troch)) break;
+    if (layerTroch.length === 0) continue;
+    if (!appendGeneratedPath(points, layerTroch)) break;
   }
 
   if (settings.finishingPass) {

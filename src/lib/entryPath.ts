@@ -696,8 +696,14 @@ export function buildSplineEntryGuide(
   const dx = slotJoin.x - toolStart.x;
   const dy = slotJoin.y - toolStart.y;
   const chord = Math.hypot(dx, dy);
-  if (chord <= sampleSpacing * 0.25) {
+  if (chord <= 1e-6) {
     return [{ x: slotJoin.x, y: slotJoin.y, z }];
+  }
+  if (chord <= sampleSpacing * 0.25) {
+    return [
+      { x: toolStart.x, y: toolStart.y, z },
+      { x: slotJoin.x, y: slotJoin.y, z },
+    ];
   }
 
   const startHandle = Math.max(chord * 0.55, sampleSpacing * 2);
