@@ -161,47 +161,6 @@ function distPointToLine(
   return Math.abs(vx * -dir.y + vy * dir.x);
 }
 
-function leftNormal(d: { x: number; y: number }): { x: number; y: number } {
-  return { x: -d.y, y: d.x };
-}
-
-function solveTangentFilletCenter(
-  t1: { x: number; y: number },
-  d1: { x: number; y: number },
-  p2: { x: number; y: number },
-  d2: { x: number; y: number },
-  radius: number,
-  turnSign: number
-): { x: number; y: number } {
-  const n1x = -d1.y;
-  const n1y = d1.x;
-  const n2x = -d2.y;
-  const n2y = d2.x;
-
-  for (const s1 of [turnSign, -turnSign]) {
-    for (const s2 of [turnSign, -turnSign]) {
-      const cx = t1.x + s1 * n1x * radius;
-      const cy = t1.y + s1 * n1y * radius;
-      const cx2 = p2.x + s2 * n2x * radius;
-      const cy2 = p2.y + s2 * n2y * radius;
-      if (Math.hypot(cx - cx2, cy - cy2) > 1e-2) continue;
-
-      const toT1 = Math.hypot(t1.x - cx, t1.y - cy);
-      const toP2 = Math.hypot(p2.x - cx, p2.y - cy);
-      const line2Dist = Math.abs((cx - p2.x) * -d2.y + (cy - p2.y) * d2.x);
-      if (
-        Math.abs(toT1 - radius) < 1e-2 &&
-        Math.abs(toP2 - radius) < 1e-2 &&
-        line2Dist < 1e-2
-      ) {
-        return { x: cx, y: cy };
-      }
-    }
-  }
-
-  return { x: t1.x + turnSign * n1x * radius, y: t1.y + turnSign * n1y * radius };
-}
-
 interface LineCurveFilletSolution {
   contactS: number;
   t1: { x: number; y: number };
@@ -236,59 +195,113 @@ function tangentPointsFromPointToCircle(
   ];
 }
 
+function minorArcSweep(
+  center: { x: number; y: number },
+  t1: { x: number; y: number },
+  p2: { x: number; y: number }
+): number {
+  const a1 = Math.atan2(t1.y - center.y, t1.x - center.x);
+  const a2 = Math.atan2(p2.y - center.y, p2.x - center.x);
+  let sweep = a2 - a1;
+  while (sweep > Math.PI) sweep -= 2 * Math.PI;
+  while (sweep <= -Math.PI) sweep += 2 * Math.PI;
+  return sweep;
+}
+
+function validateLeadInFilletSolution(
+  boreCenter: { x: number; y: number },
+  solution: LineCurveFilletSolution,
+  d2: { x: number; y: number },
+  outN: { x: number; y: number }
+): boolean {
+  const { t1, p2, center, radius } = solution;
+
+  const rcX = p2.x - center.x;
+  const rcY = p2.y - center.y;
+  if (Math.abs(rcX * d2.x + rcY * d2.y) > radius * 0.08) return false;
+
+  const legLen = Math.hypot(t1.x - boreCenter.x, t1.y - boreCenter.y);
+  if (legLen < 1e-4) return false;
+  const d1x = (t1.x - boreCenter.x) / legLen;
+  const d1y = (t1.y - boreCenter.y) / legLen;
+  const rtX = t1.x - center.x;
+  const rtY = t1.y - center.y;
+  if (Math.abs(rtX * d1x + rtY * d1y) > radius * 0.08) return false;
+
+  const sweep = minorArcSweep(center, t1, p2);
+  if (Math.abs(sweep) < (3 * Math.PI) / 180 || Math.abs(sweep) > (5 * Math.PI) / 6) {
+    return false;
+  }
+
+  const midAngle = Math.atan2(t1.y - center.y, t1.x - center.x) + sweep / 2;
+  const mid = {
+    x: center.x + Math.cos(midAngle) * radius,
+    y: center.y + Math.sin(midAngle) * radius,
+  };
+  const bulgeOut = (mid.x - p2.x) * outN.x + (mid.y - p2.y) * outN.y;
+  if (bulgeOut < radius * 0.08) return false;
+
+  const centerOut = (center.x - p2.x) * outN.x + (center.y - p2.y) * outN.y;
+  if (centerOut < radius * 0.5) return false;
+
+  const boreOut = (boreCenter.x - p2.x) * outN.x + (boreCenter.y - p2.y) * outN.y;
+  if (boreOut < -radius * 0.1) return false;
+
+  return true;
+}
+
 /**
  * Fillet with a free approach line from the bore center to the tangent point.
- * The contact station on the guide sets the local slot tangent; the straight
- * leg is not required to aim at the nearest guide point.
+ * Center is offset along the guide outward normal so the arc bulges outside the part.
  */
 function evalFreeApproachFilletAtS(
   boreCenter: { x: number; y: number },
   guide: ReturnType<typeof buildArcLengthGuide>,
   contactS: number,
   radius: number,
-  turnSign: number,
-  tangentSign: number
+  guideTraverseSign: number
 ): LineCurveFilletSolution | null {
+  const forward = guideTraverseSign >= 0;
+  const tangentSign = forward ? 1 : -1;
   const frame = sampleGuideAtS(guide, contactS);
   const d2Len = Math.hypot(frame.tx, frame.ty) || 1;
   const d2 = { x: (frame.tx * tangentSign) / d2Len, y: (frame.ty * tangentSign) / d2Len };
-  const n2 = leftNormal(d2);
   const p2 = { x: frame.x, y: frame.y };
-  const center = {
-    x: p2.x + turnSign * n2.x * radius,
-    y: p2.y + turnSign * n2.y * radius,
-  };
-
-  const tangents = tangentPointsFromPointToCircle(boreCenter, center, radius);
-  if (tangents.length === 0) return null;
+  const outLen = Math.hypot(frame.nx, frame.ny) || 1;
+  const outN = { x: frame.nx / outLen, y: frame.ny / outLen };
 
   let best: LineCurveFilletSolution | null = null;
   let bestScore = Infinity;
 
-  for (const t1 of tangents) {
-    const legLen = Math.hypot(t1.x - boreCenter.x, t1.y - boreCenter.y);
-    if (legLen < 1e-4) continue;
+  for (const outSign of [1, -1] as const) {
+    const center = {
+      x: p2.x + outSign * outN.x * radius,
+      y: p2.y + outSign * outN.y * radius,
+    };
 
-    const d1x = (t1.x - boreCenter.x) / legLen;
-    const d1y = (t1.y - boreCenter.y) / legLen;
-    const cross = d1x * d2.y - d1y * d2.x;
-    if (cross * turnSign < -0.02) continue;
-
-    const toP2 = Math.hypot(p2.x - t1.x, p2.y - t1.y);
-    const lineErr = Math.abs(distPointToLine(center, boreCenter, { x: d1x, y: d1y }) - radius);
-    const score = lineErr + Math.abs(toP2 - radius * 0.35) * 0.02;
-
-    if (score < bestScore) {
-      bestScore = score;
-      best = {
+    const tangents = tangentPointsFromPointToCircle(boreCenter, center, radius);
+    for (const t1 of tangents) {
+      const sweep = minorArcSweep(center, t1, p2);
+      const turnSign = sweep >= 0 ? 1 : -1;
+      const candidate: LineCurveFilletSolution = {
         contactS,
         t1,
         p2,
         center,
         turnSign,
         radius,
-        error: lineErr,
+        error: 0,
       };
+      if (!validateLeadInFilletSolution(boreCenter, candidate, d2, outN)) continue;
+
+      const legLen = Math.hypot(t1.x - boreCenter.x, t1.y - boreCenter.y);
+      const d1x = (t1.x - boreCenter.x) / legLen;
+      const d1y = (t1.y - boreCenter.y) / legLen;
+      const lineErr = Math.abs(distPointToLine(center, boreCenter, { x: d1x, y: d1y }) - radius);
+      if (lineErr < bestScore) {
+        bestScore = lineErr;
+        best = { ...candidate, error: lineErr };
+      }
     }
   }
 
@@ -308,7 +321,6 @@ function findLeadInFillet(
   if (guide.totalLength <= 0) return null;
 
   const forward = guideTraverseSign >= 0;
-  const tangentSign = forward ? 1 : -1;
   const maxBack = Math.min(
     guide.totalLength * 0.2,
     Math.max(radius * 8, sampleSpacing * 32)
@@ -318,38 +330,37 @@ function findLeadInFillet(
   let best: LineCurveFilletSolution | null = null;
   let bestScore = Infinity;
 
+  const maxForwardArc = Math.max(radius * 6, sampleSpacing * 40);
+
   for (let back = 0; back <= maxBack + scanStep * 0.5; back += scanStep) {
     const contactS = advanceGuideArcLength(guide, outlineJoinS, back, !forward);
-    for (const turnSign of [1, -1] as const) {
-      const candidate = evalFreeApproachFilletAtS(
-        boreCenter,
-        guide,
-        contactS,
-        radius,
-        turnSign,
-        tangentSign
-      );
-      if (!candidate) continue;
+    const candidate = evalFreeApproachFilletAtS(
+      boreCenter,
+      guide,
+      contactS,
+      radius,
+      guideTraverseSign
+    );
+    if (!candidate) continue;
 
-      const forwardToJoin = guideArcLengthBetween(
-        guide.totalLength,
-        candidate.contactS,
-        outlineJoinS,
-        forward
-      );
-      const reverseToJoin = guideArcLengthBetween(
-        guide.totalLength,
-        candidate.contactS,
-        outlineJoinS,
-        !forward
-      );
-      if (forwardToJoin > maxBack + radius || reverseToJoin + 1e-3 < forwardToJoin) continue;
+    const forwardToJoin = guideArcLengthBetween(
+      guide.totalLength,
+      candidate.contactS,
+      outlineJoinS,
+      forward
+    );
+    const reverseToJoin = guideArcLengthBetween(
+      guide.totalLength,
+      candidate.contactS,
+      outlineJoinS,
+      !forward
+    );
+    if (forwardToJoin > maxForwardArc || reverseToJoin + 1e-3 < forwardToJoin) continue;
 
-      const score = back + candidate.error * 10 + Math.abs(candidate.radius - radius) * 0.01;
-      if (score < bestScore) {
-        bestScore = score;
-        best = candidate;
-      }
+    const score = back + candidate.error * 10 + Math.abs(candidate.radius - radius) * 0.01;
+    if (score < bestScore) {
+      bestScore = score;
+      best = candidate;
     }
   }
 
@@ -361,19 +372,18 @@ function sampleTangentFilletArc(
   radius: number,
   t1: { x: number; y: number },
   p2: { x: number; y: number },
-  turnSign: number,
   z: number,
   sampleSpacing: number
 ): LoopPoint[] {
-  let a1 = Math.atan2(t1.y - center.y, t1.x - center.x);
-  let a2 = Math.atan2(p2.y - center.y, p2.x - center.x);
-  let sweep = a2 - a1;
-  if (turnSign > 0) {
-    while (sweep <= 1e-6) sweep += 2 * Math.PI;
-  } else {
-    while (sweep >= -1e-6) sweep -= 2 * Math.PI;
+  const sweep = minorArcSweep(center, t1, p2);
+  if (Math.abs(sweep) < 1e-6) {
+    return [
+      { x: t1.x, y: t1.y, z },
+      { x: p2.x, y: p2.y, z },
+    ];
   }
 
+  const a1 = Math.atan2(t1.y - center.y, t1.x - center.x);
   const arcLen = Math.abs(sweep) * radius;
   const step = Math.min(sampleSpacing, Math.max(radius / 16, 0.05));
   const steps = Math.max(8, Math.ceil(arcLen / step));
@@ -402,27 +412,29 @@ function buildFilletFromSolution(
   sampleSpacing: number,
   z: number
 ): LoopPoint[] {
-  const { contactS, t1, p2, center, turnSign, radius } = solution;
+  const { contactS, t1, p2, center, radius } = solution;
   const straightLeg = sampleStraightLeg(boreCenter, t1, z, sampleSpacing);
-  const filletPts = sampleTangentFilletArc(
-    center,
-    radius,
-    t1,
-    p2,
-    turnSign,
-    z,
-    sampleSpacing
-  );
+  const filletPts = sampleTangentFilletArc(center, radius, t1, p2, z, sampleSpacing);
 
-  const continuation = extractGuideArcSegment(
-    trochArcGuide,
+  const forward = guideTraverseSign >= 0;
+  const forwardArc = guideArcLengthBetween(
+    trochArcGuide.totalLength,
     contactS,
     joinS,
-    guideTraverseSign,
-    sampleSpacing,
-    z,
-    true
+    forward
   );
+  const maxForwardArc = Math.max(radius * 6, sampleSpacing * 40);
+  const continuation =
+    forwardArc <= maxForwardArc
+      ? extractGuideArcSegment(
+          trochArcGuide,
+          contactS,
+          joinS,
+          guideTraverseSign,
+          sampleSpacing,
+          z
+        )
+      : [{ x: p2.x, y: p2.y, z }];
   const contStart =
     continuation.length > 0 &&
     Math.hypot(continuation[0].x - p2.x, continuation[0].y - p2.y) < sampleSpacing * 0.25
@@ -448,26 +460,23 @@ function filletEntryToSlotCenterlineCornerApprox(
   const tangentSign = forward ? 1 : -1;
   const joinPt = sampleGuideAtS(trochArcGuide, outlineJoinS);
 
-  for (const turnSign of [1, -1] as const) {
-    const atJoin = evalFreeApproachFilletAtS(
+  const atJoin = evalFreeApproachFilletAtS(
+    boreCenter,
+    trochArcGuide,
+    outlineJoinS,
+    filletRadius,
+    guideTraverseSign
+  );
+  if (atJoin) {
+    return buildFilletFromSolution(
       boreCenter,
+      atJoin,
       trochArcGuide,
       outlineJoinS,
-      filletRadius,
-      turnSign,
-      tangentSign
+      guideTraverseSign,
+      sampleSpacing,
+      z
     );
-    if (atJoin) {
-      return buildFilletFromSolution(
-        boreCenter,
-        atJoin,
-        trochArcGuide,
-        outlineJoinS,
-        guideTraverseSign,
-        sampleSpacing,
-        z
-      );
-    }
   }
 
   const inX = joinPt.x - boreCenter.x;
@@ -483,7 +492,6 @@ function filletEntryToSlotCenterlineCornerApprox(
   d2x /= d2Len0;
   d2y /= d2Len0;
 
-  let cross = d1x * d2y - d1y * d2x;
   let dot = Math.max(-1, Math.min(1, d1x * d2x + d1y * d2y));
   let turn = Math.acos(dot);
   if (turn < (2 * Math.PI) / 180 || turn > Math.PI - (2 * Math.PI) / 180) {
@@ -508,7 +516,6 @@ function filletEntryToSlotCenterlineCornerApprox(
   d2x /= d2Len;
   d2y /= d2Len;
 
-  cross = d1x * d2y - d1y * d2x;
   dot = Math.max(-1, Math.min(1, d1x * d2x + d1y * d2y));
   turn = Math.acos(dot);
   half = turn / 2;
@@ -528,27 +535,31 @@ function filletEntryToSlotCenterlineCornerApprox(
 
   const t1 = { x: joinPt.x - d1x * trim, y: joinPt.y - d1y * trim };
   const p2 = { x: curveFrame.x, y: curveFrame.y };
-  const turnSign = cross >= 0 ? 1 : -1;
-  const center = solveTangentFilletCenter(
+  const p2OutLen = Math.hypot(curveFrame.nx, curveFrame.ny) || 1;
+  const p2OutN = { x: curveFrame.nx / p2OutLen, y: curveFrame.ny / p2OutLen };
+  const boreOut = (boreCenter.x - p2.x) * p2OutN.x + (boreCenter.y - p2.y) * p2OutN.y;
+  const outSign = boreOut >= 0 ? 1 : -1;
+  const center = {
+    x: p2.x + outSign * p2OutN.x * radius,
+    y: p2.y + outSign * p2OutN.y * radius,
+  };
+  const d2 = { x: d2x, y: d2y };
+  const sweep = minorArcSweep(center, t1, p2);
+  const turnSign = sweep >= 0 ? 1 : -1;
+  const candidate: LineCurveFilletSolution = {
+    contactS: resumeS,
     t1,
-    { x: d1x, y: d1y },
     p2,
-    { x: d2x, y: d2y },
+    center,
+    turnSign,
     radius,
-    turnSign
-  );
+    error: 0,
+  };
+  if (!validateLeadInFilletSolution(boreCenter, candidate, d2, p2OutN)) return null;
 
   return buildFilletFromSolution(
     boreCenter,
-    {
-      contactS: resumeS,
-      t1,
-      p2,
-      center,
-      turnSign,
-      radius,
-      error: 0,
-    },
+    candidate,
     trochArcGuide,
     outlineJoinS,
     guideTraverseSign,
