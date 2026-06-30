@@ -42,11 +42,12 @@ export function cornerSpurOptionsForRoughing(settings: OperationDefaults): Corne
 }
 
 /**
- * Slot centerline offset for spur/guide polylines. Always matches the no-finishing-pass
- * geometry so enabling the final pass only shortens spur tips (~0.1 mm), not the whole slot.
+ * Slot centerline offset for spur/guide polylines during roughing.
+ * Uses the rough slot center (includes finishing stock when enabled) so spur leg
+ * lengths match the actual shifted centerline geometry.
  */
-export function slotCenterOffsetForGuide(settings: OperationDefaults): number {
-  return resolveAdaptiveSlotGeometry(settings, { roughing: false }).slotCenterOffset;
+export function slotCenterOffsetForGuide(settings: OperationDefaults, roughing = true): number {
+  return resolveAdaptiveSlotGeometry(settings, { roughing }).slotCenterOffset;
 }
 
 export function resolveAdaptiveSlotGeometry(
