@@ -376,11 +376,7 @@ function generateTrochoidAlongGuide(
       ? normalizeFrame({ ...sampled, ...spurFrame, s: sampled.s })
       : normalizeFrame(sampled);
 
-    const orbitR = spurState
-      ? spurOrbitRadius(spurState, baseTrochoidR)
-      : params.trochoidRAtGuide && spurLoopS !== null
-        ? params.trochoidRAtGuide(spurLoopS)
-        : baseTrochoidR;
+    const orbitR = spurState ? spurOrbitRadius(spurState, baseTrochoidR) : baseTrochoidR;
 
     if (orbitR <= baseTrochoidR * 0.02) {
       if (phase >= CUT_PHASE_START && !skipDuplicate) {
