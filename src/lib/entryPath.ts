@@ -1333,6 +1333,27 @@ export interface HelixBoreResult {
   endAngle: number;
 }
 
+function resolveBoreHelixR(
+  settings: OperationDefaults,
+  z: number,
+  stockTopZ: number,
+  startZ: number,
+  options: HelixBoreOptions,
+  defaultHelixR: number
+): number {
+  const startR = options.helixR ?? defaultHelixR;
+  if (!options.taper) return startR;
+
+  if (options.helixR !== undefined) {
+    if (z >= startZ - 1e-6) return startR;
+    if (z >= stockTopZ - 1e-6) return startR;
+    return Math.min(startR, helixRadiusAtZ(settings, z, stockTopZ));
+  }
+
+  if (z >= stockTopZ - 1e-6) return defaultHelixR;
+  return helixRadiusAtZ(settings, z, stockTopZ);
+}
+
 /** Helical bore from startZ down to targetZ. */
 export function generateHelixBorePoints(
   center: { x: number; y: number },
@@ -1353,19 +1374,27 @@ export function generateHelixBorePoints(
   const maxIterations = 500 * segments;
 
   while (z > targetZ + 1e-6 && iterations < maxIterations) {
-    const helixR =
-      options.taper && z < options.stockTopZ - 1e-6
-        ? helixRadiusAtZ(settings, z, options.stockTopZ)
-        : defaultHelixR;
+    const helixR = resolveBoreHelixR(
+      settings,
+      z,
+      options.stockTopZ,
+      startZ,
+      options,
+      defaultHelixR
+    );
     const pitch = helixPitchForRadius(helixR, settings.helixAngleDeg);
 
     for (let i = 0; i < segments; i++) {
       angle += rotDir * ((Math.PI * 2) / segments);
       z = Math.max(z - pitch / segments, targetZ);
-      const r =
-        options.taper && z < options.stockTopZ - 1e-6
-          ? helixRadiusAtZ(settings, z, options.stockTopZ)
-          : defaultHelixR;
+      const r = resolveBoreHelixR(
+        settings,
+        z,
+        options.stockTopZ,
+        startZ,
+        options,
+        defaultHelixR
+      );
       points.push({
         x: center.x + Math.cos(angle) * r,
         y: center.y + Math.sin(angle) * r,

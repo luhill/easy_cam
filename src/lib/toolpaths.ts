@@ -337,8 +337,7 @@ function appendTrochoidToBoreTransition(
   target: ToolpathPoint[],
   boreCenter: { x: number; y: number },
   z: number,
-  settings: Operation['settings'],
-  stockTopZ: number,
+  slotHelixR: number,
   radialStepPerRev: number,
   rotDir: number,
   segmentsPerRev: number,
@@ -348,9 +347,8 @@ function appendTrochoidToBoreTransition(
   const last = lastPathPoint(target);
   if (!last) return;
 
-  const targetR = helixRadiusAtZ(settings, z, stockTopZ);
   const startR = Math.hypot(last.x - boreCenter.x, last.y - boreCenter.y);
-  if (startR <= targetR + 0.08) return;
+  if (startR <= slotHelixR + 0.08) return;
 
   const startAngle = Math.atan2(last.y - boreCenter.y, last.x - boreCenter.x);
   appendPoints(
@@ -359,7 +357,7 @@ function appendTrochoidToBoreTransition(
       boreCenter,
       startR,
       startAngle,
-      targetR,
+      slotHelixR,
       targetAngle,
       z,
       radialStepPerRev,
@@ -427,14 +425,19 @@ function appendBoreBottomWidenAndLeadIn(
   );
 }
 
-function appendVerticalRetract(
+function appendRetractViaSlotCenter(
   points: ToolpathPoint[],
-  clearanceZ: number
+  slotCenter: { x: number; y: number },
+  clearanceZ: number,
+  feedRate?: number
 ): void {
   const last = lastPathPoint(points);
-  if (last) {
-    points.push({ x: last.x, y: last.y, z: clearanceZ, rapid: true });
+  if (!last) return;
+
+  if (Math.hypot(last.x - slotCenter.x, last.y - slotCenter.y) > 0.12) {
+    points.push({ x: slotCenter.x, y: slotCenter.y, z: last.z, feedRate });
   }
+  points.push({ x: slotCenter.x, y: slotCenter.y, z: clearanceZ, rapid: true });
 }
 
 function lastPathPoint(points: ToolpathPoint[]): { x: number; y: number; z: number } | null {
@@ -590,8 +593,7 @@ function generateAdaptiveOutlinePath(
         points,
         boreCenter,
         prevZ,
-        settings,
-        topZ,
+        slotHelixR,
         stepoverIncrement,
         rotDir,
         segmentsPerRev,
@@ -602,6 +604,7 @@ function generateAdaptiveOutlinePath(
       const layerBore = generateHelixBorePoints(boreCenter, settings, prevZ, layerZ, {
         ...helixOpts,
         taper: true,
+        helixR: slotHelixR,
         startAngle: boreHelixAngle,
       });
       if (!appendPoints(points, layerBore.points)) {
@@ -647,17 +650,17 @@ function generateAdaptiveOutlinePath(
       const at = lastPathPoint(points);
       if (at) {
         if (!appendClosedOutlinePath(points, finishPath, at)) {
-          appendVerticalRetract(points, safeZ);
+          appendRetractViaSlotCenter(points, slotJoinCenter, safeZ, helixFeed);
           return points;
         }
       } else if (!appendPoints(points, finishPath)) {
-        appendVerticalRetract(points, safeZ);
+        appendRetractViaSlotCenter(points, slotJoinCenter, safeZ, helixFeed);
         return points;
       }
     }
   }
 
-  appendVerticalRetract(points, safeZ);
+  appendRetractViaSlotCenter(points, slotJoinCenter, safeZ, helixFeed);
   return points;
 }
 
