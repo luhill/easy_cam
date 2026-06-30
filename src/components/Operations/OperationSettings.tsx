@@ -127,6 +127,12 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
             : 'Z=0 at stock top; cuts are negative Z. Depth offset is measured from the part bottom (+ stops short).'}
         </p>
       )}
+      {operation.type === 'adaptive-outline' && (
+        <p className="settings-hint">
+          Viewer debug: orange = slot centerline guide; green trochoid loops = samples classified as
+          on-spur (scaled radius).
+        </p>
+      )}
       {(operation.type === 'drill' || operation.type === 'helix') && (
         <p className="settings-hint">
           Click holes to add/remove. Multiple holes are drilled in selection order with rapid moves

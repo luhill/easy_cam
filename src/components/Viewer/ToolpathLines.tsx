@@ -2,6 +2,9 @@ import { useMemo } from 'react';
 import * as THREE from 'three';
 import type { ToolpathSegment } from '../../types/operations';
 
+/** Trochoid samples classified as on-spur (debug overlay). */
+export const SPUR_TOOLPATH_COLOR = '#22c55e';
+
 interface ToolpathLinesProps {
   segments: ToolpathSegment[];
 }
@@ -10,12 +13,16 @@ function PathLine({ segment }: { segment: ToolpathSegment }) {
   const geometry = useMemo(() => {
     const positions: number[] = [];
     const colors: number[] = [];
-    const color = new THREE.Color(segment.color);
+    const baseColor = new THREE.Color(segment.color);
+    const spurColor = new THREE.Color(SPUR_TOOLPATH_COLOR);
 
     for (let i = 0; i < segment.points.length - 1; i++) {
       const a = segment.points[i];
       const b = segment.points[i + 1];
       positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
+
+      const onSpur = !!(a.onSpur || b.onSpur);
+      const color = onSpur ? spurColor : baseColor;
       const alpha = a.rapid || b.rapid ? 0.4 : 1;
       colors.push(color.r * alpha, color.g * alpha, color.b * alpha);
       colors.push(color.r * alpha, color.g * alpha, color.b * alpha);

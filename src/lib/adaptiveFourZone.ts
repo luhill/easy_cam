@@ -398,7 +398,7 @@ function generateTrochoidAlongGuide(
               ? spurState.spur.peakY
               : frame.y
           : (params.spurPeakHold?.(sSample)?.y ?? frame.y);
-        let tipPt: ToolpathPoint = { x: cx, y: cy, z };
+        let tipPt: ToolpathPoint = { x: cx, y: cy, z, ...(spurState ? { onSpur: true } : {}) };
         if (feedRate !== undefined) tipPt = { ...tipPt, feedRate };
         points.push(tipPt);
       }
@@ -436,6 +436,7 @@ function generateTrochoidAlongGuide(
     }
     if (rapid) pt = { ...pt, rapid: true };
     if (feedRate !== undefined && !rapid) pt = { ...pt, feedRate };
+    if (spurState) pt = { ...pt, onSpur: true };
 
     if (skipDuplicate) return;
     points.push(pt);

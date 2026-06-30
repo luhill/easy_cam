@@ -94,6 +94,8 @@ export interface ToolpathPoint {
   rapid?: boolean;
   /** Override feed for this segment (mm/min). */
   feedRate?: number;
+  /** Debug: trochoid sample classified as on-spur (adaptive outline). */
+  onSpur?: boolean;
 }
 
 export interface ToolpathSegment {
