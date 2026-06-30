@@ -591,7 +591,7 @@ export function spurFrameFromLinear(
   };
 }
 
-/** Spur state from XY projection onto bisector legs when arc-length gating misses the spur. */
+/** On-spur when guide XY projects onto a bisector leg segment (not its extension). */
 export function spurLinearParamsFromGeometry(
   x: number,
   y: number,
@@ -602,7 +602,7 @@ export function spurLinearParamsFromGeometry(
 
   for (const spur of spurRanges) {
     const out = projectOntoSegment(x, y, spur.miterX, spur.miterY, spur.peakX, spur.peakY);
-    if (out.perpDist <= maxPerpDist && out.t >= -0.02 && out.t <= 1.02) {
+    if (out.perpDist <= maxPerpDist && out.t >= -1e-4 && out.t <= 1 + 1e-4) {
       if (!best || out.perpDist < best.perp) {
         best = {
           spur,
@@ -614,7 +614,7 @@ export function spurLinearParamsFromGeometry(
     }
 
     const inbound = projectOntoSegment(x, y, spur.peakX, spur.peakY, spur.miterX, spur.miterY);
-    if (inbound.perpDist <= maxPerpDist && inbound.t >= -0.02 && inbound.t <= 1.02) {
+    if (inbound.perpDist <= maxPerpDist && inbound.t >= -1e-4 && inbound.t <= 1 + 1e-4) {
       if (!best || inbound.perpDist < best.perp) {
         best = {
           spur,
@@ -655,27 +655,20 @@ export function resolveSpurLinearState(
   return arcState;
 }
 
-/** Arc gate then bisector geometry — keeps spur radius when arc stations drift under offset. */
+/**
+ * Spur mode from bisector geometry. Arc-length ranges are used only for stepover
+ * boundary clamping, not for deciding whether the tool is on a spur.
+ */
 export function resolveSpurStateAtGuideSample(
-  guideS: number | null,
+  _guideS: number | null,
   x: number,
   y: number,
-  totalLength: number,
+  _totalLength: number,
   spurRanges: CornerSpurRange[],
   corridorDist: number
 ): { spur: CornerSpurRange; u: number; leg: 'out' | 'in' } | null {
   if (spurRanges.length === 0) return null;
-
-  const corridor = Math.max(corridorDist, 0.05);
-  if (guideS !== null) {
-    const arcState = spurLinearParams(guideS, totalLength, spurRanges);
-    if (arcState) {
-      const refined = resolveSpurLinearState(guideS, x, y, totalLength, spurRanges, corridor);
-      if (refined) return refined;
-    }
-  }
-
-  return spurLinearParamsFromGeometry(x, y, spurRanges, corridor);
+  return spurLinearParamsFromGeometry(x, y, spurRanges, Math.max(corridorDist, 0.05));
 }
 
 /** Clamp a cut point so it cannot extend past the spur tip along the bisector. */
