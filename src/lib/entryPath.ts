@@ -122,6 +122,92 @@ export function closestPointIndexOnPath(
   return bestIdx;
 }
 
+/** Circular fillet between a straight leg and the following guide segment. */
+function filletGuideCorner(
+  straightLeg: LoopPoint[],
+  arcLeg: LoopPoint[],
+  filletRadius: number,
+  sampleSpacing: number
+): LoopPoint[] {
+  if (straightLeg.length < 2 || arcLeg.length < 2 || filletRadius <= sampleSpacing * 0.05) {
+    if (straightLeg.length === 0) return arcLeg;
+    if (arcLeg.length === 0) return straightLeg;
+    const last = straightLeg[straightLeg.length - 1];
+    const dup =
+      Math.hypot(last.x - arcLeg[0].x, last.y - arcLeg[0].y) < sampleSpacing * 0.3;
+    return dup ? [...straightLeg, ...arcLeg.slice(1)] : [...straightLeg, ...arcLeg];
+  }
+
+  const corner = straightLeg[straightLeg.length - 1];
+  const before = straightLeg[straightLeg.length - 2];
+  const after = arcLeg[1] ?? arcLeg[0];
+  const z = corner.z;
+
+  const inX = corner.x - before.x;
+  const inY = corner.y - before.y;
+  const outX = after.x - corner.x;
+  const outY = after.y - corner.y;
+  const inLen = Math.hypot(inX, inY);
+  const outLen = Math.hypot(outX, outY);
+  if (inLen < 1e-6 || outLen < 1e-6) {
+    return [...straightLeg, ...arcLeg.slice(1)];
+  }
+
+  const d1x = inX / inLen;
+  const d1y = inY / inLen;
+  const d2x = outX / outLen;
+  const d2y = outY / outLen;
+  const cross = d1x * d2y - d1y * d2x;
+  const dot = Math.max(-1, Math.min(1, d1x * d2x + d1y * d2y));
+  const turn = Math.acos(dot);
+  if (turn < 1e-3 || turn > Math.PI - 1e-3) {
+    return [...straightLeg, ...arcLeg.slice(1)];
+  }
+
+  const half = turn / 2;
+  let trim = filletRadius / Math.tan(half);
+  const maxTrim = Math.min(inLen, outLen) * 0.95;
+  let r = filletRadius;
+  if (trim > maxTrim) {
+    r = maxTrim * Math.tan(half);
+    trim = maxTrim;
+  }
+
+  const t1 = { x: corner.x - d1x * trim, y: corner.y - d1y * trim, z };
+  const t2 = { x: corner.x + d2x * trim, y: corner.y + d2y * trim, z };
+  const turnSign = cross >= 0 ? 1 : -1;
+  const cx = t1.x + turnSign * -d1y * r;
+  const cy = t1.y + turnSign * d1x * r;
+
+  let a1 = Math.atan2(t1.y - cy, t1.x - cx);
+  let a2 = Math.atan2(t2.y - cy, t2.x - cx);
+  let sweep = a2 - a1;
+  if (turnSign > 0) {
+    while (sweep <= 1e-6) sweep += 2 * Math.PI;
+  } else {
+    while (sweep >= -1e-6) sweep -= 2 * Math.PI;
+  }
+
+  const arcLen = Math.abs(sweep) * r;
+  const steps = Math.max(2, Math.ceil(arcLen / sampleSpacing));
+  const filletPts: LoopPoint[] = [t1];
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const ang = a1 + sweep * t;
+    filletPts.push({ x: cx + Math.cos(ang) * r, y: cy + Math.sin(ang) * r, z });
+  }
+
+  let arcStartIdx = 1;
+  for (let i = 1; i < arcLeg.length; i++) {
+    if (Math.hypot(arcLeg[i].x - corner.x, arcLeg[i].y - corner.y) >= trim - 1e-4) {
+      arcStartIdx = i;
+      break;
+    }
+  }
+
+  return [...straightLeg.slice(0, -1), ...filletPts, ...arcLeg.slice(arcStartIdx)];
+}
+
 /**
  * Lead-in centerline: straight leg from bore center to the nearest slot-center
  * point, then along the slot center guide to the join station.
@@ -132,25 +218,26 @@ export function buildBoreLeadInGuide(
   joinS: number,
   guideTraverseSign: number,
   sampleSpacing: number,
-  z: number
+  z: number,
+  filletRadius = 0
 ): LoopPoint[] {
   const nearest = findClosestSOnGuide(trochArcGuide, boreCenter);
   const nearestPt = sampleGuideAtS(trochArcGuide, nearest.s);
-  const points: LoopPoint[] = [{ x: boreCenter.x, y: boreCenter.y, z }];
+  const straightLeg: LoopPoint[] = [{ x: boreCenter.x, y: boreCenter.y, z }];
 
   const span = Math.hypot(nearestPt.x - boreCenter.x, nearestPt.y - boreCenter.y);
   if (span > sampleSpacing * 0.5) {
     const steps = Math.max(1, Math.ceil(span / sampleSpacing));
     for (let i = 1; i <= steps; i++) {
       const t = i / steps;
-      points.push({
+      straightLeg.push({
         x: boreCenter.x + (nearestPt.x - boreCenter.x) * t,
         y: boreCenter.y + (nearestPt.y - boreCenter.y) * t,
         z,
       });
     }
-  } else if (Math.hypot(points[0].x - nearestPt.x, points[0].y - nearestPt.y) > 1e-4) {
-    points.push({ x: nearestPt.x, y: nearestPt.y, z });
+  } else if (Math.hypot(straightLeg[0].x - nearestPt.x, straightLeg[0].y - nearestPt.y) > 1e-4) {
+    straightLeg.push({ x: nearestPt.x, y: nearestPt.y, z });
   }
 
   const arcPts = extractGuideArcSegment(
@@ -161,11 +248,15 @@ export function buildBoreLeadInGuide(
     sampleSpacing,
     z
   );
-  if (arcPts.length === 0) return points;
+  if (arcPts.length === 0) return straightLeg;
 
-  const last = points[points.length - 1];
+  if (filletRadius > 0 && straightLeg.length >= 2 && arcPts.length >= 2) {
+    return filletGuideCorner(straightLeg, arcPts, filletRadius, sampleSpacing);
+  }
+
+  const last = straightLeg[straightLeg.length - 1];
   const dup = Math.hypot(last.x - arcPts[0].x, last.y - arcPts[0].y) < sampleSpacing * 0.3;
-  return dup ? [...points, ...arcPts.slice(1)] : [...points, ...arcPts];
+  return dup ? [...straightLeg, ...arcPts.slice(1)] : [...straightLeg, ...arcPts];
 }
 
 /**
@@ -651,6 +742,13 @@ export interface HelixBoreOptions {
   taper: boolean;
   helixR?: number;
   globals: ToolpathGlobalOptions;
+  /** Continue rotation from a prior bore segment (radians). */
+  startAngle?: number;
+}
+
+export interface HelixBoreResult {
+  points: ToolpathPoint[];
+  endAngle: number;
 }
 
 /** Helical bore from startZ down to targetZ. */
@@ -660,7 +758,7 @@ export function generateHelixBorePoints(
   startZ: number,
   targetZ: number,
   options: HelixBoreOptions
-): ToolpathPoint[] {
+): HelixBoreResult {
   const feedRate = settings.helixFeedRate;
   const rotDir = resolveHelixRotationDir(settings.climbMilling);
   const segments = helixSegmentsPerRev(options.globals.resolution);
@@ -668,7 +766,7 @@ export function generateHelixBorePoints(
   const points: ToolpathPoint[] = [];
 
   let z = startZ;
-  let angle = 0;
+  let angle = options.startAngle ?? 0;
   let iterations = 0;
   const maxIterations = 500 * segments;
 
@@ -697,5 +795,5 @@ export function generateHelixBorePoints(
     }
   }
 
-  return points;
+  return { points, endAngle: angle };
 }

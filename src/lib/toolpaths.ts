@@ -401,24 +401,15 @@ function generateAdaptiveOutlinePath(
   points.push({ x: entry.x, y: entry.y, z: safeZ, rapid: true });
 
   const helixTarget = layers.length > 0 ? layers[0] : finalZ;
+  let boreHelixAngle = 0;
 
-  if (safeZ > topZ + 1e-4) {
-    appendPoints(
-      points,
-      generateHelixBorePoints(entry, settings, safeZ, topZ, {
-        ...helixOpts,
-        taper: false,
-      })
-    );
-  }
-
-  appendPoints(
-    points,
-    generateHelixBorePoints(entry, settings, topZ, helixTarget, {
-      ...helixOpts,
-      taper: true,
-    })
-  );
+  const initialBore = generateHelixBorePoints(entry, settings, safeZ, helixTarget, {
+    ...helixOpts,
+    taper: true,
+    startAngle: boreHelixAngle,
+  });
+  appendPoints(points, initialBore.points);
+  boreHelixAngle = initialBore.endAngle;
 
   for (let li = 0; li < layers.length; li++) {
     const layerZ = layers[li];
@@ -427,30 +418,24 @@ function generateAdaptiveOutlinePath(
     if (li > 0) {
       if (!appendReturnToSlotCenter(points, trochArcGuide, trochoidStartS, prevZ)) break;
       const slotCenter = sampleGuideAtS(trochArcGuide, trochoidStartS);
-      if (
-        !appendPoints(
-          points,
-          generateHelixBorePoints(slotCenter, settings, prevZ, layerZ, {
-            ...helixOpts,
-            taper: prevZ > topZ + 1e-4,
-            helixR: slotHelixR,
-          })
-        )
-      ) {
+      const layerBore = generateHelixBorePoints(slotCenter, settings, prevZ, layerZ, {
+        ...helixOpts,
+        taper: prevZ > topZ + 1e-4,
+        helixR: slotHelixR,
+      });
+      if (!appendPoints(points, layerBore.points)) {
         break;
       }
     } else if (Math.abs(layerZ - helixTarget) > 1e-4) {
-      if (
-        !appendPoints(
-          points,
-          generateHelixBorePoints(entry, settings, helixTarget, layerZ, {
-            ...helixOpts,
-            taper: true,
-          })
-        )
-      ) {
+      const layerBore = generateHelixBorePoints(entry, settings, helixTarget, layerZ, {
+        ...helixOpts,
+        taper: true,
+        startAngle: boreHelixAngle,
+      });
+      if (!appendPoints(points, layerBore.points)) {
         break;
       }
+      boreHelixAngle = layerBore.endAngle;
     }
 
     let omitFirstOrbitSample = false;
@@ -475,7 +460,8 @@ function generateAdaptiveOutlinePath(
         trochoidStartS,
         guideTraverseSign,
         trochSampleSpacing,
-        layerZ
+        layerZ,
+        roughSlot.slotWidth / 2
       );
 
       const leadInTroch = generateOpenTrochoidPath(
