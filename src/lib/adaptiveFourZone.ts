@@ -20,6 +20,8 @@ export interface FourZoneParams {
   liftAmount?: number;
   partLoop?: LoopPoint[];
   minCenterDist?: number;
+  /** On corner spur ramps use finish-line standoff (roughing stock not applied). */
+  minCenterDistOnSpur?: number;
   /** Orbit micro-loop direction (+1 CCW / −1 CW within each station). */
   rotSign?: number;
   /** Progression along guide (+1 forward / −1 reverse for climb). */
@@ -243,7 +245,7 @@ function generateTrochoidAlongGuide(
   const baseTrochoidR = slotClearance / 2;
   const steps = Math.max(8, params.orbitStepsPerRev ?? 90);
   const points: ToolpathPoint[] = [];
-  const { partLoop, minCenterDist } = params;
+  const { partLoop, minCenterDist, minCenterDistOnSpur } = params;
   const defaultStartS = guideSign >= 0 ? 0 : totalLength;
   const startS = params.startS ?? defaultStartS;
 
@@ -267,12 +269,13 @@ function generateTrochoidAlongGuide(
     }
 
     let pt = orbitPoint(frame, orbitR, theta, z);
-    if (
-      partLoop &&
-      minCenterDist !== undefined &&
-      orbitR > baseTrochoidR * 0.05
-    ) {
-      const c = clampToolCenterMinDistanceFromPart(partLoop, pt.x, pt.y, minCenterDist);
+    const onSpurRamp = params.trochoidRAtGuide !== undefined && orbitR < baseTrochoidR - 1e-4;
+    const standoff =
+      onSpurRamp && minCenterDistOnSpur !== undefined
+        ? minCenterDistOnSpur
+        : minCenterDist;
+    if (partLoop && standoff !== undefined && orbitR > baseTrochoidR * 0.05) {
+      const c = clampToolCenterMinDistanceFromPart(partLoop, pt.x, pt.y, standoff);
       pt = { ...pt, x: c.x, y: c.y };
     }
     if (rapid) pt = { ...pt, rapid: true };

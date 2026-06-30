@@ -197,6 +197,10 @@ function trochoidParams(
   feedRate?: number
 ) {
   const slot = resolveAdaptiveSlotGeometry(settings, { roughing });
+  const finishSlot =
+    roughing && settings.finishingPass
+      ? resolveAdaptiveSlotGeometry(settings, { roughing: false })
+      : null;
   const guideSign = resolveGuideTraverseSign(slotCenterGuide, settings.climbMilling);
   return {
     forwardIncrement: slot.forwardIncrement,
@@ -205,6 +209,7 @@ function trochoidParams(
     liftAmount: Math.max(settings.liftAmount ?? 0, 0),
     partLoop,
     minCenterDist: slot.minCenterDist,
+    minCenterDistOnSpur: finishSlot?.minCenterDist,
     rotSign: resolveOrbitRotSign(slotCenterGuide, settings.climbMilling),
     guideSign,
     feedRate,
