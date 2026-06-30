@@ -640,7 +640,8 @@ function SceneContent({
       op.settings,
       adaptiveEntryOverridesFromGeometry(op.geometry),
       segLen,
-      trochSampleSpacing
+      trochSampleSpacing,
+      toolpathResolution
     );
     if (!layout) return null;
 

@@ -245,7 +245,8 @@ function generateAdaptiveTrochoidalPath(
   const { arcGuide, spurRanges } = mapSpurRangesToArcGuide(
     slotCenterGuide,
     spurMarkers,
-    sampleSpacing
+    sampleSpacing,
+    { trochoidR: roughSlot.trochoidRadius, resolution: globals.resolution }
   );
   return generateFourZoneAdaptivePath(
     slotCenterGuide,
@@ -511,7 +512,8 @@ function generateAdaptiveOutlinePath(
     settings,
     adaptiveEntryOverridesFromGeometry(geometry),
     segLen,
-    trochSampleSpacing
+    trochSampleSpacing,
+    globals.resolution
   );
   if (!entryLayout) {
     return generateOutlinePath(op, ctx, globals);

@@ -46,7 +46,8 @@ function formatGeometrySummary(operation: Operation): string {
       operation.settings,
       adaptiveEntryOverridesFromGeometry(geo),
       segLen,
-      trochSampleSpacing
+      trochSampleSpacing,
+      resolution
     );
     if (layout) {
       parts.push(`start (${layout.toolStart.x.toFixed(1)}, ${layout.toolStart.y.toFixed(1)})`);
@@ -110,7 +111,8 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
       operation.settings,
       adaptiveEntryOverridesFromGeometry(operation.geometry),
       segLen,
-      trochSampleSpacing
+      trochSampleSpacing,
+      resolution
     );
   })();
 

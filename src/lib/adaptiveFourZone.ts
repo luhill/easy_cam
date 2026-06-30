@@ -11,7 +11,7 @@ import {
   type ArcLengthGuide,
 } from './trochoidalPath';
 import { clampToolCenterMinDistanceFromPart, signedLoopArea2D } from './geometryProcessing';
-import { trochoidRadiusAtGuideS, spurPeakHoldAtGuideS, type CornerSpurRange } from './cornerSpurs';
+import { trochoidRadiusAtGuideS, spurPeakHoldAtGuideS, isGuideSOnSpur, clampArcEndToSpurBoundaries, clampOpenArcEndToSpurBoundaries, type CornerSpurRange } from './cornerSpurs';
 
 export interface FourZoneParams {
   forwardIncrement: number;
@@ -38,6 +38,19 @@ export interface FourZoneParams {
   trochoidRAtGuide?: (guideS: number) => number;
   /** Snap tool center to exact spur tip inside peak deadband (prevents U-turn overshoot). */
   spurPeakHold?: (guideS: number) => { x: number; y: number } | null;
+  /** True when guide station is on a corner spur (centerline-only cut, no lateral orbit). */
+  isOnSpurGuide?: (guideS: number) => boolean;
+  /** Spur ranges for boundary-aligned stepover snapping (closed loop only). */
+  spurRanges?: CornerSpurRange[];
+  /** Closed loop length paired with spurRanges for boundary snapping. */
+  guideLoopLength?: number;
+  /** Open spline+loop path spur boundary snapping (entry trochoid). */
+  openSpurSnap?: {
+    splineLen: number;
+    trochoidStartS: number;
+    forward: boolean;
+    loopLength: number;
+  };
 }
 
 const CUT_PHASE_START = 0.5;
@@ -248,6 +261,7 @@ function generateTrochoidAlongGuide(
   const { partLoop, minCenterDist } = params;
   const defaultStartS = guideSign >= 0 ? 0 : totalLength;
   const startS = params.startS ?? defaultStartS;
+  const loopLength = params.guideLoopLength ?? totalLength;
 
   const emitOrbit = (sAlong: number, phase: number, skipDuplicate: boolean) => {
     const sSample = guideSign >= 0 ? startS + sAlong : startS - sAlong;
@@ -259,11 +273,10 @@ function generateTrochoidAlongGuide(
       ? params.trochoidRAtGuide(sSample)
       : baseTrochoidR;
 
-    const onSpurRamp = params.trochoidRAtGuide !== undefined && orbitR < baseTrochoidR - 1e-4;
+    const onSpurGuide = params.isOnSpurGuide?.(sSample) ?? false;
     const peakHold = params.spurPeakHold?.(sSample);
-    const collapseThreshold = onSpurRamp ? baseTrochoidR * 0.35 : baseTrochoidR * 0.03;
 
-    if (peakHold || orbitR <= collapseThreshold) {
+    if (onSpurGuide || peakHold) {
       if (phase >= CUT_PHASE_START && !skipDuplicate) {
         const cx = peakHold?.x ?? frame.x;
         const cy = peakHold?.y ?? frame.y;
@@ -275,7 +288,7 @@ function generateTrochoidAlongGuide(
     }
 
     let pt = orbitPoint(frame, orbitR, theta, z);
-    if (partLoop && minCenterDist !== undefined && !onSpurRamp && orbitR > baseTrochoidR * 0.05) {
+    if (partLoop && minCenterDist !== undefined && orbitR > baseTrochoidR * 0.05) {
       const c = clampToolCenterMinDistanceFromPart(partLoop, pt.x, pt.y, minCenterDist);
       pt = { ...pt, x: c.x, y: c.y };
     }
@@ -291,14 +304,31 @@ function generateTrochoidAlongGuide(
     let arcProgress = skip;
     const arcTarget = skip + totalLength;
     let cycle = 0;
+    const spurRanges = params.spurRanges ?? [];
 
     while (arcProgress < arcTarget - 1e-5) {
-      const segEnd = Math.min(arcProgress + stepover, arcTarget);
+      let segEnd = Math.min(arcProgress + stepover, arcTarget);
+      if (spurRanges.length > 0) {
+        segEnd = clampArcEndToSpurBoundaries(
+          arcProgress,
+          segEnd,
+          startS,
+          guideSign,
+          loopLength,
+          spurRanges
+        );
+      }
       const segLen = segEnd - arcProgress;
+      if (segLen <= 1e-8) {
+        segEnd = Math.min(arcProgress + Math.max(stepover * 0.05, 0.02), arcTarget);
+        if (segEnd <= arcProgress + 1e-8) break;
+      }
+
+      const effectiveSegLen = segEnd - arcProgress;
 
       for (let i = 0; i <= steps; i++) {
         const phase = i / steps;
-        const sAlong = arcProgress + phase * segLen;
+        const sAlong = arcProgress + phase * effectiveSegLen;
         const skipDup =
           (cycle > 0 && i === 0) ||
           (cycle === 0 && i === 0 && params.omitFirstOrbitSample === true);
@@ -313,10 +343,28 @@ function generateTrochoidAlongGuide(
 
   let arcProgress = 0;
   let cycle = 0;
+  const spurRanges = params.spurRanges ?? [];
+  const openSpurSnap = params.openSpurSnap;
 
   while (arcProgress < totalLength - 1e-5) {
-    const segEnd = Math.min(arcProgress + stepover, totalLength);
-    const segLen = segEnd - arcProgress;
+    let segEnd = Math.min(arcProgress + stepover, totalLength);
+    if (openSpurSnap && spurRanges.length > 0) {
+      segEnd = clampOpenArcEndToSpurBoundaries(
+        arcProgress,
+        segEnd,
+        openSpurSnap.splineLen,
+        openSpurSnap.trochoidStartS,
+        openSpurSnap.forward,
+        openSpurSnap.loopLength,
+        spurRanges
+      );
+    }
+    let segLen = segEnd - arcProgress;
+    if (segLen <= 1e-8) {
+      segEnd = Math.min(arcProgress + Math.max(stepover * 0.05, 0.02), totalLength);
+      segLen = segEnd - arcProgress;
+      if (segLen <= 1e-8) break;
+    }
 
     for (let i = 0; i <= steps; i++) {
       const phase = i / steps;
@@ -350,12 +398,22 @@ export function generateFourZoneAdaptivePath(
     spurRanges.length > 0
       ? (guideS: number) => spurPeakHoldAtGuideS(guideS, loopTotal, spurRanges)
       : undefined;
+  const isOnSpurGuide =
+    spurRanges.length > 0
+      ? (guideS: number) => isGuideSOnSpur(guideS, loopTotal, spurRanges)
+      : undefined;
 
   return generateTrochoidAlongGuide(
     guide.totalLength,
     true,
     (s) => sampleGuideAtS(guide, s),
-    { ...params, spurPeakHold }
+    {
+      ...params,
+      spurPeakHold,
+      isOnSpurGuide,
+      spurRanges,
+      guideLoopLength: loopTotal,
+    }
   );
 }
 
@@ -440,6 +498,11 @@ export function generateContinuousEntryTrochoidPath(
     guideSign: 1,
     startS: 0,
     trochoidRAtGuide,
+    spurRanges: loopSpurRanges,
+    openSpurSnap:
+      loopSpurRanges.length > 0
+        ? { splineLen, trochoidStartS, forward, loopLength: loopTotal }
+        : undefined,
     spurPeakHold:
       loopSpurRanges.length > 0
         ? (globalS: number) => {
@@ -449,6 +512,17 @@ export function generateContinuousEntryTrochoidPath(
               ? trochoidStartS + loopDelta
               : trochoidStartS - loopDelta;
             return spurPeakHoldAtGuideS(loopS, loopTotal, loopSpurRanges);
+          }
+        : undefined,
+    isOnSpurGuide:
+      loopSpurRanges.length > 0
+        ? (globalS: number) => {
+            if (globalS < splineLen - 1e-5) return false;
+            const loopDelta = globalS - splineLen;
+            const loopS = forward
+              ? trochoidStartS + loopDelta
+              : trochoidStartS - loopDelta;
+            return isGuideSOnSpur(loopS, loopTotal, loopSpurRanges);
           }
         : undefined,
   });

@@ -340,16 +340,25 @@ export function buildSlotCenterGuideWithCornerSpurs(
 export function mapSpurRangesToArcGuide(
   polyline: LoopPoint[],
   spurMarkers: CornerSpurMarker[],
-  sampleSpacing: number
+  sampleSpacing: number,
+  mapOptions?: { trochoidR?: number; resolution?: number }
 ): { arcGuide: ArcLengthGuide; spurRanges: CornerSpurRange[] } {
-  const arcGuide = buildArcLengthGuide(polyline, sampleSpacing);
+  const mapStep =
+    mapOptions?.trochoidR !== undefined
+      ? Math.min(
+          0.1,
+          Math.max(0.06, (mapOptions.trochoidR / 8) * Math.max(mapOptions.resolution ?? 2, 0.5))
+        )
+      : Math.max(Math.min(sampleSpacing, 0.12), 0.06);
+
+  const arcGuide = buildArcLengthGuide(polyline, mapStep);
   if (arcGuide.totalLength <= 0 || spurMarkers.length === 0) {
     return { arcGuide, spurRanges: [] };
   }
 
   const spurRanges: CornerSpurRange[] = [];
   for (const marker of spurMarkers) {
-    const mapped = mapSpurMarkerToArcRange(arcGuide, polyline, marker, sampleSpacing);
+    const mapped = mapSpurMarkerToArcRange(arcGuide, polyline, marker, mapStep);
     if (mapped) spurRanges.push(mapped);
   }
 
@@ -431,4 +440,135 @@ export function buildGuideRadiusSampler(
 ): (guideS: number) => number {
   if (spurRanges.length === 0) return () => baseRadius;
   return (guideS) => trochoidRadiusAtGuideS(guideS, totalLength, baseRadius, spurRanges);
+}
+
+/** True when guide arc length falls anywhere on a corner spur (outbound, peak, or return). */
+export function isGuideSOnSpur(
+  guideS: number,
+  totalLength: number,
+  spurRanges: CornerSpurRange[]
+): boolean {
+  if (spurRanges.length === 0 || totalLength <= 0) return false;
+
+  const w = ((guideS % totalLength) + totalLength) % totalLength;
+
+  for (const spur of spurRanges) {
+    if (w >= spur.sStart - 1e-4 && w <= spur.sEnd + 1e-4) return true;
+  }
+
+  return false;
+}
+
+function guideSBetweenOnPath(
+  gs0: number,
+  gs1: number,
+  boundary: number,
+  _totalLength: number,
+  forward: boolean
+): boolean {
+  const eps = 1e-4;
+  if (forward) {
+    if (gs1 >= gs0 - eps) return boundary > gs0 + eps && boundary <= gs1 + eps;
+    return boundary > gs0 + eps || boundary <= gs1 + eps;
+  }
+  if (gs1 <= gs0 + eps) return boundary >= gs1 - eps && boundary < gs0 - eps;
+  return boundary >= gs1 - eps || boundary < gs0 - eps;
+}
+
+function guideSDeltaAlongPath(
+  gs0: number,
+  boundary: number,
+  totalLength: number,
+  forward: boolean
+): number {
+  if (forward) {
+    let delta = boundary - gs0;
+    if (delta <= 1e-6) delta += totalLength;
+    return delta;
+  }
+  let delta = gs0 - boundary;
+  if (delta <= 1e-6) delta += totalLength;
+  return delta;
+}
+
+/**
+ * Shorten a trochoid cycle so it stops at the next spur boundary (sStart / sPeak / sEnd).
+ * Prevents one stepover from straddling the spur U-turn, which causes stepover-sensitive overshoot.
+ */
+export function clampArcEndToSpurBoundaries(
+  arcProgress: number,
+  candidateEnd: number,
+  startS: number,
+  guideSign: number,
+  loopLength: number,
+  spurRanges: CornerSpurRange[]
+): number {
+  if (spurRanges.length === 0 || loopLength <= 0 || candidateEnd <= arcProgress + 1e-8) {
+    return candidateEnd;
+  }
+
+  const guideSAt = (sAlong: number) => {
+    const raw = guideSign >= 0 ? startS + sAlong : startS - sAlong;
+    return ((raw % loopLength) + loopLength) % loopLength;
+  };
+
+  const gs0 = guideSAt(arcProgress);
+  const gsEnd = guideSAt(candidateEnd);
+  const forward = guideSign >= 0;
+
+  let nearestEnd = candidateEnd;
+
+  for (const spur of spurRanges) {
+    for (const boundary of [spur.sStart, spur.sPeak, spur.sEnd]) {
+      if (!guideSBetweenOnPath(gs0, gsEnd, boundary, loopLength, forward)) continue;
+
+      const hitAlong = arcProgress + guideSDeltaAlongPath(gs0, boundary, loopLength, forward);
+      if (hitAlong > arcProgress + 1e-6 && hitAlong < nearestEnd - 1e-6) {
+        nearestEnd = hitAlong;
+      }
+    }
+  }
+
+  return nearestEnd;
+}
+
+/** Spur boundary snapping for open entry paths (spline + loop composite arc length). */
+export function clampOpenArcEndToSpurBoundaries(
+  arcProgress: number,
+  candidateEnd: number,
+  splineLen: number,
+  trochoidStartS: number,
+  forward: boolean,
+  loopLength: number,
+  spurRanges: CornerSpurRange[]
+): number {
+  if (spurRanges.length === 0 || loopLength <= 0 || candidateEnd <= arcProgress + 1e-8) {
+    return candidateEnd;
+  }
+  if (candidateEnd <= splineLen + 1e-6) return candidateEnd;
+
+  const loopAlongStart = Math.max(arcProgress, splineLen);
+  const loopSAt = (globalAlong: number) => {
+    const loopDelta = globalAlong - splineLen;
+    return forward ? trochoidStartS + loopDelta : trochoidStartS - loopDelta;
+  };
+
+  const gs0 = ((loopSAt(loopAlongStart) % loopLength) + loopLength) % loopLength;
+  const gsEnd = ((loopSAt(candidateEnd) % loopLength) + loopLength) % loopLength;
+
+  let nearestEnd = candidateEnd;
+
+  for (const spur of spurRanges) {
+    for (const boundary of [spur.sStart, spur.sPeak, spur.sEnd]) {
+      if (!guideSBetweenOnPath(gs0, gsEnd, boundary, loopLength, forward)) continue;
+
+      const loopDelta = guideSDeltaAlongPath(gs0, boundary, loopLength, forward);
+      const hitAlong = loopAlongStart + loopDelta;
+      if (hitAlong > arcProgress + 1e-6 && hitAlong < nearestEnd - 1e-6) {
+        nearestEnd = hitAlong;
+      }
+    }
+  }
+
+  return nearestEnd;
 }

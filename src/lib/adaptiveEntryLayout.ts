@@ -54,7 +54,8 @@ export function resolveAdaptiveEntryLayout(
   settings: OperationDefaults,
   overrides: AdaptiveEntryOverrides | null | undefined,
   centerGuideSegLen: number,
-  trochSampleSpacing: number
+  trochSampleSpacing: number,
+  resolution = 2
 ): AdaptiveEntryLayout | null {
   if (partLoop.length < 2) return null;
 
@@ -76,7 +77,8 @@ export function resolveAdaptiveEntryLayout(
   const { arcGuide: trochArcGuide, spurRanges: cornerSpurRanges } = mapSpurRangesToArcGuide(
     slotCenterGuide,
     spurMarkers,
-    trochSampleSpacing
+    trochSampleSpacing,
+    { trochoidR: roughSlot.trochoidRadius, resolution }
   );
   const guideTraverseSign = resolveGuideTraverseSign(slotCenterGuide, settings.climbMilling);
   const forward = guideTraverseSign >= 0;

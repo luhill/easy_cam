@@ -42,6 +42,12 @@ export function trochoidSampleSpacing(
   return base * Math.max(resolution, 0.5);
 }
 
+/** Fixed arc-length step for corner spur range mapping — independent of stepover %. */
+export function spurArcMapSpacing(trochoidR: number, resolution: number): number {
+  const factor = Math.max(resolution, 0.5);
+  return Math.min(0.1, Math.max(0.06, (trochoidR / 8) * factor));
+}
+
 export function safeHeightWorldZ(ctx: { worldTopZ: number }, safeHeight: number): number {
   return ctx.worldTopZ + Math.max(safeHeight, 0);
 }
