@@ -33,15 +33,12 @@ export interface AdaptiveSlotOptions {
 
 /**
  * Corner spur options when roughing with finishing pass enabled.
- * Sharp corners reach finish depth; wide corners stop at rough stock to avoid overshoot.
+ * Spur tips stop at the rough inner miter (stock allowance), not the finish outline.
  */
 export function cornerSpurOptionsForRoughing(settings: OperationDefaults): CornerSpurOptions {
   if (!settings.finishingPass) return {};
   const roughSlot = resolveAdaptiveSlotGeometry(settings, { roughing: true });
-  return {
-    roughTipInnerOffset: roughSlot.innerCenterOffset,
-    sharpAngleThresholdDeg: 100,
-  };
+  return { roughTipInnerOffset: roughSlot.innerCenterOffset };
 }
 
 export function resolveAdaptiveSlotGeometry(

@@ -45,11 +45,9 @@ export interface CornerSpurOptions {
   /** Minimum bisector spur length to insert (mm). Default 0.08. */
   minSpurLength?: number;
   /**
-   * With finishing pass: internal angle above this uses roughTipInnerOffset instead
-   * of finishInnerOffset (prevents wide-corner overshoot). Sharp corners keep finish depth.
+   * When set (finishing pass + roughing), spur tips use this offset instead of
+   * finishInnerOffset so the bisector stops at the rough stock envelope.
    */
-  sharpAngleThresholdDeg?: number;
-  /** Rough inner offset for wide corners when finishing pass leaves stock. */
   roughTipInnerOffset?: number;
 }
 
@@ -164,7 +162,7 @@ function mapSpurMarkerToArcRange(
 
 /**
  * Build slot center guide with bisector spurs at sharp concave corners.
- * Each spur runs from the slot miter to the finish-inner miter and back.
+ * Each spur runs from the slot miter to the inner miter tip (rough or finish) and back.
  */
 export function buildSlotCenterGuideWithCornerSpurs(
   partLoop: LoopPoint[],
@@ -175,7 +173,6 @@ export function buildSlotCenterGuideWithCornerSpurs(
 ): SlotCenterGuideResult {
   const maxInternalAngleDeg = options.maxInternalAngleDeg ?? 160;
   const minSpurLength = options.minSpurLength ?? 0.08;
-  const sharpAngleThresholdDeg = options.sharpAngleThresholdDeg ?? 100;
   const roughTipInnerOffset = options.roughTipInnerOffset;
 
   const n = partLoop.length;
@@ -236,10 +233,7 @@ export function buildSlotCenterGuideWithCornerSpurs(
 
       const internalAngle = vertexInternalAngleDeg(prev, curr, next);
       if (internalAngle < maxInternalAngleDeg) {
-        const tipOffset =
-          roughTipInnerOffset !== undefined && internalAngle > sharpAngleThresholdDeg
-            ? roughTipInnerOffset
-            : finishInnerOffset;
+        const tipOffset = roughTipInnerOffset ?? finishInnerOffset;
         const spurTipMiter = offsetVertexMiter(partLoop, i, tipOffset);
         const spurLen = Math.hypot(spurTipMiter.x - slotMiter.x, spurTipMiter.y - slotMiter.y);
         if (spurLen >= minSpurLength) {
