@@ -16,6 +16,7 @@ import {
   resolveAdaptiveEntryPoint,
   resolveAdaptiveSlotGeometry,
   cornerSpurOptionsForRoughing,
+  slotCenterOffsetForGuide,
 } from './adaptiveOutline';
 
 export interface AdaptiveEntryOverrides {
@@ -63,7 +64,7 @@ export function resolveAdaptiveEntryLayout(
   const finishSlot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
   const { guide: slotCenterGuide, spurMarkers } = buildSlotCenterGuideWithCornerSpurs(
     partLoop,
-    roughSlot.slotCenterOffset,
+    slotCenterOffsetForGuide(settings),
     finishSlot.innerCenterOffset,
     centerGuideSegLen,
     cornerSpurOptionsForRoughing(settings)

@@ -14,6 +14,7 @@ import {
   buildArcLengthGuide,
   findClosestSOnGuide,
   advanceGuideArcLength,
+  sampleGuideAtS,
   type ArcLengthGuide,
 } from './trochoidalPath';
 import { SPUR_ARC_MAP_SPACING } from './toolpathConfig';
@@ -107,78 +108,81 @@ function vertexInternalAngleDeg(prev: LoopPoint, curr: LoopPoint, next: LoopPoin
   return (Math.acos(Math.max(-1, Math.min(1, dot))) * 180) / Math.PI;
 }
 
-/** Cumulative polyline length at vertex index (build order, open). */
-function cumulativeLengthAtIndex(polyline: LoopPoint[], idx: number): number {
-  const end = Math.min(Math.max(idx, 0), polyline.length - 1);
+/** Cumulative polyline length without a closing chord (build-order distance). */
+function openPolylineLength(guide: LoopPoint[]): number {
+  if (guide.length < 2) return 0;
   let s = 0;
-  for (let i = 1; i <= end; i++) {
-    s += Math.hypot(polyline[i].x - polyline[i - 1].x, polyline[i].y - polyline[i - 1].y);
+  for (let i = 1; i < guide.length; i++) {
+    s += Math.hypot(guide[i].x - guide[i - 1].x, guide[i].y - guide[i - 1].y);
   }
   return s;
 }
 
-function pointAtBuildDistance(polyline: LoopPoint[], dist: number): LoopPoint {
-  if (polyline.length === 0) return { x: 0, y: 0, z: 0 };
-  if (dist <= 0) return polyline[0];
-
-  let acc = 0;
-  for (let i = 1; i < polyline.length; i++) {
-    const seg = Math.hypot(polyline[i].x - polyline[i - 1].x, polyline[i].y - polyline[i - 1].y);
-    if (acc + seg >= dist - 1e-9) {
-      const t = seg > 1e-9 ? Math.max(0, Math.min(1, (dist - acc) / seg)) : 0;
-      return {
-        x: polyline[i - 1].x + t * (polyline[i].x - polyline[i - 1].x),
-        y: polyline[i - 1].y + t * (polyline[i].y - polyline[i - 1].y),
-        z: polyline[i - 1].z + t * (polyline[i].z - polyline[i - 1].z),
-      };
-    }
-    acc += seg;
-  }
-  return polyline[polyline.length - 1];
-}
-
-function buildOrderDistanceToArcS(
+function findArcSAfter(
   arcGuide: ArcLengthGuide,
-  polyline: LoopPoint[],
-  buildDist: number,
-  fineStep: number
+  point: { x: number; y: number },
+  afterS: number,
+  sampleStep: number
 ): number {
-  const pt = pointAtBuildDistance(polyline, buildDist);
-  return findClosestSOnGuide(arcGuide, pt, fineStep).s;
+  const total = arcGuide.totalLength;
+  if (total <= 0) return afterS;
+
+  const tol = Math.max(sampleStep * 2, 0.2);
+  let bestS = afterS;
+  let bestDist = Infinity;
+
+  const scan = (from: number, to: number) => {
+    for (let s = from; s <= to + 1e-6; s += sampleStep) {
+      const f = sampleGuideAtS(arcGuide, s);
+      const d = Math.hypot(f.x - point.x, f.y - point.y);
+      if (d <= tol && s > afterS + 1e-4 && d < bestDist) {
+        bestDist = d;
+        bestS = s;
+      }
+    }
+  };
+
+  scan(afterS + sampleStep, total);
+  if (bestDist === Infinity) {
+    scan(0, afterS);
+  }
+  if (bestDist === Infinity) {
+    return findClosestSOnGuide(arcGuide, point, sampleStep).s;
+  }
+  return bestS;
 }
 
 function mapSpurMarkerToArcRange(
   arcGuide: ArcLengthGuide,
   polyline: LoopPoint[],
   marker: CornerSpurMarker,
-  _sampleSpacing: number
+  sampleSpacing: number
 ): CornerSpurRange | null {
+  const step = Math.max(Math.min(sampleSpacing, 0.25), 0.08);
   const miter = polyline[marker.miterIdx];
   const tip = polyline[marker.peakIdx];
   const miterReturn = polyline[marker.returnIdx];
 
   const outboundLen = Math.hypot(tip.x - miter.x, tip.y - miter.y);
-  const inboundLen = Math.hypot(miterReturn.x - tip.x, miterReturn.y - tip.y);
   if (outboundLen < 1e-6) return null;
 
-  const arcStep = 0.05;
-
-  const buildStart = cumulativeLengthAtIndex(polyline, marker.miterIdx);
-  const buildPeak = cumulativeLengthAtIndex(polyline, marker.peakIdx);
-  const buildEnd = cumulativeLengthAtIndex(polyline, marker.returnIdx);
-
-  let sStart = buildOrderDistanceToArcS(arcGuide, polyline, buildStart, arcStep);
-  let sPeak = buildOrderDistanceToArcS(arcGuide, polyline, buildPeak, arcStep);
-  let sEnd = buildOrderDistanceToArcS(arcGuide, polyline, buildEnd, arcStep);
+  let sStart = findClosestSOnGuide(arcGuide, miter, step).s;
+  let sPeak = findClosestSOnGuide(arcGuide, tip, step).s;
 
   if (sPeak <= sStart + 1e-4) {
     sPeak = advanceGuideArcLength(arcGuide, sStart, outboundLen, true);
   }
+
+  let sEnd = findArcSAfter(arcGuide, miterReturn, sPeak, step);
   if (sEnd <= sPeak + 1e-4) {
-    sEnd = advanceGuideArcLength(arcGuide, sPeak, Math.max(inboundLen, arcStep * 2), true);
+    sEnd = findArcSAfter(arcGuide, miterReturn, sPeak, step / 2);
+  }
+  const inboundLen = Math.hypot(miterReturn.x - tip.x, miterReturn.y - tip.y);
+  if (sEnd <= sPeak + 1e-4) {
+    sEnd = advanceGuideArcLength(arcGuide, sPeak, Math.max(inboundLen, step * 2), true);
   }
 
-  if (sEnd <= sPeak + 1e-4 || sPeak <= sStart + 1e-4) {
+  if (sPeak <= sStart + 1e-4 || sEnd <= sPeak + 1e-4) {
     return null;
   }
 
@@ -197,6 +201,7 @@ export function buildSlotCenterGuideWithCornerSpurs(
   options: CornerSpurOptions = {}
 ): SlotCenterGuideResult {
   const maxInternalAngleDeg = options.maxInternalAngleDeg ?? 160;
+  const minSpurLength = options.minSpurLength ?? 0.08;
   const roughTipInnerOffset = options.roughTipInnerOffset;
 
   const n = partLoop.length;
@@ -314,6 +319,7 @@ export function buildSlotCenterGuideWithCornerSpurs(
       if (join.spurTip) {
         const outboundLen = Math.hypot(join.spurTip.x - miterPt.x, join.spurTip.y - miterPt.y);
         const spurSegLen = Math.min(segLen, Math.max(outboundLen / 4, 0.05));
+        const outboundStartLen = openPolylineLength(result);
         appendDensifiedSegment(
           result,
           miterPt.x,
@@ -338,7 +344,10 @@ export function buildSlotCenterGuideWithCornerSpurs(
           true
         );
         const returnIdx = result.length - 1;
-        spurMarkers.push({ miterIdx, peakIdx, returnIdx });
+        const spurPathLen = openPolylineLength(result) - outboundStartLen;
+        if (spurPathLen >= minSpurLength * 2) {
+          spurMarkers.push({ miterIdx, peakIdx, returnIdx });
+        }
       }
     }
 

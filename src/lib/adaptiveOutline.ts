@@ -41,6 +41,14 @@ export function cornerSpurOptionsForRoughing(settings: OperationDefaults): Corne
   return { roughTipInnerOffset: finish.innerCenterOffset + FINISHING_STOCK_ALLOWANCE };
 }
 
+/**
+ * Slot centerline offset for spur/guide polylines. Always matches the no-finishing-pass
+ * geometry so enabling the final pass only shortens spur tips (~0.1 mm), not the whole slot.
+ */
+export function slotCenterOffsetForGuide(settings: OperationDefaults): number {
+  return resolveAdaptiveSlotGeometry(settings, { roughing: false }).slotCenterOffset;
+}
+
 export function resolveAdaptiveSlotGeometry(
   settings: OperationDefaults,
   options: AdaptiveSlotOptions = {}

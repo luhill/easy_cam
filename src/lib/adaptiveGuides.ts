@@ -17,7 +17,11 @@ import {
   trochoidSampleSpacing,
   type ToolpathGlobalOptions,
 } from './toolpathConfig';
-import { resolveAdaptiveSlotGeometry, cornerSpurOptionsForRoughing } from './adaptiveOutline';
+import {
+  resolveAdaptiveSlotGeometry,
+  cornerSpurOptionsForRoughing,
+  slotCenterOffsetForGuide,
+} from './adaptiveOutline';
 import { buildSlotCenterGuideWithCornerSpurs } from './cornerSpurs';
 
 export interface AdaptiveOutlineDebugGuides {
@@ -113,12 +117,11 @@ export function buildSlotCenterlineArcGuide(
   settings: OperationDefaults,
   globals: ToolpathGlobalOptions
 ) {
-  const roughSlot = resolveAdaptiveSlotGeometry(settings, { roughing: true });
   const finishSlot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
   const segLen = minkowskiSegmentLen(globals.resolution);
   const { guide: slotCenterGuide } = buildSlotCenterGuideWithCornerSpurs(
     loop,
-    roughSlot.slotCenterOffset,
+    slotCenterOffsetForGuide(settings),
     finishSlot.innerCenterOffset,
     segLen,
     cornerSpurOptionsForRoughing(settings)
