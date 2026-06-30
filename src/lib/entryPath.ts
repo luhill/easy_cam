@@ -169,7 +169,11 @@ interface LineCurveFilletSolution {
   turnSign: number;
   radius: number;
   error: number;
+  /** Signed sweep from t1 to p2 matching approach entry and guide exit tangents. */
+  sweep: number;
 }
+
+const FILLET_TANGENT_ALIGN = 0.965;
 
 /** External tangent points from a point to a circle. */
 function tangentPointsFromPointToCircle(
@@ -208,13 +212,71 @@ function minorArcSweep(
   return sweep;
 }
 
+/** Instantaneous travel direction on a circular arc at a point. */
+function arcTangentAlongSweep(
+  center: { x: number; y: number },
+  pt: { x: number; y: number },
+  sweep: number
+): { x: number; y: number } {
+  const rx = pt.x - center.x;
+  const ry = pt.y - center.y;
+  const len = Math.hypot(rx, ry) || 1;
+  return sweep >= 0
+    ? { x: -ry / len, y: rx / len }
+    : { x: ry / len, y: -rx / len };
+}
+
+/**
+ * Pick the arc sweep from t1 to p2 whose entry matches the approach line and
+ * whose exit matches the guide traverse tangent (climb/conventional aware).
+ */
+function resolveFilletSweep(
+  center: { x: number; y: number },
+  t1: { x: number; y: number },
+  p2: { x: number; y: number },
+  d1: { x: number; y: number },
+  d2: { x: number; y: number }
+): number | null {
+  const short = minorArcSweep(center, t1, p2);
+  const candidates =
+    Math.abs(Math.abs(short) - Math.PI) < 0.02 ? [short] : [short, -short];
+
+  for (const sweep of candidates) {
+    if (Math.abs(sweep) > Math.PI + 0.02) continue;
+    const entry = arcTangentAlongSweep(center, t1, sweep);
+    const exit = arcTangentAlongSweep(center, p2, sweep);
+    if (
+      entry.x * d1.x + entry.y * d1.y >= FILLET_TANGENT_ALIGN &&
+      exit.x * d2.x + exit.y * d2.y >= FILLET_TANGENT_ALIGN
+    ) {
+      return sweep;
+    }
+  }
+
+  return null;
+}
+
+function outwardNormalsToGuide(
+  d2: { x: number; y: number },
+  outN: { x: number; y: number }
+): { x: number; y: number }[] {
+  const leftN = { x: -d2.y, y: d2.x };
+  const rightN = { x: d2.y, y: -d2.x };
+  const leftOut = leftN.x * outN.x + leftN.y * outN.y;
+  const rightOut = rightN.x * outN.x + rightN.y * outN.y;
+  if (leftOut >= rightOut) {
+    return leftOut >= 0.15 ? [leftN] : rightOut >= 0.15 ? [rightN] : [leftN, rightN];
+  }
+  return rightOut >= 0.15 ? [rightN] : leftOut >= 0.15 ? [leftN] : [rightN, leftN];
+}
+
 function validateLeadInFilletSolution(
   boreCenter: { x: number; y: number },
   solution: LineCurveFilletSolution,
   d2: { x: number; y: number },
   outN: { x: number; y: number }
 ): boolean {
-  const { t1, p2, center, radius } = solution;
+  const { t1, p2, center, radius, sweep } = solution;
 
   const rcX = p2.x - center.x;
   const rcY = p2.y - center.y;
@@ -228,10 +290,14 @@ function validateLeadInFilletSolution(
   const rtY = t1.y - center.y;
   if (Math.abs(rtX * d1x + rtY * d1y) > radius * 0.08) return false;
 
-  const sweep = minorArcSweep(center, t1, p2);
   if (Math.abs(sweep) < (3 * Math.PI) / 180 || Math.abs(sweep) > (5 * Math.PI) / 6) {
     return false;
   }
+
+  const entry = arcTangentAlongSweep(center, t1, sweep);
+  const exit = arcTangentAlongSweep(center, p2, sweep);
+  if (entry.x * d1x + entry.y * d1y < FILLET_TANGENT_ALIGN) return false;
+  if (exit.x * d2.x + exit.y * d2.y < FILLET_TANGENT_ALIGN) return false;
 
   const midAngle = Math.atan2(t1.y - center.y, t1.x - center.x) + sweep / 2;
   const mid = {
@@ -273,31 +339,36 @@ function evalFreeApproachFilletAtS(
   let best: LineCurveFilletSolution | null = null;
   let bestScore = Infinity;
 
-  for (const outSign of [1, -1] as const) {
+  for (const n2 of outwardNormalsToGuide(d2, outN)) {
     const center = {
-      x: p2.x + outSign * outN.x * radius,
-      y: p2.y + outSign * outN.y * radius,
+      x: p2.x + n2.x * radius,
+      y: p2.y + n2.y * radius,
     };
 
     const tangents = tangentPointsFromPointToCircle(boreCenter, center, radius);
     for (const t1 of tangents) {
-      const sweep = minorArcSweep(center, t1, p2);
-      const turnSign = sweep >= 0 ? 1 : -1;
+      const legLen = Math.hypot(t1.x - boreCenter.x, t1.y - boreCenter.y);
+      if (legLen < 1e-4) continue;
+      const d1 = {
+        x: (t1.x - boreCenter.x) / legLen,
+        y: (t1.y - boreCenter.y) / legLen,
+      };
+      const sweep = resolveFilletSweep(center, t1, p2, d1, d2);
+      if (sweep === null) continue;
+
       const candidate: LineCurveFilletSolution = {
         contactS,
         t1,
         p2,
         center,
-        turnSign,
+        turnSign: sweep >= 0 ? 1 : -1,
         radius,
         error: 0,
+        sweep,
       };
       if (!validateLeadInFilletSolution(boreCenter, candidate, d2, outN)) continue;
 
-      const legLen = Math.hypot(t1.x - boreCenter.x, t1.y - boreCenter.y);
-      const d1x = (t1.x - boreCenter.x) / legLen;
-      const d1y = (t1.y - boreCenter.y) / legLen;
-      const lineErr = Math.abs(distPointToLine(center, boreCenter, { x: d1x, y: d1y }) - radius);
+      const lineErr = Math.abs(distPointToLine(center, boreCenter, d1) - radius);
       if (lineErr < bestScore) {
         bestScore = lineErr;
         best = { ...candidate, error: lineErr };
@@ -372,10 +443,10 @@ function sampleTangentFilletArc(
   radius: number,
   t1: { x: number; y: number },
   p2: { x: number; y: number },
+  sweep: number,
   z: number,
   sampleSpacing: number
 ): LoopPoint[] {
-  const sweep = minorArcSweep(center, t1, p2);
   if (Math.abs(sweep) < 1e-6) {
     return [
       { x: t1.x, y: t1.y, z },
@@ -412,9 +483,9 @@ function buildFilletFromSolution(
   sampleSpacing: number,
   z: number
 ): LoopPoint[] {
-  const { contactS, t1, p2, center, radius } = solution;
+  const { contactS, t1, p2, center, radius, sweep } = solution;
   const straightLeg = sampleStraightLeg(boreCenter, t1, z, sampleSpacing);
-  const filletPts = sampleTangentFilletArc(center, radius, t1, p2, z, sampleSpacing);
+  const filletPts = sampleTangentFilletArc(center, radius, t1, p2, sweep, z, sampleSpacing);
 
   const forward = guideTraverseSign >= 0;
   const forwardArc = guideArcLengthBetween(
@@ -537,25 +608,30 @@ function filletEntryToSlotCenterlineCornerApprox(
   const p2 = { x: curveFrame.x, y: curveFrame.y };
   const p2OutLen = Math.hypot(curveFrame.nx, curveFrame.ny) || 1;
   const p2OutN = { x: curveFrame.nx / p2OutLen, y: curveFrame.ny / p2OutLen };
-  const boreOut = (boreCenter.x - p2.x) * p2OutN.x + (boreCenter.y - p2.y) * p2OutN.y;
-  const outSign = boreOut >= 0 ? 1 : -1;
-  const center = {
-    x: p2.x + outSign * p2OutN.x * radius,
-    y: p2.y + outSign * p2OutN.y * radius,
-  };
+  const d1 = { x: d1x, y: d1y };
   const d2 = { x: d2x, y: d2y };
-  const sweep = minorArcSweep(center, t1, p2);
-  const turnSign = sweep >= 0 ? 1 : -1;
-  const candidate: LineCurveFilletSolution = {
-    contactS: resumeS,
-    t1,
-    p2,
-    center,
-    turnSign,
-    radius,
-    error: 0,
-  };
-  if (!validateLeadInFilletSolution(boreCenter, candidate, d2, p2OutN)) return null;
+
+  let candidate: LineCurveFilletSolution | null = null;
+  for (const n2 of outwardNormalsToGuide(d2, p2OutN)) {
+    const center = { x: p2.x + n2.x * radius, y: p2.y + n2.y * radius };
+    const sweep = resolveFilletSweep(center, t1, p2, d1, d2);
+    if (sweep === null) continue;
+    const tryCandidate: LineCurveFilletSolution = {
+      contactS: resumeS,
+      t1,
+      p2,
+      center,
+      turnSign: sweep >= 0 ? 1 : -1,
+      radius,
+      error: 0,
+      sweep,
+    };
+    if (validateLeadInFilletSolution(boreCenter, tryCandidate, d2, p2OutN)) {
+      candidate = tryCandidate;
+      break;
+    }
+  }
+  if (!candidate) return null;
 
   return buildFilletFromSolution(
     boreCenter,
