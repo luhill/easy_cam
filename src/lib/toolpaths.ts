@@ -246,7 +246,7 @@ function generateAdaptiveTrochoidalPath(
     slotCenterGuide,
     spurMarkers,
     sampleSpacing,
-    { trochoidR: roughSlot.trochoidRadius, resolution: globals.resolution }
+    { trochoidR: roughSlot.trochoidRadius, resolution: globals.resolution, shortSpurTips: settings.finishingPass }
   );
   return generateFourZoneAdaptivePath(
     slotCenterGuide,

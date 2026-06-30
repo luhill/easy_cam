@@ -20,6 +20,7 @@ import {
   spurOrbitRadius,
   clampCutPointToSpur,
   clampCutPointPastSpurTips,
+  clampCutInwardOfSpurPeak,
   clampArcEndToSpurBoundaries,
   clampOpenArcEndToSpurBoundaries,
   resolveSpurGuardBuffer,
@@ -418,6 +419,14 @@ function generateTrochoidAlongGuide(
         [spurState.spur],
         baseTrochoidR
       );
+      if (partLoop) {
+        clamped = clampCutInwardOfSpurPeak(
+          clamped.x,
+          clamped.y,
+          spurState.spur,
+          partLoop
+        );
+      }
       pt = { ...pt, x: clamped.x, y: clamped.y };
     }
     if (
