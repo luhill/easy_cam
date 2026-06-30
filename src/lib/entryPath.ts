@@ -735,8 +735,48 @@ export function buildSplineEntryGuide(
 }
 
 /**
+ * Spline lead-in merged with a full slot-center loop unwrap into one polyline.
+ * Trochoids sample a single open arc-length guide so frames stay continuous.
+ */
+export function buildUnifiedEntryCenterlineGuide(
+  splineGuide: LoopPoint[],
+  trochArcGuide: ReturnType<typeof buildArcLengthGuide>,
+  trochoidStartS: number,
+  guideTraverseSign: number,
+  sampleSpacing: number,
+  z: number
+): LoopPoint[] {
+  const loopLen = trochArcGuide.totalLength;
+  if (splineGuide.length === 0) return splineGuide;
+  if (loopLen <= 0) return splineGuide;
+
+  const forward = guideTraverseSign >= 0;
+  const loopEndS = advanceGuideArcLength(
+    trochArcGuide,
+    trochoidStartS,
+    Math.max(loopLen - sampleSpacing * 0.5, sampleSpacing),
+    forward
+  );
+  const loopPolyline = extractGuideArcSegment(
+    trochArcGuide,
+    trochoidStartS,
+    loopEndS,
+    guideTraverseSign,
+    sampleSpacing,
+    z
+  );
+  if (loopPolyline.length === 0) return splineGuide;
+
+  const last = splineGuide[splineGuide.length - 1];
+  const joinDist = Math.hypot(last.x - loopPolyline[0].x, last.y - loopPolyline[0].y);
+  const tail = joinDist <= sampleSpacing * 0.75 ? loopPolyline.slice(1) : loopPolyline;
+  return [...splineGuide, ...tail];
+}
+
+/**
  * Hermite spline lead-in plus one loop stepover on the slot centerline so open
  * trochoids can hand off to the closed outline path without a straight stitch.
+ * @deprecated Prefer buildUnifiedEntryCenterlineGuide for trochoid generation.
  */
 export function buildSplineToSlotTrochoidGuide(
   toolStart: { x: number; y: number },

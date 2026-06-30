@@ -11,6 +11,7 @@ import {
   type ArcLengthGuide,
 } from './trochoidalPath';
 import { clampToolCenterMinDistanceFromPart, signedLoopArea2D } from './geometryProcessing';
+import { buildUnifiedEntryCenterlineGuide } from './entryPath';
 
 export interface FourZoneParams {
   forwardIncrement: number;
@@ -286,18 +287,21 @@ function generateTrochoidAlongGuide(
     return points;
   }
 
-  const numCycles = Math.ceil(totalLength / stepover);
-  for (let cycle = 0; cycle < numCycles; cycle++) {
-    const sStart = cycle * stepover;
+  let arcProgress = 0;
+  let cycle = 0;
+
+  while (arcProgress < totalLength - 1e-5) {
+    const segEnd = Math.min(arcProgress + stepover, totalLength);
+    const segLen = segEnd - arcProgress;
 
     for (let i = 0; i <= steps; i++) {
       const phase = i / steps;
-      const sAlong = sStart + phase * stepover;
-      if (sAlong > totalLength + stepover * 0.01) break;
+      const sAlong = arcProgress + phase * segLen;
       emitOrbit(sAlong, phase, cycle > 0 && i === 0);
     }
 
-    if (sStart + stepover >= totalLength - 1e-6) break;
+    arcProgress = segEnd;
+    cycle++;
   }
 
   return points;
@@ -349,7 +353,7 @@ export function generateOpenTrochoidPath(
 
 /**
  * Continuous trochoid roughing from a spline lead-in into a full slot-center loop.
- * One uninterrupted stream of micro-loops — no phase matching or handoff splits.
+ * One uninterrupted stream of micro-loops on a single merged centerline guide.
  */
 export function generateContinuousEntryTrochoidPath(
   splineGuide: LoopPoint[],
@@ -361,33 +365,26 @@ export function generateContinuousEntryTrochoidPath(
 ): ToolpathPoint[] {
   if (trochArcGuide.totalLength <= 0) return [];
 
-  const trochoidR = params.slotClearance / 2;
   const sampleSpacing =
     params.sampleSpacing ??
-    Math.min(params.forwardIncrement / 4, trochoidR / 2, 0.5);
+    Math.min(params.forwardIncrement / 4, params.slotClearance / 4, 0.5);
 
-  const splineArcGuide =
-    splineGuide.length >= 2
-      ? buildOpenArcLengthGuide(splineGuide, sampleSpacing, outwardCCW)
-      : null;
-  const splineLen = splineArcGuide?.totalLength ?? 0;
-  const loopLen = trochArcGuide.totalLength;
-  const totalLength = splineLen + loopLen;
-  const forward = guideTraverseSign >= 0;
+  const centerline = buildUnifiedEntryCenterlineGuide(
+    splineGuide,
+    trochArcGuide,
+    trochoidStartS,
+    guideTraverseSign,
+    sampleSpacing,
+    params.z
+  );
 
-  const sampleAtGlobalS = (s: number) => {
-    if (splineArcGuide && s < splineLen - 1e-6) {
-      return sampleOpenGuideAtS(splineArcGuide, Math.max(0, s));
-    }
-    const loopDelta = Math.max(0, s - splineLen);
-    const loopS = forward ? trochoidStartS + loopDelta : trochoidStartS - loopDelta;
-    return sampleGuideAtS(trochArcGuide, loopS);
-  };
+  if (centerline.length < 2) return [];
 
-  return generateTrochoidAlongGuide(totalLength, false, sampleAtGlobalS, {
-    ...params,
-    guideSign: 1,
-  });
+  return generateOpenTrochoidPath(
+    centerline,
+    { ...params, liftAmount: 0 },
+    outwardCCW
+  );
 }
 
 export function generateConstantEngagementTrochoid(
