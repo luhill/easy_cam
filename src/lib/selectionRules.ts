@@ -63,7 +63,7 @@ export function getSelectionHint(
     return 'Click the face that should sit on the build plate (Z=0)';
   }
   if (subMode === 'entry-point') {
-    return 'Click in stock to set helix entry point — right-drag to orbit';
+    return 'Drag amber cross = tool start, blue cross = slot join on centerline';
   }
   switch (operationType) {
     case 'outline':

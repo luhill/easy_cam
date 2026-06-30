@@ -627,6 +627,11 @@ body {
   line-height: 1.4;
 }
 
+.entry-start-grid {
+  margin-top: 8px;
+  margin-bottom: 4px;
+}
+
 .tool-origin-settings {
   flex-shrink: 0;
   padding: 12px;

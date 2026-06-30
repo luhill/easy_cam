@@ -75,10 +75,15 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
     activeOperationId,
     selectionMode,
     selectionSubMode,
+    updateOperation,
   } = useAppStore();
 
   const isActive = activeOperationId === operation.id;
   const geometrySummary = formatGeometrySummary(operation);
+  const hasOutlineLoop =
+    operation.type === 'adaptive-outline' &&
+    !!operation.geometry?.loops &&
+    operation.geometry.loops.length > 0;
   const hasGeometry =
     !!operation.geometry &&
     (operation.geometry.faceIndices.length > 0 ||
@@ -86,17 +91,60 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
       !!operation.geometry.entryPoint ||
       !!operation.geometry.toolStartPoint ||
       !!operation.geometry.slotJoinPoint ||
-      (operation.type === 'adaptive-outline' &&
-        !!operation.geometry.loops &&
-        operation.geometry.loops.length > 0));
+      hasOutlineLoop);
+  const isEditingEntry = isActive && selectionMode && selectionSubMode === 'entry-point';
+  const isSelectingGeometry = isActive && selectionMode && selectionSubMode !== 'entry-point';
+
+  const entryLayout = (() => {
+    if (!hasOutlineLoop || !operation.geometry?.loops?.[0]) return null;
+    const resolution = useSettingsStore.getState().toolpathResolution;
+    const segLen = minkowskiSegmentLen(resolution);
+    const roughSlot = resolveAdaptiveSlotGeometry(operation.settings, { roughing: true });
+    const trochSampleSpacing = trochoidSampleSpacing(
+      roughSlot.forwardIncrement,
+      roughSlot.trochoidRadius,
+      resolution
+    );
+    return resolveAdaptiveEntryLayout(
+      operation.geometry.loops[0],
+      operation.settings,
+      adaptiveEntryOverridesFromGeometry(operation.geometry),
+      segLen,
+      trochSampleSpacing
+    );
+  })();
+
+  const toolStartX =
+    operation.geometry?.toolStartPoint?.x ?? entryLayout?.toolStart.x ?? 0;
+  const toolStartY =
+    operation.geometry?.toolStartPoint?.y ?? entryLayout?.toolStart.y ?? 0;
 
   const handleSelectGeometry = () => {
     setActiveOperation(operation.id);
     setSelectionMode(true, 'geometry');
   };
 
+  const handleEditEntryPoints = () => {
+    setActiveOperation(operation.id);
+    setSelectionMode(true, 'entry-point');
+  };
+
   const handleStopSelection = () => {
     setSelectionMode(false);
+  };
+
+  const handleToolStartCoordinateChange = (axis: 'x' | 'y', raw: string) => {
+    if (!operation.geometry) return;
+    const value = parseFloat(raw);
+    if (!Number.isFinite(value)) return;
+    const current = operation.geometry.toolStartPoint ?? entryLayout?.toolStart ?? { x: 0, y: 0 };
+    updateOperation(operation.id, {
+      geometry: {
+        ...operation.geometry,
+        toolStartPoint: { ...current, [axis]: value },
+        entryPoint: undefined,
+      },
+    });
   };
 
   const supportsModelSelection =
@@ -116,14 +164,25 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
         <span className="geometry-count">{geometrySummary}</span>
       </div>
       <div className="geometry-actions">
-        {isActive && selectionMode ? (
+        {isEditingEntry ? (
+          <button className="btn btn-small btn-accent" onClick={handleStopSelection}>
+            Done Editing
+          </button>
+        ) : isSelectingGeometry ? (
           <button className="btn btn-small btn-accent" onClick={handleStopSelection}>
             Done Selecting
           </button>
         ) : (
-          <button className="btn btn-small" onClick={handleSelectGeometry}>
-            Select from Model
-          </button>
+          <>
+            <button className="btn btn-small" onClick={handleSelectGeometry}>
+              Select from Model
+            </button>
+            {hasOutlineLoop && (
+              <button className="btn btn-small btn-secondary" onClick={handleEditEntryPoints}>
+                Edit Entry Points
+              </button>
+            )}
+          </>
         )}
         {hasGeometry && !(isActive && selectionMode) && (
           <button
@@ -134,18 +193,46 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
           </button>
         )}
       </div>
-      {isActive && operation.type === 'adaptive-outline' && operation.geometry?.loops?.[0] && (
+      {hasOutlineLoop && (
+        <div className="settings-grid entry-start-grid">
+          <div className="setting-row">
+            <label>
+              Tool start X <span className="unit">(mm)</span>
+            </label>
+            <input
+              type="number"
+              value={Number.isFinite(toolStartX) ? toolStartX : 0}
+              step={0.1}
+              onChange={(e) => handleToolStartCoordinateChange('x', e.target.value)}
+            />
+          </div>
+          <div className="setting-row">
+            <label>
+              Tool start Y <span className="unit">(mm)</span>
+            </label>
+            <input
+              type="number"
+              value={Number.isFinite(toolStartY) ? toolStartY : 0}
+              step={0.1}
+              onChange={(e) => handleToolStartCoordinateChange('y', e.target.value)}
+            />
+          </div>
+        </div>
+      )}
+      {isActive && hasOutlineLoop && !isEditingEntry && (
         <p className="geometry-submode">
-          Drag gray/amber cross = tool start, blue cross = slot join on centerline (orange guide).
+          Use Edit Entry Points to drag tool start and slot join without rotating the view.
           Lead-in is a spline tangent to the outline in climb/conventional direction.
         </p>
       )}
-      {isActive && selectionMode && operation.type === 'adaptive-outline' && (
+      {isEditingEntry && (
         <p className="geometry-submode">
-          {selectionSubMode === 'geometry'
-            ? 'Select top-facing part outline — then drag entry handles in the 3D view'
-            : 'Select top-facing part outline'}
+          Drag amber cross = tool start, blue cross = slot join on centerline (orange guide).
+          Right-drag to orbit the view.
         </p>
+      )}
+      {isSelectingGeometry && operation.type === 'adaptive-outline' && (
+        <p className="geometry-submode">Select top-facing part outline</p>
       )}
       {isActive && selectionMode && (operation.type === 'drill' || operation.type === 'helix') && (
         <p className="geometry-submode">

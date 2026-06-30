@@ -713,12 +713,13 @@ export function buildSplineEntryGuide(
     return [{ x: slotJoin.x, y: slotJoin.y, z }];
   }
 
-  const handle = Math.max(chord * 0.42, sampleSpacing * 2);
-  const t0 = { x: (dx / chord) * handle, y: (dy / chord) * handle };
+  const startHandle = Math.max(chord * 0.55, sampleSpacing * 2);
+  const endHandle = Math.max(chord * 0.72, sampleSpacing * 2.5);
+  const t0 = { x: (dx / chord) * startHandle, y: (dy / chord) * startHandle };
   const tLen = Math.hypot(exitTangent.x, exitTangent.y) || 1;
   const t1 = {
-    x: (exitTangent.x / tLen) * handle,
-    y: (exitTangent.y / tLen) * handle,
+    x: (exitTangent.x / tLen) * endHandle,
+    y: (exitTangent.y / tLen) * endHandle,
   };
 
   const steps = Math.max(8, Math.ceil(chord / sampleSpacing));

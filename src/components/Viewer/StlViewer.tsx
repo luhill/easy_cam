@@ -522,6 +522,7 @@ function SceneContent({
   const toolpaths = useAppStore((s) => s.toolpaths);
   const operations = useAppStore((s) => s.operations);
   const selectionMode = useAppStore((s) => s.selectionMode);
+  const selectionSubMode = useAppStore((s) => s.selectionSubMode);
   const simulationDistance = useAppStore((s) => s.simulationDistance);
   const simulationPlaying = useAppStore((s) => s.simulationPlaying);
   const simulationSpeed = useAppStore((s) => s.simulationSpeed);
@@ -727,7 +728,7 @@ function SceneContent({
           leadInGuide={adaptiveDebugGuides.leadInGuide}
         />
       )}
-      {adaptiveEntry && partBounds && (
+      {adaptiveEntry && partBounds && selectionMode && selectionSubMode === 'entry-point' && (
         <AdaptiveEntryHandles
           toolStart={adaptiveEntry.layout.toolStart}
           slotJoin={adaptiveEntry.layout.slotJoin}
