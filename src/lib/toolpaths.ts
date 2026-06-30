@@ -29,6 +29,7 @@ import {
   generateBoreBottomToLeadInTransition,
   generateHelixBorePoints,
   helixRadiusAtZ,
+  helixRadiusTaperedFromStart,
   isGuideOutwardCCW,
   resolveHelixRotationDir,
   resolveSlotHelixRadius,
@@ -332,42 +333,58 @@ function generateFinishingOutline(
   return pts;
 }
 
-function appendDirectToFreshBoreStart(
+function appendFreshSlotWidthBore(
   target: ToolpathPoint[],
   boreCenter: { x: number; y: number },
-  z: number,
+  startZ: number,
+  targetZ: number,
   slotHelixR: number,
-  startAngle: number,
-  feedRate?: number
+  settings: Operation['settings'],
+  helixOpts: { stockTopZ: number; globals: ToolpathGlobalOptions },
+  helixFeed: number
 ): void {
   const last = lastPathPoint(target);
-  if (!last) return;
+  const startAngle = 0;
+  const boreStartX = boreCenter.x + Math.cos(startAngle) * slotHelixR;
+  const boreStartY = boreCenter.y + Math.sin(startAngle) * slotHelixR;
 
-  const x = boreCenter.x + Math.cos(startAngle) * slotHelixR;
-  const y = boreCenter.y + Math.sin(startAngle) * slotHelixR;
+  let at = last;
+  if (at) {
+    if (Math.abs(at.z - startZ) > 1e-4) {
+      target.push({ x: at.x, y: at.y, z: startZ, feedRate: helixFeed });
+      at = { x: at.x, y: at.y, z: startZ };
+    }
+    if (Math.hypot(at.x - boreCenter.x, at.y - boreCenter.y) > 0.12) {
+      target.push({ x: boreCenter.x, y: boreCenter.y, z: startZ, feedRate: helixFeed });
+      at = { x: boreCenter.x, y: boreCenter.y, z: startZ };
+    }
+    if (Math.hypot(at.x - boreStartX, at.y - boreStartY) > 0.12) {
+      target.push({ x: boreStartX, y: boreStartY, z: startZ, feedRate: helixFeed });
+    }
+  }
 
-  if (Math.abs(last.z - z) > 1e-4) {
-    target.push({ x: last.x, y: last.y, z, feedRate });
-  }
-  if (Math.hypot(last.x - x, last.y - y) > 0.12 || Math.abs(last.z - z) > 1e-4) {
-    target.push({ x, y, z, feedRate });
-  }
+  const bore = generateHelixBorePoints(boreCenter, settings, startZ, targetZ, {
+    ...helixOpts,
+    taper: true,
+    helixR: slotHelixR,
+    taperFromStart: true,
+    startAngle,
+  });
+  appendPoints(target, bore.points);
 }
 
 function appendBoreBottomWidenAndLeadIn(
   target: ToolpathPoint[],
   boreCenter: { x: number; y: number },
   layerZ: number,
-  topZ: number,
   slotHelixR: number,
-  settings: Operation['settings'],
+  bottomHelixR: number,
   stepoverIncrement: number,
   rotDir: number,
   segmentsPerRev: number,
   helixFeed: number,
   firstLeadIn: ToolpathPoint
 ): boolean {
-  const bottomHelixR = helixRadiusAtZ(settings, layerZ, topZ);
   const boreBottom = lastPathPoint(target);
   if (!boreBottom) return true;
 
@@ -499,8 +516,6 @@ function generateAdaptiveOutlinePath(
   for (let li = 0; li < layers.length; li++) {
     const layerZ = layers[li];
     const prevZ = li > 0 ? layers[li - 1] : helixTarget;
-    const boreCenter =
-      li === 0 ? toolStart : { x: slotJoinCenter.x, y: slotJoinCenter.y };
 
     if (li === 0 && Math.abs(layerZ - helixTarget) > 1e-4) {
       const layerBore = generateHelixBorePoints(toolStart, settings, helixTarget, layerZ, {
@@ -514,117 +529,98 @@ function generateAdaptiveOutlinePath(
       boreHelixAngle = layerBore.endAngle;
     }
 
-    let layerTroch: ToolpathPoint[] = [];
-
     if (li === 0) {
-      const rotParams = trochoidParams(
-        loop,
-        settings,
-        slotCenterGuide,
-        layerZ,
-        true,
-        globals,
-        helixFeed
-      );
-
-      const leadInGuide = buildSplineEntryGuide(
-        toolStart,
-        entryLayout.slotJoin,
-        entryLayout.traverseTangent,
-        trochSampleSpacing,
-        layerZ
-      );
-
-      layerTroch = generateContinuousEntryTrochoidPath(
-        leadInGuide,
+      const layerTroch = generateContinuousEntryTrochoidPath(
+        buildSplineEntryGuide(
+          toolStart,
+          entryLayout.slotJoin,
+          entryLayout.traverseTangent,
+          trochSampleSpacing,
+          layerZ
+        ),
         trochArcGuide,
         trochoidStartS,
         entryLayout.guideTraverseSign,
-        { ...rotParams, z: layerZ, feedRate: helixFeed },
+        {
+          ...trochoidParams(
+            loop,
+            settings,
+            slotCenterGuide,
+            layerZ,
+            true,
+            globals,
+            helixFeed
+          ),
+          z: layerZ,
+          feedRate: helixFeed,
+        },
         outwardCCW
       );
 
-      if (layerTroch.length > 0) {
-        if (
-          !appendBoreBottomWidenAndLeadIn(
-            points,
-            toolStart,
-            layerZ,
-            topZ,
-            slotHelixR,
-            settings,
-            stepoverIncrement,
-            rotDir,
-            segmentsPerRev,
-            helixFeed,
-            layerTroch[0]
-          )
-        ) {
-          break;
-        }
-      }
-    } else {
-      layerTroch = generateAdaptiveTrochoidalPath(
-        loop,
-        settings,
-        layerZ,
-        globals,
-        true,
-        trochoidStartS,
-        0,
-        false
-      );
+      if (layerTroch.length === 0) continue;
 
-      const freshBoreStartAngle = 0;
-      appendDirectToFreshBoreStart(
-        points,
-        boreCenter,
-        prevZ,
-        slotHelixR,
-        freshBoreStartAngle,
-        helixFeed
-      );
-
-      const layerBore = generateHelixBorePoints(boreCenter, settings, prevZ, layerZ, {
-        ...helixOpts,
-        taper: true,
-        helixR: slotHelixR,
-        startAngle: freshBoreStartAngle,
-      });
-      if (!appendPoints(points, layerBore.points)) {
+      if (
+        !appendBoreBottomWidenAndLeadIn(
+          points,
+          toolStart,
+          layerZ,
+          slotHelixR,
+          helixRadiusAtZ(settings, layerZ, topZ),
+          stepoverIncrement,
+          rotDir,
+          segmentsPerRev,
+          helixFeed,
+          layerTroch[0]
+        )
+      ) {
         break;
       }
-      boreHelixAngle = layerBore.endAngle;
-
-      if (layerTroch.length > 0) {
-        if (
-          !appendBoreBottomWidenAndLeadIn(
-            points,
-            boreCenter,
-            layerZ,
-            topZ,
-            slotHelixR,
-            settings,
-            stepoverIncrement,
-            rotDir,
-            segmentsPerRev,
-            helixFeed,
-            layerTroch[0]
-          )
-        ) {
-          break;
-        }
-      }
+      if (!appendGeneratedPath(points, layerTroch)) break;
+      continue;
     }
 
-    if (layerTroch.length === 0) continue;
-    if (!appendGeneratedPath(points, layerTroch)) break;
-
-    const lastTroch = layerTroch[layerTroch.length - 1];
-    boreHelixAngle = Math.atan2(
-      lastTroch.y - boreCenter.y,
-      lastTroch.x - boreCenter.x
+    const slotBoreCenter = { x: slotJoinCenter.x, y: slotJoinCenter.y };
+    appendFreshSlotWidthBore(
+      points,
+      slotBoreCenter,
+      prevZ,
+      layerZ,
+      slotHelixR,
+      settings,
+      helixOpts,
+      helixFeed
     );
+
+    const layerTroch = generateAdaptiveTrochoidalPath(
+      loop,
+      settings,
+      layerZ,
+      globals,
+      true,
+      trochoidStartS,
+      0,
+      false
+    );
+
+    if (layerTroch.length === 0) continue;
+
+    if (
+      !appendBoreBottomWidenAndLeadIn(
+        points,
+        slotBoreCenter,
+        layerZ,
+        slotHelixR,
+        helixRadiusTaperedFromStart(settings, layerZ, prevZ, slotHelixR),
+        stepoverIncrement,
+        rotDir,
+        segmentsPerRev,
+        helixFeed,
+        layerTroch[0]
+      )
+    ) {
+      break;
+    }
+    if (!appendGeneratedPath(points, layerTroch)) break;
   }
 
   if (settings.finishingPass) {

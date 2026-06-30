@@ -42,6 +42,23 @@ export function helixRadiusAtZ(
   return Math.max(boreOuterAtZ - toolR, 0.05);
 }
 
+/**
+ * Tool-center radius for a fresh bore segment that starts at `startHelixR` on `startZ`
+ * and tapers inward with `boreTaperAngleDeg` as Z decreases (independent of stock top).
+ */
+export function helixRadiusTaperedFromStart(
+  settings: OperationDefaults,
+  z: number,
+  startZ: number,
+  startHelixR: number
+): number {
+  if (z >= startZ - 1e-6) return startHelixR;
+
+  const depthBelowStart = startZ - z;
+  const taperRad = (settings.boreTaperAngleDeg * Math.PI) / 180;
+  return Math.max(startHelixR - depthBelowStart * Math.tan(taperRad), 0.05);
+}
+
 /** Pitch from helix angle for an arbitrary helix radius. */
 export function helixPitchForRadius(helixR: number, angleDeg: number): number {
   const r = Math.max(helixR, 0.05);
@@ -1320,9 +1337,11 @@ export function isGuideOutwardCCW(partLoop: LoopPoint[]): boolean {
 
 export interface HelixBoreOptions {
   stockTopZ: number;
-  /** Apply bore taper below stock top */
+  /** Apply bore taper below stock top (entry bore) or along segment (with taperFromStart). */
   taper: boolean;
   helixR?: number;
+  /** Taper from helixR at startZ downward — fresh slot-width layer bores. */
+  taperFromStart?: boolean;
   globals: ToolpathGlobalOptions;
   /** Continue rotation from a prior bore segment (radians). */
   startAngle?: number;
@@ -1344,10 +1363,8 @@ function resolveBoreHelixR(
   const startR = options.helixR ?? defaultHelixR;
   if (!options.taper) return startR;
 
-  if (options.helixR !== undefined) {
-    if (z >= startZ - 1e-6) return startR;
-    if (z >= stockTopZ - 1e-6) return startR;
-    return Math.min(startR, helixRadiusAtZ(settings, z, stockTopZ));
+  if (options.taperFromStart && options.helixR !== undefined) {
+    return helixRadiusTaperedFromStart(settings, z, startZ, startR);
   }
 
   if (z >= stockTopZ - 1e-6) return defaultHelixR;
