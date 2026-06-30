@@ -257,6 +257,15 @@ function generateTrochoidAlongGuide(
       ? params.trochoidRAtGuide(sSample)
       : baseTrochoidR;
 
+    if (orbitR <= baseTrochoidR * 0.03) {
+      if (phase >= CUT_PHASE_START && !skipDuplicate) {
+        let tipPt: ToolpathPoint = { x: frame.x, y: frame.y, z };
+        if (feedRate !== undefined) tipPt = { ...tipPt, feedRate };
+        points.push(tipPt);
+      }
+      return;
+    }
+
     let pt = orbitPoint(frame, orbitR, theta, z);
     if (
       partLoop &&

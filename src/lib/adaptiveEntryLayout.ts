@@ -59,13 +59,12 @@ export function resolveAdaptiveEntryLayout(
 
   const roughSlot = resolveAdaptiveSlotGeometry(settings, { roughing: true });
   const finishSlot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
-  const { guide: slotCenterGuide, spurRanges: polySpurRanges } =
-    buildSlotCenterGuideWithCornerSpurs(
-      partLoop,
-      roughSlot.slotCenterOffset,
-      finishSlot.innerCenterOffset,
-      centerGuideSegLen
-    );
+  const { guide: slotCenterGuide, spurMarkers } = buildSlotCenterGuideWithCornerSpurs(
+    partLoop,
+    roughSlot.slotCenterOffset,
+    finishSlot.innerCenterOffset,
+    centerGuideSegLen
+  );
   if (slotCenterGuide.length < 3) return null;
 
   const arcGuide = buildArcLengthGuide(
@@ -74,7 +73,7 @@ export function resolveAdaptiveEntryLayout(
   );
   const { arcGuide: trochArcGuide, spurRanges: cornerSpurRanges } = mapSpurRangesToArcGuide(
     slotCenterGuide,
-    polySpurRanges,
+    spurMarkers,
     trochSampleSpacing
   );
   const guideTraverseSign = resolveGuideTraverseSign(slotCenterGuide, settings.climbMilling);

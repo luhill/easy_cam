@@ -235,7 +235,7 @@ function generateAdaptiveTrochoidalPath(
     roughSlot.trochoidRadius,
     globals.resolution
   );
-  const { guide: slotCenterGuide, spurRanges: polySpurs } = buildSlotCenterGuideWithCornerSpurs(
+  const { guide: slotCenterGuide, spurMarkers } = buildSlotCenterGuideWithCornerSpurs(
     partLoop,
     roughSlot.slotCenterOffset,
     finishSlot.innerCenterOffset,
@@ -243,7 +243,7 @@ function generateAdaptiveTrochoidalPath(
   );
   const { arcGuide, spurRanges } = mapSpurRangesToArcGuide(
     slotCenterGuide,
-    polySpurs,
+    spurMarkers,
     sampleSpacing
   );
   return generateFourZoneAdaptivePath(slotCenterGuide, {

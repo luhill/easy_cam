@@ -9,7 +9,12 @@ import {
   signedLoopArea2D,
   outwardEdgeNormal2D,
 } from './geometryProcessing';
-import { buildArcLengthGuide, type ArcLengthGuide } from './trochoidalPath';
+import {
+  buildArcLengthGuide,
+  findClosestSOnGuide,
+  sampleGuideAtS,
+  type ArcLengthGuide,
+} from './trochoidalPath';
 
 export interface CornerSpurRange {
   /** Arc length where spur leaves the main slot centerline (full trochoid radius). */
@@ -20,9 +25,15 @@ export interface CornerSpurRange {
   sEnd: number;
 }
 
+interface CornerSpurMarker {
+  miterIdx: number;
+  peakIdx: number;
+  returnIdx: number;
+}
+
 export interface SlotCenterGuideResult {
   guide: LoopPoint[];
-  spurRanges: CornerSpurRange[];
+  spurMarkers: CornerSpurMarker[];
 }
 
 export interface CornerSpurOptions {
@@ -71,16 +82,74 @@ function vertexInternalAngleDeg(prev: LoopPoint, curr: LoopPoint, next: LoopPoin
   return (Math.acos(Math.max(-1, Math.min(1, dot))) * 180) / Math.PI;
 }
 
-function arcLengthOfGuide(guide: LoopPoint[]): number {
+/** Cumulative polyline length without a closing chord (build-order distance). */
+function openPolylineLength(guide: LoopPoint[]): number {
   if (guide.length < 2) return 0;
   let s = 0;
   for (let i = 1; i < guide.length; i++) {
     s += Math.hypot(guide[i].x - guide[i - 1].x, guide[i].y - guide[i - 1].y);
   }
-  const a = guide[0];
-  const b = guide[guide.length - 1];
-  s += Math.hypot(a.x - b.x, a.y - b.y);
   return s;
+}
+
+function findArcSAfter(
+  arcGuide: ArcLengthGuide,
+  point: { x: number; y: number },
+  afterS: number,
+  sampleStep: number
+): number {
+  const total = arcGuide.totalLength;
+  if (total <= 0) return afterS;
+
+  const tol = Math.max(sampleStep * 2, 0.2);
+  let bestS = afterS;
+  let bestDist = Infinity;
+
+  const scan = (from: number, to: number) => {
+    for (let s = from; s <= to + 1e-6; s += sampleStep) {
+      const f = sampleGuideAtS(arcGuide, s);
+      const d = Math.hypot(f.x - point.x, f.y - point.y);
+      if (d <= tol && s > afterS + 1e-4 && d < bestDist) {
+        bestDist = d;
+        bestS = s;
+      }
+    }
+  };
+
+  scan(afterS + sampleStep, total);
+  if (bestDist === Infinity) {
+    scan(0, afterS);
+  }
+  if (bestDist === Infinity) {
+    return findClosestSOnGuide(arcGuide, point, sampleStep).s;
+  }
+  return bestS;
+}
+
+function mapSpurMarkerToArcRange(
+  arcGuide: ArcLengthGuide,
+  polyline: LoopPoint[],
+  marker: CornerSpurMarker,
+  sampleSpacing: number
+): CornerSpurRange | null {
+  const step = Math.max(Math.min(sampleSpacing, 0.25), 0.08);
+  const miter = polyline[marker.miterIdx];
+  const tip = polyline[marker.peakIdx];
+  const miterReturn = polyline[marker.returnIdx];
+
+  const sStart = findClosestSOnGuide(arcGuide, miter, step).s;
+  const sPeak = findClosestSOnGuide(arcGuide, tip, step).s;
+
+  let sEnd = findArcSAfter(arcGuide, miterReturn, sPeak, step);
+  if (sEnd <= sPeak + 1e-4) {
+    sEnd = findArcSAfter(arcGuide, miterReturn, sPeak, step / 2);
+  }
+
+  if (sPeak <= sStart + 1e-4 || sEnd <= sPeak + 1e-4) {
+    return null;
+  }
+
+  return { sStart, sPeak, sEnd };
 }
 
 /**
@@ -99,7 +168,7 @@ export function buildSlotCenterGuideWithCornerSpurs(
 
   const n = partLoop.length;
   if (n < 3 || Math.abs(slotCenterOffset) < 1e-9) {
-    return { guide: partLoop.map((p) => ({ ...p })), spurRanges: [] };
+    return { guide: partLoop.map((p) => ({ ...p })), spurMarkers: [] };
   }
 
   const ccw = signedLoopArea2D(partLoop) >= 0;
@@ -179,7 +248,7 @@ export function buildSlotCenterGuideWithCornerSpurs(
   }
 
   const result: LoopPoint[] = [];
-  const spurRanges: CornerSpurRange[] = [];
+  const spurMarkers: CornerSpurMarker[] = [];
 
   for (let i = 0; i < n; i++) {
     const join = joins[i];
@@ -201,7 +270,7 @@ export function buildSlotCenterGuideWithCornerSpurs(
         });
       }
     } else {
-      const sStart = arcLengthOfGuide(result);
+      const miterIdx = result.length;
       result.push({
         x: join.endX,
         y: join.endY,
@@ -209,6 +278,7 @@ export function buildSlotCenterGuideWithCornerSpurs(
       });
 
       if (join.spurTip) {
+        const outboundStartLen = openPolylineLength(result);
         appendDensifiedSegment(
           result,
           join.endX,
@@ -220,7 +290,7 @@ export function buildSlotCenterGuideWithCornerSpurs(
           segLen,
           true
         );
-        const sPeak = arcLengthOfGuide(result);
+        const peakIdx = result.length - 1;
         appendDensifiedSegment(
           result,
           join.spurTip.x,
@@ -232,9 +302,10 @@ export function buildSlotCenterGuideWithCornerSpurs(
           segLen,
           true
         );
-        const sEnd = arcLengthOfGuide(result);
-        if (sPeak - sStart >= minSpurLength) {
-          spurRanges.push({ sStart, sPeak, sEnd });
+        const returnIdx = result.length - 1;
+        const inboundLen = openPolylineLength(result) - outboundStartLen;
+        if (inboundLen >= minSpurLength * 2) {
+          spurMarkers.push({ miterIdx, peakIdx, returnIdx });
         }
       }
     }
@@ -252,34 +323,30 @@ export function buildSlotCenterGuideWithCornerSpurs(
     );
   }
 
-  return { guide: result, spurRanges };
+  return { guide: result, spurMarkers };
 }
 
-/** Map spur arc-length ranges from a polyline guide to a densified ArcLengthGuide. */
+/** Map spur markers from polyline indices to arc-length ranges on the trochoid guide. */
 export function mapSpurRangesToArcGuide(
   polyline: LoopPoint[],
-  spurRanges: CornerSpurRange[],
+  spurMarkers: CornerSpurMarker[],
   sampleSpacing: number
 ): { arcGuide: ArcLengthGuide; spurRanges: CornerSpurRange[] } {
   const arcGuide = buildArcLengthGuide(polyline, sampleSpacing);
-  if (spurRanges.length === 0 || arcGuide.totalLength <= 0) {
+  if (arcGuide.totalLength <= 0 || spurMarkers.length === 0) {
     return { arcGuide, spurRanges: [] };
   }
 
-  const polyLen = arcLengthOfGuide(polyline);
-  const scale = polyLen > 1e-6 ? arcGuide.totalLength / polyLen : 1;
+  const spurRanges: CornerSpurRange[] = [];
+  for (const marker of spurMarkers) {
+    const mapped = mapSpurMarkerToArcRange(arcGuide, polyline, marker, sampleSpacing);
+    if (mapped) spurRanges.push(mapped);
+  }
 
-  return {
-    arcGuide,
-    spurRanges: spurRanges.map((spur) => ({
-      sStart: spur.sStart * scale,
-      sPeak: spur.sPeak * scale,
-      sEnd: spur.sEnd * scale,
-    })),
-  };
+  return { arcGuide, spurRanges };
 }
 
-/** Trochoid orbit radius at a guide arc-length station (ramps on corner spurs). */
+/** Trochoid orbit radius at a guide arc-length station (ramps on corner spurs only). */
 export function trochoidRadiusAtGuideS(
   s: number,
   totalLength: number,
@@ -288,20 +355,23 @@ export function trochoidRadiusAtGuideS(
 ): number {
   if (baseRadius <= 0 || totalLength <= 0 || spurRanges.length === 0) return baseRadius;
 
-  let w = s % totalLength;
-  if (w < 0) w += totalLength;
+  let w = s;
+  if (totalLength > 0) {
+    w = ((s % totalLength) + totalLength) % totalLength;
+  }
 
   for (const spur of spurRanges) {
-    if (w >= spur.sStart - 1e-5 && w <= spur.sPeak + 1e-5) {
+    if (w > spur.sStart + 1e-4 && w < spur.sPeak - 1e-4) {
       const span = spur.sPeak - spur.sStart;
-      if (span <= 1e-6) return 0;
-      const t = Math.max(0, Math.min(1, (w - spur.sStart) / span));
+      const t = (w - spur.sStart) / span;
       return baseRadius * (1 - t);
     }
-    if (w > spur.sPeak - 1e-5 && w <= spur.sEnd + 1e-5) {
+    if (Math.abs(w - spur.sPeak) <= 1e-3) {
+      return 0;
+    }
+    if (w > spur.sPeak + 1e-4 && w < spur.sEnd - 1e-4) {
       const span = spur.sEnd - spur.sPeak;
-      if (span <= 1e-6) return baseRadius;
-      const t = Math.max(0, Math.min(1, (w - spur.sPeak) / span));
+      const t = (w - spur.sPeak) / span;
       return baseRadius * t;
     }
   }
