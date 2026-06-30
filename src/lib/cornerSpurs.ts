@@ -26,6 +26,9 @@ export interface CornerSpurRange {
   /** Exact bisector tip XY — used to prevent U-turn frame overshoot. */
   peakX: number;
   peakY: number;
+  /** Slot miter XY where spur leaves the main centerline. */
+  miterX: number;
+  miterY: number;
 }
 
 interface CornerSpurMarker {
@@ -157,7 +160,7 @@ function mapSpurMarkerToArcRange(
     return null;
   }
 
-  return { sStart, sPeak, sEnd, peakX: tip.x, peakY: tip.y };
+  return { sStart, sPeak, sEnd, peakX: tip.x, peakY: tip.y, miterX: miter.x, miterY: miter.y };
 }
 
 /**
@@ -365,6 +368,154 @@ export function mapSpurRangesToArcGuide(
   return { arcGuide, spurRanges };
 }
 
+function wrapGuideS(guideS: number, totalLength: number): number {
+  return ((guideS % totalLength) + totalLength) % totalLength;
+}
+
+function lerp2(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  t: number
+): { x: number; y: number } {
+  const u = Math.max(0, Math.min(1, t));
+  return { x: ax + (bx - ax) * u, y: ay + (by - ay) * u };
+}
+
+function projectOntoSegment(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number
+): { x: number; y: number; t: number; perpDist: number } {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq < 1e-12) {
+    const d = Math.hypot(px - ax, py - ay);
+    return { x: ax, y: ay, t: 0, perpDist: d };
+  }
+  const t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  const x = ax + dx * t;
+  const y = ay + dy * t;
+  return { x, y, t, perpDist: Math.hypot(px - x, py - y) };
+}
+
+/** Guard band before/after spur so full trochoid orbits do not bulge into the corner. */
+export function resolveSpurGuardBuffer(
+  baseTrochoidR: number,
+  forwardIncrement: number,
+  spurSpan: number
+): number {
+  const raw = Math.max(baseTrochoidR * 0.95, forwardIncrement * 0.85);
+  return Math.min(raw, Math.max(spurSpan * 0.45, baseTrochoidR * 0.35));
+}
+
+function isGuideSInExpandedSpurInterval(
+  w: number,
+  spur: CornerSpurRange,
+  buffer: number,
+  totalLength: number
+): boolean {
+  const lo = spur.sStart - buffer;
+  const hi = spur.sEnd + buffer;
+  if (lo >= 0 && hi < totalLength) {
+    return w >= lo - 1e-4 && w <= hi + 1e-4;
+  }
+  const loW = wrapGuideS(lo, totalLength);
+  const hiW = wrapGuideS(hi, totalLength);
+  if (loW <= hiW) return w >= loW - 1e-4 && w <= hiW + 1e-4;
+  return w >= loW - 1e-4 || w <= hiW + 1e-4;
+}
+
+/** Tool center on the bisector spur at this guide station (null if off spur). */
+export function spurCenterAtGuideS(
+  guideS: number,
+  totalLength: number,
+  spurRanges: CornerSpurRange[]
+): { x: number; y: number } | null {
+  if (spurRanges.length === 0 || totalLength <= 0) return null;
+
+  const w = wrapGuideS(guideS, totalLength);
+
+  for (const spur of spurRanges) {
+    const span = spur.sEnd - spur.sStart;
+    const halfBand = spurPeakHalfBand(span);
+
+    if (w < spur.sStart - 1e-4 || w > spur.sEnd + 1e-4) continue;
+
+    if (wrappedArcDistance(w, spur.sPeak, totalLength) <= halfBand) {
+      return { x: spur.peakX, y: spur.peakY };
+    }
+
+    if (w <= spur.sPeak + 1e-4) {
+      const leg = Math.max(spur.sPeak - spur.sStart - halfBand, 1e-6);
+      const t = Math.min(1, Math.max(0, (w - spur.sStart) / leg));
+      return lerp2(spur.miterX, spur.miterY, spur.peakX, spur.peakY, t);
+    }
+
+    const leg = Math.max(spur.sEnd - spur.sPeak - halfBand, 1e-6);
+    const t = Math.min(1, Math.max(0, (w - spur.sPeak - halfBand) / leg));
+    return lerp2(spur.peakX, spur.peakY, spur.miterX, spur.miterY, t);
+  }
+
+  return null;
+}
+
+/**
+ * Pull cut points back that extend past the spur tip — catches full-orbit bulge
+ * on the miter approach/departure regardless of stepover alignment.
+ */
+export function clampCutPointPastSpurTips(
+  x: number,
+  y: number,
+  spurRanges: CornerSpurRange[],
+  corridorDist: number
+): { x: number; y: number } {
+  let px = x;
+  let py = y;
+  const maxDist = Math.max(corridorDist, 0.05);
+
+  for (const spur of spurRanges) {
+    const outbound = projectOntoSegment(
+      px,
+      py,
+      spur.miterX,
+      spur.miterY,
+      spur.peakX,
+      spur.peakY
+    );
+    if (outbound.t > 1 + 1e-3 && outbound.perpDist <= maxDist * 1.75) {
+      px = spur.peakX;
+      py = spur.peakY;
+      continue;
+    }
+
+    const inbound = projectOntoSegment(
+      px,
+      py,
+      spur.peakX,
+      spur.peakY,
+      spur.miterX,
+      spur.miterY
+    );
+    if (inbound.t > 1 + 1e-3 && inbound.perpDist <= maxDist * 1.75) {
+      px = spur.peakX;
+      py = spur.peakY;
+    }
+  }
+
+  return { x: px, y: py };
+}
+
+function spurGuardBoundaries(spur: CornerSpurRange, buffer: number, totalLength: number): number[] {
+  const raw = [spur.sStart - buffer, spur.sStart, spur.sPeak, spur.sEnd, spur.sEnd + buffer];
+  return raw.map((s) => wrapGuideS(s, totalLength));
+}
+
 function spurPeakHalfBand(span: number): number {
   return Math.max(0.05, span * 0.15);
 }
@@ -442,18 +593,23 @@ export function buildGuideRadiusSampler(
   return (guideS) => trochoidRadiusAtGuideS(guideS, totalLength, baseRadius, spurRanges);
 }
 
-/** True when guide arc length falls anywhere on a corner spur (outbound, peak, or return). */
+/** True when guide arc length is inside the spur (optionally with approach/departure guard band). */
 export function isGuideSOnSpur(
   guideS: number,
   totalLength: number,
-  spurRanges: CornerSpurRange[]
+  spurRanges: CornerSpurRange[],
+  guardBuffer = 0
 ): boolean {
   if (spurRanges.length === 0 || totalLength <= 0) return false;
 
-  const w = ((guideS % totalLength) + totalLength) % totalLength;
+  const w = wrapGuideS(guideS, totalLength);
 
   for (const spur of spurRanges) {
-    if (w >= spur.sStart - 1e-4 && w <= spur.sEnd + 1e-4) return true;
+    if (guardBuffer > 1e-6) {
+      if (isGuideSInExpandedSpurInterval(w, spur, guardBuffer, totalLength)) return true;
+    } else if (w >= spur.sStart - 1e-4 && w <= spur.sEnd + 1e-4) {
+      return true;
+    }
   }
 
   return false;
@@ -501,7 +657,8 @@ export function clampArcEndToSpurBoundaries(
   startS: number,
   guideSign: number,
   loopLength: number,
-  spurRanges: CornerSpurRange[]
+  spurRanges: CornerSpurRange[],
+  guardBuffer = 0
 ): number {
   if (spurRanges.length === 0 || loopLength <= 0 || candidateEnd <= arcProgress + 1e-8) {
     return candidateEnd;
@@ -509,7 +666,7 @@ export function clampArcEndToSpurBoundaries(
 
   const guideSAt = (sAlong: number) => {
     const raw = guideSign >= 0 ? startS + sAlong : startS - sAlong;
-    return ((raw % loopLength) + loopLength) % loopLength;
+    return wrapGuideS(raw, loopLength);
   };
 
   const gs0 = guideSAt(arcProgress);
@@ -519,7 +676,12 @@ export function clampArcEndToSpurBoundaries(
   let nearestEnd = candidateEnd;
 
   for (const spur of spurRanges) {
-    for (const boundary of [spur.sStart, spur.sPeak, spur.sEnd]) {
+    const boundaries =
+      guardBuffer > 1e-6
+        ? spurGuardBoundaries(spur, guardBuffer, loopLength)
+        : [spur.sStart, spur.sPeak, spur.sEnd];
+
+    for (const boundary of boundaries) {
       if (!guideSBetweenOnPath(gs0, gsEnd, boundary, loopLength, forward)) continue;
 
       const hitAlong = arcProgress + guideSDeltaAlongPath(gs0, boundary, loopLength, forward);
@@ -540,7 +702,8 @@ export function clampOpenArcEndToSpurBoundaries(
   trochoidStartS: number,
   forward: boolean,
   loopLength: number,
-  spurRanges: CornerSpurRange[]
+  spurRanges: CornerSpurRange[],
+  guardBuffer = 0
 ): number {
   if (spurRanges.length === 0 || loopLength <= 0 || candidateEnd <= arcProgress + 1e-8) {
     return candidateEnd;
@@ -553,13 +716,18 @@ export function clampOpenArcEndToSpurBoundaries(
     return forward ? trochoidStartS + loopDelta : trochoidStartS - loopDelta;
   };
 
-  const gs0 = ((loopSAt(loopAlongStart) % loopLength) + loopLength) % loopLength;
-  const gsEnd = ((loopSAt(candidateEnd) % loopLength) + loopLength) % loopLength;
+  const gs0 = wrapGuideS(loopSAt(loopAlongStart), loopLength);
+  const gsEnd = wrapGuideS(loopSAt(candidateEnd), loopLength);
 
   let nearestEnd = candidateEnd;
 
   for (const spur of spurRanges) {
-    for (const boundary of [spur.sStart, spur.sPeak, spur.sEnd]) {
+    const boundaries =
+      guardBuffer > 1e-6
+        ? spurGuardBoundaries(spur, guardBuffer, loopLength)
+        : [spur.sStart, spur.sPeak, spur.sEnd];
+
+    for (const boundary of boundaries) {
       if (!guideSBetweenOnPath(gs0, gsEnd, boundary, loopLength, forward)) continue;
 
       const loopDelta = guideSDeltaAlongPath(gs0, boundary, loopLength, forward);
