@@ -15,11 +15,7 @@ import {
   mapSpurRangesToArcGuide,
   buildGuideRadiusSampler,
 } from './cornerSpurs';
-import {
-  resolveAdaptiveSlotGeometry,
-  cornerSpurOptionsForRoughing,
-  slotCenterOffsetForGuide,
-} from './adaptiveOutline';
+import { resolveAdaptiveSlotGeometry, cornerSpurOptionsForRoughing } from './adaptiveOutline';
 import {
   adaptiveEntryOverridesFromGeometry,
   resolveAdaptiveEntryLayout,
@@ -241,7 +237,7 @@ function generateAdaptiveTrochoidalPath(
   );
   const { guide: slotCenterGuide, spurMarkers } = buildSlotCenterGuideWithCornerSpurs(
     partLoop,
-    slotCenterOffsetForGuide(settings),
+    roughSlot.slotCenterOffset,
     finishSlot.innerCenterOffset,
     segLen,
     cornerSpurOptionsForRoughing(settings)
@@ -250,7 +246,7 @@ function generateAdaptiveTrochoidalPath(
     slotCenterGuide,
     spurMarkers,
     sampleSpacing,
-    { trochoidR: roughSlot.trochoidRadius, resolution: globals.resolution }
+    { trochoidR: roughSlot.trochoidRadius, resolution: globals.resolution, shortSpurTips: settings.finishingPass }
   );
   return generateFourZoneAdaptivePath(
     slotCenterGuide,
@@ -345,7 +341,7 @@ function generateFinishingOutline(
   const finishGuide = offsetLoop2DMinkowski(partLoop, finishSlot.innerCenterOffset, segLen);
   const { guide: roughCenterGuide } = buildSlotCenterGuideWithCornerSpurs(
     partLoop,
-    slotCenterOffsetForGuide(settings),
+    roughSlot.slotCenterOffset,
     finishSlot.innerCenterOffset,
     segLen,
     cornerSpurOptionsForRoughing(settings)

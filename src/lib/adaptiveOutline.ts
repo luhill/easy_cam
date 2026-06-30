@@ -41,15 +41,6 @@ export function cornerSpurOptionsForRoughing(settings: OperationDefaults): Corne
   return { roughTipInnerOffset: finish.innerCenterOffset + FINISHING_STOCK_ALLOWANCE };
 }
 
-/**
- * Slot centerline offset for spur/guide polylines during roughing.
- * Uses the rough slot center (includes finishing stock when enabled) so spur leg
- * lengths match the actual shifted centerline geometry.
- */
-export function slotCenterOffsetForGuide(settings: OperationDefaults, roughing = true): number {
-  return resolveAdaptiveSlotGeometry(settings, { roughing }).slotCenterOffset;
-}
-
 export function resolveAdaptiveSlotGeometry(
   settings: OperationDefaults,
   options: AdaptiveSlotOptions = {}

@@ -16,7 +16,6 @@ import {
   resolveAdaptiveEntryPoint,
   resolveAdaptiveSlotGeometry,
   cornerSpurOptionsForRoughing,
-  slotCenterOffsetForGuide,
 } from './adaptiveOutline';
 
 export interface AdaptiveEntryOverrides {
@@ -64,7 +63,7 @@ export function resolveAdaptiveEntryLayout(
   const finishSlot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
   const { guide: slotCenterGuide, spurMarkers } = buildSlotCenterGuideWithCornerSpurs(
     partLoop,
-    slotCenterOffsetForGuide(settings),
+    roughSlot.slotCenterOffset,
     finishSlot.innerCenterOffset,
     centerGuideSegLen,
     cornerSpurOptionsForRoughing(settings)
@@ -79,7 +78,7 @@ export function resolveAdaptiveEntryLayout(
     slotCenterGuide,
     spurMarkers,
     trochSampleSpacing,
-    { trochoidR: roughSlot.trochoidRadius, resolution }
+    { trochoidR: roughSlot.trochoidRadius, resolution, shortSpurTips: settings.finishingPass }
   );
   const guideTraverseSign = resolveGuideTraverseSign(slotCenterGuide, settings.climbMilling);
   const forward = guideTraverseSign >= 0;

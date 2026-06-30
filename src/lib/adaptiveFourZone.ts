@@ -16,11 +16,11 @@ import {
   spurPeakHoldAtGuideS,
   spurFrameFromLinear,
   spurLinearParams,
-  spurLinearParamsFromGeometry,
   resolveSpurLinearState,
   spurOrbitRadius,
   clampCutPointToSpur,
   clampCutPointPastSpurTips,
+  clampCutInwardOfSpurPeak,
   clampArcEndToSpurBoundaries,
   clampOpenArcEndToSpurBoundaries,
   resolveSpurGuardBuffer,
@@ -361,7 +361,7 @@ function generateTrochoidAlongGuide(
       spurLoopS !== null && spurRanges.length > 0
         ? spurLinearParams(spurLoopS, loopLength, spurRanges)
         : null;
-    let spurState =
+    const spurState =
       arcSpur !== null
         ? resolveSpurLinearState(
             spurLoopS!,
@@ -372,18 +372,6 @@ function generateTrochoidAlongGuide(
             baseTrochoidR * 1.25
           ) ?? arcSpur
         : null;
-    if (
-      spurState === null &&
-      spurRanges.length > 0 &&
-      (!openSpurSnap || sSample >= openSpurSnap.splineLen - 1e-5)
-    ) {
-      spurState = spurLinearParamsFromGeometry(
-        sampled.x,
-        sampled.y,
-        spurRanges,
-        baseTrochoidR * 1.1
-      );
-    }
 
     const spurFrame = spurState
       ? spurFrameFromLinear(spurState, sampled.z)
@@ -431,6 +419,14 @@ function generateTrochoidAlongGuide(
         [spurState.spur],
         baseTrochoidR
       );
+      if (partLoop) {
+        clamped = clampCutInwardOfSpurPeak(
+          clamped.x,
+          clamped.y,
+          spurState.spur,
+          partLoop
+        );
+      }
       pt = { ...pt, x: clamped.x, y: clamped.y };
     }
     if (
