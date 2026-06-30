@@ -34,6 +34,9 @@ export interface AdaptiveSlotOptions {
 /**
  * Corner spur options when roughing with finishing pass enabled.
  * Spur tips stop at the rough inner miter (stock allowance), not the finish outline.
+ *
+ * Finishing pass adds FINISHING_STOCK_ALLOWANCE to radialOffset only — slot width is
+ * unchanged; the whole slot (inner wall, centerline, outer wall) shifts outward from the part.
  */
 export function cornerSpurOptionsForRoughing(settings: OperationDefaults): CornerSpurOptions {
   if (!settings.finishingPass) return {};

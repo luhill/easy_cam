@@ -8,13 +8,11 @@ import {
   offsetVertexMiter,
   signedLoopArea2D,
   outwardEdgeNormal2D,
-  closestPointOnLoop2D,
 } from './geometryProcessing';
 import {
   buildArcLengthGuide,
   findClosestSOnGuide,
   advanceGuideArcLength,
-  sampleGuideAtS,
   type ArcLengthGuide,
 } from './trochoidalPath';
 import { SPUR_ARC_MAP_SPACING } from './toolpathConfig';
@@ -32,6 +30,10 @@ export interface CornerSpurRange {
   /** Slot miter XY where spur leaves the main centerline. */
   miterX: number;
   miterY: number;
+  /** Bisector leg length miter → peak (mm). */
+  outboundLen: number;
+  /** Bisector leg length peak → miter (mm). */
+  inboundLen: number;
 }
 
 interface CornerSpurMarker {
@@ -108,154 +110,50 @@ function vertexInternalAngleDeg(prev: LoopPoint, curr: LoopPoint, next: LoopPoin
   return (Math.acos(Math.max(-1, Math.min(1, dot))) * 180) / Math.PI;
 }
 
-/** Cumulative polyline length at vertex index (build order, open). */
-function cumulativeLengthAtIndex(polyline: LoopPoint[], idx: number): number {
-  const end = Math.min(Math.max(idx, 0), polyline.length - 1);
-  let s = 0;
-  for (let i = 1; i <= end; i++) {
-    s += Math.hypot(polyline[i].x - polyline[i - 1].x, polyline[i].y - polyline[i - 1].y);
-  }
-  return s;
-}
-
-function pointAtBuildDistance(polyline: LoopPoint[], dist: number): LoopPoint {
-  if (polyline.length === 0) return { x: 0, y: 0, z: 0 };
-  if (dist <= 0) return polyline[0];
-
-  let acc = 0;
-  for (let i = 1; i < polyline.length; i++) {
-    const seg = Math.hypot(polyline[i].x - polyline[i - 1].x, polyline[i].y - polyline[i - 1].y);
-    if (acc + seg >= dist - 1e-9) {
-      const t = seg > 1e-9 ? Math.max(0, Math.min(1, (dist - acc) / seg)) : 0;
-      return {
-        x: polyline[i - 1].x + t * (polyline[i].x - polyline[i - 1].x),
-        y: polyline[i - 1].y + t * (polyline[i].y - polyline[i - 1].y),
-        z: polyline[i - 1].z + t * (polyline[i].z - polyline[i - 1].z),
-      };
-    }
-    acc += seg;
-  }
-  return polyline[polyline.length - 1];
-}
-
-function findArcSAfter(
-  arcGuide: ArcLengthGuide,
-  point: { x: number; y: number },
-  afterS: number,
-  sampleStep: number
-): number {
-  const total = arcGuide.totalLength;
-  if (total <= 0) return afterS;
-
-  const tol = Math.max(sampleStep * 2, 0.2);
-  let bestS = afterS;
-  let bestDist = Infinity;
-
-  const scan = (from: number, to: number) => {
-    for (let s = from; s <= to + 1e-6; s += sampleStep) {
-      const f = sampleGuideAtS(arcGuide, s);
-      const d = Math.hypot(f.x - point.x, f.y - point.y);
-      if (d <= tol && s > afterS + 1e-4 && d < bestDist) {
-        bestDist = d;
-        bestS = s;
-      }
-    }
+function spurLegLengths(
+  miter: { x: number; y: number },
+  tip: { x: number; y: number },
+  miterReturn: { x: number; y: number }
+): { outboundLen: number; inboundLen: number } {
+  return {
+    outboundLen: Math.hypot(tip.x - miter.x, tip.y - miter.y),
+    inboundLen: Math.hypot(miterReturn.x - tip.x, miterReturn.y - tip.y),
   };
-
-  scan(afterS + sampleStep, total);
-  if (bestDist === Infinity) {
-    scan(0, afterS);
-  }
-  if (bestDist === Infinity) {
-    return findClosestSOnGuide(arcGuide, point, sampleStep).s;
-  }
-  return bestS;
-}
-
-/** Default arc mapping — proven path when finishing pass is off. */
-function mapSpurMarkerToArcRangeStandard(
-  arcGuide: ArcLengthGuide,
-  polyline: LoopPoint[],
-  marker: CornerSpurMarker,
-  sampleSpacing: number
-): CornerSpurRange | null {
-  const step = Math.max(Math.min(sampleSpacing, 0.25), 0.08);
-  const miter = polyline[marker.miterIdx];
-  const tip = polyline[marker.peakIdx];
-  const miterReturn = polyline[marker.returnIdx];
-
-  const sStart = findClosestSOnGuide(arcGuide, miter, step).s;
-  const sPeak = findClosestSOnGuide(arcGuide, tip, step).s;
-
-  let sEnd = findArcSAfter(arcGuide, miterReturn, sPeak, step);
-  if (sEnd <= sPeak + 1e-4) {
-    sEnd = findArcSAfter(arcGuide, miterReturn, sPeak, step / 2);
-  }
-
-  if (sPeak <= sStart + 1e-4 || sEnd <= sPeak + 1e-4) {
-    return null;
-  }
-
-  return { sStart, sPeak, sEnd, peakX: tip.x, peakY: tip.y, miterX: miter.x, miterY: miter.y };
-}
-
-/** Finishing pass: short outbound legs collapse on coarse arc samples — use geometric fallback. */
-function mapSpurMarkerToArcRangeShortTip(
-  arcGuide: ArcLengthGuide,
-  polyline: LoopPoint[],
-  marker: CornerSpurMarker,
-  sampleSpacing: number
-): CornerSpurRange | null {
-  const miter = polyline[marker.miterIdx];
-  const tip = polyline[marker.peakIdx];
-  const miterReturn = polyline[marker.returnIdx];
-
-  const outboundLen = Math.hypot(tip.x - miter.x, tip.y - miter.y);
-  const inboundLen = Math.hypot(miterReturn.x - tip.x, miterReturn.y - tip.y);
-  if (outboundLen < 1e-6) return null;
-
-  const step = Math.min(
-    Math.max(Math.min(sampleSpacing, 0.25), 0.08),
-    Math.max(outboundLen / 8, 0.008)
-  );
-
-  const buildBefore =
-    marker.miterIdx > 0 ? cumulativeLengthAtIndex(polyline, marker.miterIdx - 1) : 0;
-  const beforePt = pointAtBuildDistance(polyline, buildBefore);
-  const sBefore = findClosestSOnGuide(arcGuide, beforePt, step).s;
-  const sStart = findArcSAfter(arcGuide, miter, sBefore, step);
-
-  let sPeak = findClosestSOnGuide(arcGuide, tip, step).s;
-  if (sPeak <= sStart + 1e-4) {
-    sPeak = advanceGuideArcLength(arcGuide, sStart, outboundLen, true);
-  }
-
-  let sEnd = findArcSAfter(arcGuide, miterReturn, sPeak, step);
-  if (sEnd <= sPeak + 1e-4) {
-    sEnd = findArcSAfter(arcGuide, miterReturn, sPeak, step / 2);
-  }
-  if (sEnd <= sPeak + 1e-4) {
-    sEnd = advanceGuideArcLength(arcGuide, sPeak, Math.max(inboundLen, step * 2), true);
-  }
-
-  if (sPeak <= sStart + 1e-4 || sEnd <= sPeak + 1e-4) {
-    return null;
-  }
-
-  return { sStart, sPeak, sEnd, peakX: tip.x, peakY: tip.y, miterX: miter.x, miterY: miter.y };
 }
 
 function mapSpurMarkerToArcRange(
   arcGuide: ArcLengthGuide,
   polyline: LoopPoint[],
   marker: CornerSpurMarker,
-  sampleSpacing: number,
-  shortSpurTips: boolean
+  _sampleSpacing: number
 ): CornerSpurRange | null {
-  if (shortSpurTips) {
-    return mapSpurMarkerToArcRangeShortTip(arcGuide, polyline, marker, sampleSpacing);
+  const miter = polyline[marker.miterIdx];
+  const tip = polyline[marker.peakIdx];
+  const miterReturn = polyline[marker.returnIdx];
+
+  const { outboundLen, inboundLen } = spurLegLengths(miter, tip, miterReturn);
+  if (outboundLen < 1e-6) return null;
+
+  const step = SPUR_ARC_MAP_SPACING;
+  const sStart = findClosestSOnGuide(arcGuide, miter, step).s;
+  const sPeak = advanceGuideArcLength(arcGuide, sStart, outboundLen, true);
+  const sEnd = advanceGuideArcLength(arcGuide, sPeak, inboundLen, true);
+
+  if (sPeak <= sStart + 1e-4 || sEnd <= sPeak + 1e-4) {
+    return null;
   }
-  return mapSpurMarkerToArcRangeStandard(arcGuide, polyline, marker, sampleSpacing);
+
+  return {
+    sStart,
+    sPeak,
+    sEnd,
+    peakX: tip.x,
+    peakY: tip.y,
+    miterX: miter.x,
+    miterY: miter.y,
+    outboundLen,
+    inboundLen,
+  };
 }
 
 /**
@@ -440,10 +338,9 @@ export function mapSpurRangesToArcGuide(
   polyline: LoopPoint[],
   spurMarkers: CornerSpurMarker[],
   _sampleSpacing: number,
-  mapOptions?: { trochoidR?: number; resolution?: number; shortSpurTips?: boolean }
+  _mapOptions?: { trochoidR?: number; resolution?: number }
 ): { arcGuide: ArcLengthGuide; spurRanges: CornerSpurRange[] } {
   const mapStep = SPUR_ARC_MAP_SPACING;
-  const shortSpurTips = mapOptions?.shortSpurTips ?? false;
 
   const arcGuide = buildArcLengthGuide(polyline, mapStep);
   if (arcGuide.totalLength <= 0 || spurMarkers.length === 0) {
@@ -452,7 +349,7 @@ export function mapSpurRangesToArcGuide(
 
   const spurRanges: CornerSpurRange[] = [];
   for (const marker of spurMarkers) {
-    const mapped = mapSpurMarkerToArcRange(arcGuide, polyline, marker, mapStep, shortSpurTips);
+    const mapped = mapSpurMarkerToArcRange(arcGuide, polyline, marker, mapStep);
     if (mapped) spurRanges.push(mapped);
   }
 
@@ -545,7 +442,13 @@ function isGuideSInExpandedSpurInterval(
   return w >= loW - 1e-4 || w <= hiW + 1e-4;
 }
 
-/** Linear progress along a spur: outbound miter→peak or inbound peak→miter. */
+function arcDistForward(fromS: number, toS: number, totalLength: number): number {
+  let d = toS - fromS;
+  if (d < -1e-6) d += totalLength;
+  return Math.max(0, d);
+}
+
+/** Linear progress along a spur: u is distance along the bisector leg / leg length. */
 export function spurLinearParams(
   guideS: number,
   totalLength: number,
@@ -559,28 +462,29 @@ export function spurLinearParams(
     if (w < spur.sStart - 1e-4 || w > spur.sEnd + 1e-4) continue;
 
     if (w <= spur.sPeak + 1e-4) {
-      const span = spur.sPeak - spur.sStart;
-      const u = span > 1e-6 ? Math.min(1, Math.max(0, (w - spur.sStart) / span)) : 1;
+      const traveled = arcDistForward(spur.sStart, w, totalLength);
+      const u =
+        spur.outboundLen > 1e-6
+          ? Math.min(1, Math.max(0, traveled / spur.outboundLen))
+          : 1;
       return { spur, u, leg: 'out' };
     }
 
-    const span = spur.sEnd - spur.sPeak;
-    const u = span > 1e-6 ? Math.min(1, Math.max(0, (w - spur.sPeak) / span)) : 1;
+    const traveled = arcDistForward(spur.sPeak, w, totalLength);
+    const u =
+      spur.inboundLen > 1e-6 ? Math.min(1, Math.max(0, traveled / spur.inboundLen)) : 1;
     return { spur, u, leg: 'in' };
   }
 
   return null;
 }
 
-/** Trochoid orbit radius on spurs: linear ramp capped so the orbit cannot extend past the peak. */
+/** Trochoid orbit radius on spurs: linear ramp to 0 at the bisector tip. */
 export function spurOrbitRadius(
   linear: { spur: CornerSpurRange; u: number; leg: 'out' | 'in' },
   baseRadius: number
 ): number {
-  const legLen = Math.hypot(
-    linear.spur.peakX - linear.spur.miterX,
-    linear.spur.peakY - linear.spur.miterY
-  );
+  const legLen = linear.leg === 'out' ? linear.spur.outboundLen : linear.spur.inboundLen;
   if (legLen <= 1e-9) return 0;
 
   const linearR =
@@ -667,7 +571,7 @@ export function spurFrameFromLinear(
   };
 }
 
-/** Arc-length gates spur mode; XY projection only refines u on the active spur leg. */
+/** Arc-length gates spur mode; bisector projection sets precise u along the spur line. */
 export function resolveSpurLinearState(
   guideS: number,
   x: number,
@@ -709,25 +613,6 @@ export function clampCutPointToSpur(
   }
   if (proj.t < -1e-4) {
     return { x: spur.miterX, y: spur.miterY };
-  }
-  return { x, y };
-}
-
-/** Prevent tool center from cutting inside the rough spur tip standoff from the part. */
-export function clampCutInwardOfSpurPeak(
-  x: number,
-  y: number,
-  spur: CornerSpurRange,
-  partLoop: LoopPoint[]
-): { x: number; y: number } {
-  const peakAtPart = closestPointOnLoop2D(spur.peakX, spur.peakY, partLoop);
-  const peakStandoff = peakAtPart.dist;
-  const ptAtPart = closestPointOnLoop2D(x, y, partLoop);
-  if (ptAtPart.dist + 1e-3 < peakStandoff) {
-    return {
-      x: ptAtPart.x + ptAtPart.outX * peakStandoff,
-      y: ptAtPart.y + ptAtPart.outY * peakStandoff,
-    };
   }
   return { x, y };
 }
