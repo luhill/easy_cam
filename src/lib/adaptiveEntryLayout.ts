@@ -78,7 +78,7 @@ export function resolveAdaptiveEntryLayout(
     slotCenterGuide,
     spurMarkers,
     trochSampleSpacing,
-    { trochoidR: roughSlot.trochoidRadius, resolution, shortSpurTips: settings.finishingPass }
+    { trochoidR: roughSlot.trochoidRadius, resolution }
   );
   const guideTraverseSign = resolveGuideTraverseSign(slotCenterGuide, settings.climbMilling);
   const forward = guideTraverseSign >= 0;

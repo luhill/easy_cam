@@ -15,8 +15,7 @@ import {
   trochoidRadiusAtGuideS,
   spurPeakHoldAtGuideS,
   spurFrameFromLinear,
-  spurLinearParams,
-  resolveSpurLinearState,
+  resolveSpurStateAtGuideSample,
   spurOrbitRadius,
   clampCutPointToSpur,
   clampCutPointPastSpurTips,
@@ -357,20 +356,16 @@ function generateTrochoidAlongGuide(
     const { z, rapid } = orbitZProfile(phase, zCut, liftAmount);
 
     const spurLoopS = loopSpurGuideS(sSample, loopLength, openSpurSnap);
-    const arcSpur =
-      spurLoopS !== null && spurRanges.length > 0
-        ? spurLinearParams(spurLoopS, loopLength, spurRanges)
-        : null;
     const spurState =
-      arcSpur !== null
-        ? resolveSpurLinearState(
-            spurLoopS!,
+      spurRanges.length > 0
+        ? resolveSpurStateAtGuideSample(
+            spurLoopS,
             sampled.x,
             sampled.y,
             loopLength,
             spurRanges,
             baseTrochoidR * 1.25
-          ) ?? arcSpur
+          )
         : null;
 
     const spurFrame = spurState
