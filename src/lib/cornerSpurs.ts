@@ -56,6 +56,18 @@ export interface CornerSpurOptions {
   roughTipInnerOffset?: number;
 }
 
+function pointsNear(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  eps = 1e-4
+): boolean {
+  return Math.hypot(a.x - b.x, a.y - b.y) <= eps;
+}
+
+function lastGuidePoint(guide: LoopPoint[]): LoopPoint | null {
+  return guide.length > 0 ? guide[guide.length - 1] : null;
+}
+
 function appendDensifiedSegment(
   result: LoopPoint[],
   ax: number,
@@ -149,24 +161,21 @@ function mapSpurMarkerToArcRange(
   const inboundLen = Math.hypot(miterReturn.x - tip.x, miterReturn.y - tip.y);
   if (outboundLen < 1e-6) return null;
 
-  const fineStep = Math.min(0.015, Math.max(outboundLen / 12, 0.002));
+  const arcStep = 0.05;
 
   const buildStart = cumulativeLengthAtIndex(polyline, marker.miterIdx);
   const buildPeak = cumulativeLengthAtIndex(polyline, marker.peakIdx);
   const buildEnd = cumulativeLengthAtIndex(polyline, marker.returnIdx);
 
-  let sStart = buildOrderDistanceToArcS(arcGuide, polyline, buildStart, fineStep);
-  let sPeak = buildOrderDistanceToArcS(arcGuide, polyline, buildPeak, fineStep);
-  let sEnd = buildOrderDistanceToArcS(arcGuide, polyline, buildEnd, fineStep);
+  let sStart = buildOrderDistanceToArcS(arcGuide, polyline, buildStart, arcStep);
+  let sPeak = buildOrderDistanceToArcS(arcGuide, polyline, buildPeak, arcStep);
+  let sEnd = buildOrderDistanceToArcS(arcGuide, polyline, buildEnd, arcStep);
 
-  const minOutboundArc = Math.max(outboundLen * 0.45, fineStep * 2);
   if (sPeak <= sStart + 1e-4) {
-    sPeak = advanceGuideArcLength(arcGuide, sStart, minOutboundArc, true);
+    sPeak = advanceGuideArcLength(arcGuide, sStart, outboundLen, true);
   }
-
-  const minInboundArc = Math.max(inboundLen * 0.45, fineStep * 2);
   if (sEnd <= sPeak + 1e-4) {
-    sEnd = advanceGuideArcLength(arcGuide, sPeak, minInboundArc, true);
+    sEnd = advanceGuideArcLength(arcGuide, sPeak, Math.max(inboundLen, arcStep * 2), true);
   }
 
   if (sEnd <= sPeak + 1e-4 || sPeak <= sStart + 1e-4) {
@@ -292,23 +301,28 @@ export function buildSlotCenterGuideWithCornerSpurs(
         });
       }
     } else {
-      const miterIdx = result.length;
-      result.push({
-        x: join.endX,
-        y: join.endY,
-        z: join.curr.z,
-      });
+      const miterPt = { x: join.endX, y: join.endY, z: join.curr.z };
+      const tail = lastGuidePoint(result);
+      let miterIdx: number;
+      if (!tail || !pointsNear(tail, miterPt)) {
+        miterIdx = result.length;
+        result.push({ ...miterPt });
+      } else {
+        miterIdx = result.length - 1;
+      }
 
       if (join.spurTip) {
+        const outboundLen = Math.hypot(join.spurTip.x - miterPt.x, join.spurTip.y - miterPt.y);
+        const spurSegLen = Math.min(segLen, Math.max(outboundLen / 4, 0.05));
         appendDensifiedSegment(
           result,
-          join.endX,
-          join.endY,
-          join.curr.z,
+          miterPt.x,
+          miterPt.y,
+          miterPt.z,
           join.spurTip.x,
           join.spurTip.y,
           join.spurTip.z,
-          segLen,
+          spurSegLen,
           true
         );
         const peakIdx = result.length - 1;
@@ -317,10 +331,10 @@ export function buildSlotCenterGuideWithCornerSpurs(
           join.spurTip.x,
           join.spurTip.y,
           join.spurTip.z,
-          join.endX,
-          join.endY,
-          join.curr.z,
-          segLen,
+          miterPt.x,
+          miterPt.y,
+          miterPt.z,
+          spurSegLen,
           true
         );
         const returnIdx = result.length - 1;
@@ -328,16 +342,20 @@ export function buildSlotCenterGuideWithCornerSpurs(
       }
     }
 
+    const depart = lastGuidePoint(result);
+    const fromX = depart?.x ?? join.endX;
+    const fromY = depart?.y ?? join.endY;
+    const fromZ = depart?.z ?? join.curr.z;
     appendDensifiedSegment(
       result,
-      join.endX,
-      join.endY,
-      join.curr.z,
+      fromX,
+      fromY,
+      fromZ,
       nextJoin.startX,
       nextJoin.startY,
       nextJoin.curr.z,
       segLen,
-      true
+      depart !== null && pointsNear(depart, { x: nextJoin.startX, y: nextJoin.startY })
     );
   }
 
@@ -353,7 +371,7 @@ export function mapSpurRangesToArcGuide(
 ): { arcGuide: ArcLengthGuide; spurRanges: CornerSpurRange[] } {
   const mapStep = SPUR_ARC_MAP_SPACING;
 
-  const arcGuide = buildArcLengthGuide(polyline, mapStep, { preserveShortFeatures: true });
+  const arcGuide = buildArcLengthGuide(polyline, mapStep);
   if (arcGuide.totalLength <= 0 || spurMarkers.length === 0) {
     return { arcGuide, spurRanges: [] };
   }
@@ -427,13 +445,13 @@ function projectOntoSegment(
   return { x, y, t, perpDist: Math.hypot(px - x, py - y) };
 }
 
-/** Guard band before/after spur so full trochoid orbits do not bulge into the corner. */
+/** Guard band before/after spur — keep small to avoid flattening approach cycles. */
 export function resolveSpurGuardBuffer(
-  baseTrochoidR: number,
-  forwardIncrement: number,
+  _baseTrochoidR: number,
+  _forwardIncrement: number,
   _spurSpan: number
 ): number {
-  return Math.min(baseTrochoidR * 0.85, Math.max(forwardIncrement * 0.35, 0.04));
+  return 0;
 }
 
 function isGuideSInExpandedSpurInterval(
@@ -598,64 +616,6 @@ export function resolveSpurLinearState(
   }
 
   return arcState;
-}
-
-/**
- * Bisector projection fallback when arc-length spur range is missing or collapsed
- * (common for short rough spurs on shallow corners with finishing pass).
- * Only use on the slot loop — not for entry spline lead-in.
- */
-export function spurLinearParamsFromGeometry(
-  x: number,
-  y: number,
-  spurRanges: CornerSpurRange[],
-  maxPerpDist: number
-): { spur: CornerSpurRange; u: number; leg: 'out' | 'in' } | null {
-  let best: { spur: CornerSpurRange; u: number; leg: 'out' | 'in'; perp: number } | null =
-    null;
-
-  for (const spur of spurRanges) {
-    const out = projectOntoSegment(
-      x,
-      y,
-      spur.miterX,
-      spur.miterY,
-      spur.peakX,
-      spur.peakY
-    );
-    if (out.perpDist <= maxPerpDist && out.t >= -0.02 && out.t <= 1.02) {
-      if (!best || out.perpDist < best.perp) {
-        best = {
-          spur,
-          u: Math.min(1, Math.max(0, out.t)),
-          leg: 'out',
-          perp: out.perpDist,
-        };
-      }
-    }
-
-    const inbound = projectOntoSegment(
-      x,
-      y,
-      spur.peakX,
-      spur.peakY,
-      spur.miterX,
-      spur.miterY
-    );
-    if (inbound.perpDist <= maxPerpDist && inbound.t >= -0.02 && inbound.t <= 1.02) {
-      if (!best || inbound.perpDist < best.perp) {
-        best = {
-          spur,
-          u: Math.min(1, Math.max(0, inbound.t)),
-          leg: 'in',
-          perp: inbound.perpDist,
-        };
-      }
-    }
-  }
-
-  if (!best) return null;
-  return { spur: best.spur, u: best.u, leg: best.leg };
 }
 
 /** Clamp a cut point so it cannot extend past the spur tip along the bisector. */
