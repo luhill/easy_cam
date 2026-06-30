@@ -696,6 +696,51 @@ function filletEntryToSlotCenterline(
 }
 
 /**
+ * Hermite spline from the bore start to the slot join, tangent to the outline
+ * traverse direction (climb / conventional) at the join.
+ */
+export function buildSplineEntryGuide(
+  toolStart: { x: number; y: number },
+  slotJoin: { x: number; y: number },
+  exitTangent: { x: number; y: number },
+  sampleSpacing: number,
+  z: number
+): LoopPoint[] {
+  const dx = slotJoin.x - toolStart.x;
+  const dy = slotJoin.y - toolStart.y;
+  const chord = Math.hypot(dx, dy);
+  if (chord <= sampleSpacing * 0.25) {
+    return [{ x: slotJoin.x, y: slotJoin.y, z }];
+  }
+
+  const handle = Math.max(chord * 0.42, sampleSpacing * 2);
+  const t0 = { x: (dx / chord) * handle, y: (dy / chord) * handle };
+  const tLen = Math.hypot(exitTangent.x, exitTangent.y) || 1;
+  const t1 = {
+    x: (exitTangent.x / tLen) * handle,
+    y: (exitTangent.y / tLen) * handle,
+  };
+
+  const steps = Math.max(8, Math.ceil(chord / sampleSpacing));
+  const points: LoopPoint[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const u = i / steps;
+    const u2 = u * u;
+    const u3 = u2 * u;
+    const h00 = 2 * u3 - 3 * u2 + 1;
+    const h10 = u3 - 2 * u2 + u;
+    const h01 = -2 * u3 + 3 * u2;
+    const h11 = u3 - u2;
+    points.push({
+      x: h00 * toolStart.x + h10 * t0.x + h01 * slotJoin.x + h11 * t1.x,
+      y: h00 * toolStart.y + h10 * t0.y + h01 * slotJoin.y + h11 * t1.y,
+      z,
+    });
+  }
+  return points;
+}
+
+/**
  * Lead-in centerline from the bore center to the outline join station on the
  * slot center guide, with an optional fillet onto the guide.
  */

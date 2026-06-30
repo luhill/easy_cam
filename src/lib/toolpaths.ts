@@ -10,7 +10,11 @@ import {
 } from './geometryProcessing';
 import { OPERATION_COLORS, getSelectedHoles } from '../types/operations';
 import { clampOperationSettings } from './settingLimits';
-import { resolveAdaptiveEntryPoint, resolveAdaptiveSlotGeometry } from './adaptiveOutline';
+import { resolveAdaptiveSlotGeometry } from './adaptiveOutline';
+import {
+  adaptiveEntryOverridesFromGeometry,
+  resolveAdaptiveEntryLayout,
+} from './adaptiveEntryLayout';
 import {
   generateFourZoneAdaptivePath,
   generateOpenTrochoidPath,
@@ -19,7 +23,7 @@ import {
   wrapPathFromIndex,
 } from './adaptiveFourZone';
 import {
-  buildBoreLeadInGuide,
+  buildSplineEntryGuide,
   adjustBoreRadiusToSlotWidth,
   closestPointIndexOnPath,
   generateBoreBottomToLeadInTransition,
@@ -32,7 +36,6 @@ import {
 import {
   adaptiveForwardIncrement,
   buildArcLengthGuide,
-  findClosestSOnGuide,
   sampleGuideAtS,
 } from './trochoidalPath';
 import {
@@ -46,7 +49,6 @@ import {
   contourSteps,
   helixSegmentsPerRev,
   minkowskiSegmentLen,
-  pathSampleSpacing,
   safeHeightWorldZ,
   trochoidSampleSpacing,
   type ToolpathGlobalOptions,
@@ -377,36 +379,41 @@ function generateAdaptiveOutlinePath(
   const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
   const finalZ = finalCutWorldZ(ctx, settings.depthOffset);
 
-  const entry = resolveAdaptiveEntryPoint(loop, settings, geometry?.entryPoint);
-  const points: ToolpathPoint[] = [];
-  const helixFeed = settings.helixFeedRate;
   const roughSlot = resolveAdaptiveSlotGeometry(settings, { roughing: true });
   const segLen = minkowskiSegmentLen(globals.resolution);
-  const slotCenterGuide = offsetLoop2DMinkowski(loop, roughSlot.slotCenterOffset, segLen);
   const trochSampleSpacing = trochoidSampleSpacing(
     roughSlot.forwardIncrement,
     roughSlot.trochoidRadius,
     globals.resolution
   );
-  const arcGuide = buildArcLengthGuide(
-    slotCenterGuide,
-    pathSampleSpacing(globals.resolution)
+
+  const entryLayout = resolveAdaptiveEntryLayout(
+    loop,
+    settings,
+    adaptiveEntryOverridesFromGeometry(geometry),
+    segLen,
+    trochSampleSpacing
   );
-  const trochArcGuide = buildArcLengthGuide(slotCenterGuide, trochSampleSpacing);
-  const join = findClosestSOnGuide(arcGuide, entry);
-  const joinPt = sampleGuideAtS(arcGuide, join.s);
-  const trochoidStartS = findClosestSOnGuide(trochArcGuide, joinPt).s;
+  if (!entryLayout) {
+    return generateOutlinePath(op, ctx, globals);
+  }
+
+  const toolStart = entryLayout.toolStart;
+  const trochoidStartS = entryLayout.trochoidStartS;
+  const slotCenterGuide = entryLayout.slotCenterGuide;
+  const trochArcGuide = entryLayout.trochArcGuide;
   const slotHelixR = resolveSlotHelixRadius(roughSlot.slotClearance);
   const helixOpts = { stockTopZ: topZ, globals };
-  const guideTraverseSign = resolveGuideTraverseSign(slotCenterGuide, settings.climbMilling);
+  const helixFeed = settings.helixFeedRate;
   const outwardCCW = isGuideOutwardCCW(loop);
+  const points: ToolpathPoint[] = [];
 
-  points.push({ x: entry.x, y: entry.y, z: safeZ, rapid: true });
+  points.push({ x: toolStart.x, y: toolStart.y, z: safeZ, rapid: true });
 
   const helixTarget = layers.length > 0 ? layers[0] : finalZ;
   let boreHelixAngle = 0;
 
-  const initialBore = generateHelixBorePoints(entry, settings, safeZ, helixTarget, {
+  const initialBore = generateHelixBorePoints(toolStart, settings, safeZ, helixTarget, {
     ...helixOpts,
     taper: true,
     startAngle: boreHelixAngle,
@@ -430,7 +437,7 @@ function generateAdaptiveOutlinePath(
         break;
       }
     } else if (Math.abs(layerZ - helixTarget) > 1e-4) {
-      const layerBore = generateHelixBorePoints(entry, settings, helixTarget, layerZ, {
+      const layerBore = generateHelixBorePoints(toolStart, settings, helixTarget, layerZ, {
         ...helixOpts,
         taper: true,
         startAngle: boreHelixAngle,
@@ -459,14 +466,12 @@ function generateAdaptiveOutlinePath(
         helixFeed
       );
 
-      const leadInGuide = buildBoreLeadInGuide(
-        entry,
-        trochArcGuide,
-        trochoidStartS,
-        guideTraverseSign,
+      const leadInGuide = buildSplineEntryGuide(
+        toolStart,
+        entryLayout.slotJoin,
+        entryLayout.traverseTangent,
         trochSampleSpacing,
-        layerZ,
-        roughSlot.slotWidth / 2
+        layerZ
       );
 
       const leadInTroch = generateOpenTrochoidPath(
@@ -478,13 +483,16 @@ function generateAdaptiveOutlinePath(
       if (leadInTroch.length > 0) {
         const boreBottom = lastPathPoint(points);
         if (boreBottom) {
-          const boreStartAngle = Math.atan2(boreBottom.y - entry.y, boreBottom.x - entry.x);
+          const boreStartAngle = Math.atan2(
+            boreBottom.y - toolStart.y,
+            boreBottom.x - toolStart.x
+          );
 
           if (
             !appendPoints(
               points,
               adjustBoreRadiusToSlotWidth(
-                entry,
+                toolStart,
                 bottomHelixR,
                 slotHelixR,
                 layerZ,
@@ -505,7 +513,7 @@ function generateAdaptiveOutlinePath(
             !appendPoints(
               points,
               generateBoreBottomToLeadInTransition(
-                entry,
+                toolStart,
                 afterRadius,
                 firstLeadIn,
                 layerZ,

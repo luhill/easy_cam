@@ -3,7 +3,13 @@ import {
   getSelectionStrategy,
   getSelectedHoles,
 } from '../../types/operations';
-import { resolveAdaptiveEntryPoint } from '../../lib/adaptiveOutline';
+import {
+  adaptiveEntryOverridesFromGeometry,
+  resolveAdaptiveEntryLayout,
+} from '../../lib/adaptiveGuides';
+import { minkowskiSegmentLen, trochoidSampleSpacing } from '../../lib/toolpathConfig';
+import { resolveAdaptiveSlotGeometry } from '../../lib/adaptiveOutline';
+import { useSettingsStore } from '../../store/useSettingsStore';
 import { useAppStore } from '../../store/useAppStore';
 
 interface OperationGeometrySectionProps {
@@ -27,11 +33,24 @@ function formatGeometrySummary(operation: Operation): string {
     if (!hasOutline) return 'None selected';
     const parts: string[] = ['outline'];
     const loop = geo.loops![0];
-    const entry = resolveAdaptiveEntryPoint(loop, operation.settings, geo.entryPoint);
-    if (geo.entryPoint) {
-      parts.push(`entry (${entry.x.toFixed(1)}, ${entry.y.toFixed(1)})`);
-    } else {
-      parts.push(`auto entry (${entry.x.toFixed(1)}, ${entry.y.toFixed(1)})`);
+    const resolution = useSettingsStore.getState().toolpathResolution;
+    const segLen = minkowskiSegmentLen(resolution);
+    const roughSlot = resolveAdaptiveSlotGeometry(operation.settings, { roughing: true });
+    const trochSampleSpacing = trochoidSampleSpacing(
+      roughSlot.forwardIncrement,
+      roughSlot.trochoidRadius,
+      resolution
+    );
+    const layout = resolveAdaptiveEntryLayout(
+      loop,
+      operation.settings,
+      adaptiveEntryOverridesFromGeometry(geo),
+      segLen,
+      trochSampleSpacing
+    );
+    if (layout) {
+      parts.push(`start (${layout.toolStart.x.toFixed(1)}, ${layout.toolStart.y.toFixed(1)})`);
+      parts.push(`join (${layout.slotJoin.x.toFixed(1)}, ${layout.slotJoin.y.toFixed(1)})`);
     }
     return parts.join(', ');
   }
@@ -65,6 +84,8 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
     (operation.geometry.faceIndices.length > 0 ||
       getSelectedHoles(operation.geometry).length > 0 ||
       !!operation.geometry.entryPoint ||
+      !!operation.geometry.toolStartPoint ||
+      !!operation.geometry.slotJoinPoint ||
       (operation.type === 'adaptive-outline' &&
         !!operation.geometry.loops &&
         operation.geometry.loops.length > 0));
@@ -72,11 +93,6 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
   const handleSelectGeometry = () => {
     setActiveOperation(operation.id);
     setSelectionMode(true, 'geometry');
-  };
-
-  const handleSelectEntry = () => {
-    setActiveOperation(operation.id);
-    setSelectionMode(true, 'entry-point');
   };
 
   const handleStopSelection = () => {
@@ -105,16 +121,9 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
             Done Selecting
           </button>
         ) : (
-          <>
-            <button className="btn btn-small" onClick={handleSelectGeometry}>
-              Select from Model
-            </button>
-            {operation.type === 'adaptive-outline' && (
-              <button className="btn btn-small btn-secondary" onClick={handleSelectEntry}>
-                Set Entry Point
-              </button>
-            )}
-          </>
+          <button className="btn btn-small" onClick={handleSelectGeometry}>
+            Select from Model
+          </button>
         )}
         {hasGeometry && !(isActive && selectionMode) && (
           <button
@@ -125,11 +134,17 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
           </button>
         )}
       </div>
+      {isActive && operation.type === 'adaptive-outline' && operation.geometry?.loops?.[0] && (
+        <p className="geometry-submode">
+          Drag gray/amber cross = tool start, blue cross = slot join on centerline (orange guide).
+          Lead-in is a spline tangent to the outline in climb/conventional direction.
+        </p>
+      )}
       {isActive && selectionMode && operation.type === 'adaptive-outline' && (
         <p className="geometry-submode">
-          {selectionSubMode === 'entry-point'
-            ? 'Click in stock above the part to override helix entry (optional)'
-            : 'Select top-facing part outline — entry is placed automatically in stock'}
+          {selectionSubMode === 'geometry'
+            ? 'Select top-facing part outline — then drag entry handles in the 3D view'
+            : 'Select top-facing part outline'}
         </p>
       )}
       {isActive && selectionMode && (operation.type === 'drill' || operation.type === 'helix') && (

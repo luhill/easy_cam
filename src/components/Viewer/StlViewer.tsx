@@ -46,9 +46,15 @@ import {
 } from '../../lib/toolpathSimulation';
 import { SelectionLoopLines } from './SelectionLoopLines';
 import { ToolOriginMarker } from './ToolOriginMarker';
-import { EntryPointMarker, StockTopPlane } from './EntryPointMarker';
-import { resolveAdaptiveEntryPoint } from '../../lib/adaptiveOutline';
-import { computeAdaptiveOutlineDebugGuidesFromBounds } from '../../lib/adaptiveGuides';
+import { AdaptiveEntryHandles } from './AdaptiveEntryHandles';
+import {
+  buildSlotCenterlineArcGuide,
+  computeAdaptiveOutlineDebugGuidesFromBounds,
+  resolveAdaptiveEntryLayout,
+  adaptiveEntryOverridesFromGeometry,
+} from '../../lib/adaptiveGuides';
+import { minkowskiSegmentLen, trochoidSampleSpacing } from '../../lib/toolpathConfig';
+import { resolveAdaptiveSlotGeometry } from '../../lib/adaptiveOutline';
 import { createViewerRenderer, detectWebGLSupport } from '../../lib/webglSupport';
 import { WebGLFallback } from './WebGLFallback';
 import { Viewer2D } from './Viewer2D';
@@ -87,7 +93,6 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
   const activeOperationId = useAppStore((s) => s.activeOperationId);
   const selectionMode = useAppStore((s) => s.selectionMode);
   const selectionSubMode = useAppStore((s) => s.selectionSubMode);
-  const setSelectionSubMode = useAppStore((s) => s.setSelectionSubMode);
   const setSelectionMode = useAppStore((s) => s.setSelectionMode);
   const regenerateToolpaths = useAppStore((s) => s.regenerateToolpaths);
 
@@ -99,15 +104,9 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
     if (!s.activeOperationId) return null;
     return s.operations.find((o) => o.id === s.activeOperationId)?.type ?? null;
   });
-  const activeOperationSettings = useAppStore((s) => {
-    if (!s.activeOperationId) return null;
-    return s.operations.find((o) => o.id === s.activeOperationId)?.settings ?? null;
-  });
   const setOperationGeometry = useAppStore((s) => s.setOperationGeometry);
-  const updateOperation = useAppStore((s) => s.updateOperation);
 
   const processedGeometry = processedMesh.geometry;
-  const partBounds = processedMesh.bounds;
 
   const faceCount = useMemo(() => getFaceCount(processedGeometry), [processedGeometry]);
 
@@ -128,14 +127,6 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
     }
     return loops;
   }, [activeGeometry, activeOperationType]);
-  const entryPoint = useMemo(() => {
-    if (activeOperationType !== 'adaptive-outline') return null;
-    const loop = activeGeometry?.loops?.[0];
-    if (!loop || loop.length < 2 || !activeOperationSettings) return null;
-    return resolveAdaptiveEntryPoint(loop, activeOperationSettings, activeGeometry?.entryPoint);
-  }, [activeOperationType, activeGeometry, activeOperationSettings]);
-  const entryPointIsAuto =
-    activeOperationType === 'adaptive-outline' && !activeGeometry?.entryPoint && !!entryPoint;
   const accentColor = activeOperationType
     ? OPERATION_COLORS[activeOperationType]
     : '#3b82f6';
@@ -422,6 +413,8 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
                 vertexIndices,
                 loops,
                 entryPoint: existing.entryPoint,
+                toolStartPoint: existing.toolStartPoint,
+                slotJoinPoint: existing.slotJoinPoint,
                 holeCenter: undefined,
                 holeRadius: undefined,
                 holeId: undefined,
@@ -443,6 +436,8 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
         vertexIndices,
         loops: loops && loops.length > 0 ? loops : group.loops,
         entryPoint: existing?.entryPoint,
+        toolStartPoint: existing?.toolStartPoint,
+        slotJoinPoint: existing?.slotJoinPoint,
       });
     },
     [activeOperationId, setOperationGeometry]
@@ -481,25 +476,6 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
     ]
   );
 
-  const handleEntryPick = useCallback(
-    (x: number, y: number) => {
-      if (!activeOperationId) return;
-      const op = useAppStore.getState().operations.find((o) => o.id === activeOperationId);
-      const existing = op?.geometry;
-      updateOperation(activeOperationId, {
-        geometry: existing
-          ? { ...existing, entryPoint: { x, y } }
-          : {
-              faceIndices: [],
-              vertexIndices: [],
-              entryPoint: { x, y },
-            },
-      });
-      setSelectionSubMode('geometry');
-    },
-    [activeOperationId, updateOperation, setSelectionSubMode]
-  );
-
   return (
     <>
       <mesh
@@ -517,13 +493,6 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
         />
       </mesh>
 
-      <StockTopPlane
-        active={selectionMode && selectionSubMode === 'entry-point'}
-        bounds={partBounds}
-        topZ={partBounds.maxZ}
-        onPick={handleEntryPick}
-      />
-
       {selectionMode && hoveredLoops.length > 0 && (
         <SelectionLoopLines
           loops={hoveredLoops}
@@ -534,14 +503,6 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
 
       {selectedLoops.length > 0 && (
         <SelectionLoopLines loops={selectedLoops} color={accentColor} opacity={1} />
-      )}
-
-      {entryPoint && (
-        <EntryPointMarker
-          point={entryPoint}
-          topZ={partBounds.maxZ}
-          color={entryPointIsAuto ? '#94a3b8' : '#f59e0b'}
-        />
       )}
     </>
   );
@@ -573,6 +534,7 @@ function SceneContent({
   const partBounds = useAppStore((s) => s.partBounds);
   const toolOrigin = useSettingsStore((s) => s.toolOrigin);
   const safeHeight = useSettingsStore((s) => s.safeHeight);
+  const updateOperation = useAppStore((s) => s.updateOperation);
   const toolpathResolution = useSettingsStore((s) => s.toolpathResolution);
   const { camera } = useThree();
   const simulationDistanceRef = useRef(simulationDistance);
@@ -654,6 +616,80 @@ function SceneContent({
     toolpathResolution,
   ]);
 
+  const adaptiveEntry = useMemo(() => {
+    if (!partBounds) return null;
+    const op = operations.find(
+      (o) =>
+        o.id === activeOperationId &&
+        o.type === 'adaptive-outline' &&
+        o.geometry?.loops?.[0]
+    );
+    if (!op?.geometry?.loops?.[0]) return null;
+
+    const loop = op.geometry.loops[0];
+    const segLen = minkowskiSegmentLen(toolpathResolution);
+    const roughSlot = resolveAdaptiveSlotGeometry(op.settings, { roughing: true });
+    const trochSampleSpacing = trochoidSampleSpacing(
+      roughSlot.forwardIncrement,
+      roughSlot.trochoidRadius,
+      toolpathResolution
+    );
+    const layout = resolveAdaptiveEntryLayout(
+      loop,
+      op.settings,
+      adaptiveEntryOverridesFromGeometry(op.geometry),
+      segLen,
+      trochSampleSpacing
+    );
+    if (!layout) return null;
+
+    const slotArcGuide = buildSlotCenterlineArcGuide(loop, op.settings, {
+      safeHeight,
+      resolution: toolpathResolution,
+    });
+
+    return {
+      op,
+      layout,
+      slotArcGuide,
+      toolStartManual: !!(op.geometry.toolStartPoint ?? op.geometry.entryPoint),
+      slotJoinManual: !!op.geometry.slotJoinPoint,
+    };
+  }, [
+    operations,
+    activeOperationId,
+    partBounds,
+    safeHeight,
+    toolpathResolution,
+  ]);
+
+  const handleToolStartChange = useCallback(
+    (point: { x: number; y: number }) => {
+      if (!adaptiveEntry?.op.geometry) return;
+      updateOperation(adaptiveEntry.op.id, {
+        geometry: {
+          ...adaptiveEntry.op.geometry,
+          toolStartPoint: point,
+          entryPoint: undefined,
+        },
+      });
+    },
+    [adaptiveEntry, updateOperation]
+  );
+
+  const handleSlotJoinChange = useCallback(
+    (point: { x: number; y: number }) => {
+      if (!adaptiveEntry?.op.geometry) return;
+      updateOperation(adaptiveEntry.op.id, {
+        geometry: {
+          ...adaptiveEntry.op.geometry,
+          slotJoinPoint: point,
+        },
+      });
+    },
+    [adaptiveEntry, updateOperation]
+  );
+
   const previewFeedRate = useMemo(() => {
     const visible = operations.filter((o) => o.visible);
     if (visible.length === 0) return 1200;
@@ -689,6 +725,18 @@ function SceneContent({
         <DebugGuideLines
           slotCenterline={adaptiveDebugGuides.slotCenterline}
           leadInGuide={adaptiveDebugGuides.leadInGuide}
+        />
+      )}
+      {adaptiveEntry && partBounds && (
+        <AdaptiveEntryHandles
+          toolStart={adaptiveEntry.layout.toolStart}
+          slotJoin={adaptiveEntry.layout.slotJoin}
+          slotArcGuide={adaptiveEntry.slotArcGuide}
+          topZ={partBounds.maxZ}
+          toolStartManual={adaptiveEntry.toolStartManual}
+          slotJoinManual={adaptiveEntry.slotJoinManual}
+          onToolStartChange={handleToolStartChange}
+          onSlotJoinChange={handleSlotJoinChange}
         />
       )}
       {toolInPreviewWindow && (
