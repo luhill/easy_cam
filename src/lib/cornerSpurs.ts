@@ -8,6 +8,7 @@ import {
   offsetVertexMiter,
   signedLoopArea2D,
   outwardEdgeNormal2D,
+  distanceToLoop2D,
 } from './geometryProcessing';
 import {
   buildArcLengthGuide,
@@ -406,12 +407,11 @@ function projectOntoSegment(
 
 /** Guard band before/after spur so full trochoid orbits do not bulge into the corner. */
 export function resolveSpurGuardBuffer(
-  baseTrochoidR: number,
-  forwardIncrement: number,
-  spurSpan: number
+  _baseTrochoidR: number,
+  _forwardIncrement: number,
+  _spurSpan: number
 ): number {
-  const raw = Math.max(baseTrochoidR * 0.95, forwardIncrement * 0.85);
-  return Math.min(raw, Math.max(spurSpan * 0.45, baseTrochoidR * 0.35));
+  return 0;
 }
 
 function isGuideSInExpandedSpurInterval(
@@ -547,27 +547,32 @@ export function spurPeakHoldAtGuideS(
   return null;
 }
 
-/** Trochoid orbit radius at a guide arc-length station (ramps on corner spurs only). */
+/** Trochoid orbit radius on corner spurs — capped by distance to inner slot guide. */
 export function trochoidRadiusAtGuideS(
   s: number,
   totalLength: number,
   baseRadius: number,
-  spurRanges: CornerSpurRange[]
+  spurRanges: CornerSpurRange[],
+  innerGuide?: LoopPoint[]
 ): number {
   if (baseRadius <= 0 || totalLength <= 0 || spurRanges.length === 0) return baseRadius;
 
-  let w = s;
-  if (totalLength > 0) {
-    w = ((s % totalLength) + totalLength) % totalLength;
-  }
+  const w = wrapGuideS(s, totalLength);
 
   for (const spur of spurRanges) {
+    if (w < spur.sStart - 1e-4 || w > spur.sEnd + 1e-4) continue;
+
+    const center = spurCenterAtGuideS(s, totalLength, [spur]);
+    if (!center) continue;
+
+    if (innerGuide && innerGuide.length >= 3) {
+      const clearance = distanceToLoop2D(center.x, center.y, innerGuide);
+      return Math.min(baseRadius, Math.max(0, clearance));
+    }
+
     const span = spur.sEnd - spur.sStart;
     const halfBand = spurPeakHalfBand(span);
-
-    if (wrappedArcDistance(w, spur.sPeak, totalLength) <= halfBand) {
-      return 0;
-    }
+    if (wrappedArcDistance(w, spur.sPeak, totalLength) <= halfBand) return 0;
 
     if (w > spur.sStart + 1e-4 && w < spur.sPeak - halfBand) {
       const rampSpan = spur.sPeak - spur.sStart - halfBand;
@@ -587,10 +592,12 @@ export function trochoidRadiusAtGuideS(
 export function buildGuideRadiusSampler(
   baseRadius: number,
   totalLength: number,
-  spurRanges: CornerSpurRange[]
+  spurRanges: CornerSpurRange[],
+  innerGuide?: LoopPoint[]
 ): (guideS: number) => number {
   if (spurRanges.length === 0) return () => baseRadius;
-  return (guideS) => trochoidRadiusAtGuideS(guideS, totalLength, baseRadius, spurRanges);
+  return (guideS) =>
+    trochoidRadiusAtGuideS(guideS, totalLength, baseRadius, spurRanges, innerGuide);
 }
 
 /** True when guide arc length is inside the spur (optionally with approach/departure guard band). */
