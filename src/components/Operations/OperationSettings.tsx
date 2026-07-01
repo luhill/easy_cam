@@ -1,6 +1,7 @@
 import type { Operation } from '../../types/operations';
 import { useAppStore } from '../../store/useAppStore';
 import { SETTING_LIMITS, clampSettingValue } from '../../lib/settingLimits';
+import { HintTooltip, LabelWithHint } from '../HintTooltip';
 
 interface OperationSettingsProps {
   operation: Operation;
@@ -40,6 +41,9 @@ const ADAPTIVE_FIELDS: typeof BASE_FIELDS = [
   { key: 'helixFeedRate', label: 'Helix Feed Rate', unit: 'mm/min', step: 25 },
 ];
 
+const DEPTH_HINT =
+  'Z=0 at stock top; cuts are negative Z. Depth offset is measured from the part bottom (+ stops short). Step down sets the maximum per-pass depth; passes are spaced evenly to the target.';
+
 function fieldLabel(operation: Operation, key: NumericSettingKey, fallback: string): string {
   if (operation.type === 'adaptive-outline' && key === 'stepover') {
     return 'Pass Advance (Stepover)';
@@ -57,6 +61,9 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
       : operation.type === 'outline'
         ? [...BASE_FIELDS, ...OUTLINE_FIELDS]
         : BASE_FIELDS;
+
+  const showDepthHint =
+    operation.type === 'outline' || operation.type === 'adaptive-outline';
 
   return (
     <div className="operation-settings">
@@ -79,7 +86,7 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
                 updateOperationSettings(operation.id, { climbMilling: e.target.checked })
               }
             />
-            Climb milling (clockwise on external cuts)
+            Climb milling
           </label>
           {operation.type === 'adaptive-outline' && (
             <label className="checkbox-row">
@@ -90,7 +97,7 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
                   updateOperationSettings(operation.id, { finishingPass: e.target.checked })
                 }
               />
-              Final outline finishing pass (0.1 mm roughing stock)
+              Final outline finishing pass
             </label>
           )}
         </div>
@@ -99,10 +106,23 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
       <div className="settings-grid">
         {fields.map(({ key, label, unit, step }) => {
           const limits = SETTING_LIMITS[key];
+          const hint =
+            key === 'depthOffset' && showDepthHint
+              ? DEPTH_HINT
+              : key === 'stepDown' && showDepthHint
+                ? DEPTH_HINT
+                : undefined;
           return (
             <div className="setting-row" key={key}>
               <label>
-                {fieldLabel(operation, key, label)} <span className="unit">({unit})</span>
+                {hint ? (
+                  <LabelWithHint hint={hint}>
+                    {fieldLabel(operation, key, label)}
+                  </LabelWithHint>
+                ) : (
+                  fieldLabel(operation, key, label)
+                )}{' '}
+                <span className="unit">({unit})</span>
               </label>
               <input
                 type="number"
@@ -120,24 +140,15 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
           );
         })}
       </div>
-      {(operation.type === 'outline' || operation.type === 'adaptive-outline') && (
-        <p className="settings-hint">
-          {operation.type === 'adaptive-outline'
-            ? 'Z=0 at stock top; cuts are negative Z. Depth offset is measured from the part bottom (+ stops short). Step down sets the maximum per-pass depth; passes are spaced evenly to the target.'
-            : 'Z=0 at stock top; cuts are negative Z. Depth offset is measured from the part bottom (+ stops short).'}
-        </p>
-      )}
       {operation.type === 'adaptive-outline' && (
-        <p className="settings-hint">
-          Viewer debug: orange = slot centerline guide; green trochoid loops = samples classified as
-          on-spur (scaled radius).
-        </p>
+        <div className="operation-settings-footer">
+          <HintTooltip text="Viewer debug: orange = slot centerline guide; green trochoid loops = samples classified as on-spur (scaled radius)." />
+        </div>
       )}
       {(operation.type === 'drill' || operation.type === 'helix') && (
-        <p className="settings-hint">
-          Click holes to add/remove. Multiple holes are drilled in selection order with rapid moves
-          between them.
-        </p>
+        <div className="operation-settings-footer">
+          <HintTooltip text="Click holes to add/remove. Multiple holes are drilled in selection order with rapid moves between them." />
+        </div>
       )}
     </div>
   );

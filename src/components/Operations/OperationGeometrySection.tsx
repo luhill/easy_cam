@@ -11,6 +11,7 @@ import { minkowskiSegmentLen, trochoidSampleSpacing } from '../../lib/toolpathCo
 import { resolveAdaptiveSlotGeometry } from '../../lib/adaptiveOutline';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { useAppStore } from '../../store/useAppStore';
+import { HintTooltip } from '../HintTooltip';
 
 interface OperationGeometrySectionProps {
   operation: Operation;
@@ -159,10 +160,32 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
 
   if (!supportsModelSelection) return null;
 
+  const geometryHint = (() => {
+    if (isEditingEntry) {
+      return 'Drag amber cross = tool start, blue cross = slot join on centerline (orange guide). Right-drag to orbit the view.';
+    }
+    if (isActive && hasOutlineLoop && !isEditingEntry) {
+      return 'Use Edit Entry Points to drag tool start and slot join without rotating the view. Lead-in is a spline tangent to the outline in climb/conventional direction.';
+    }
+    if (isSelectingGeometry && operation.type === 'adaptive-outline') {
+      return 'Select top-facing part outline';
+    }
+    if (isActive && selectionMode && (operation.type === 'drill' || operation.type === 'helix')) {
+      return 'Click holes to add or remove — multiple holes supported';
+    }
+    if (isActive && selectionMode && (operation.type === 'pocket' || operation.type === 'contour')) {
+      return 'Select faces on the model to define the operation region';
+    }
+    return null;
+  })();
+
   return (
     <div className="geometry-section geometry-section-first">
       <div className="geometry-header">
-        <span>Geometry</span>
+        <span className="label-with-hint">
+          Geometry
+          {geometryHint ? <HintTooltip text={geometryHint} /> : null}
+        </span>
         <span className="geometry-count">{geometrySummary}</span>
       </div>
       <div className="geometry-actions">
@@ -220,29 +243,6 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
             />
           </div>
         </div>
-      )}
-      {isActive && hasOutlineLoop && !isEditingEntry && (
-        <p className="geometry-submode">
-          Use Edit Entry Points to drag tool start and slot join without rotating the view.
-          Lead-in is a spline tangent to the outline in climb/conventional direction.
-        </p>
-      )}
-      {isEditingEntry && (
-        <p className="geometry-submode">
-          Drag amber cross = tool start, blue cross = slot join on centerline (orange guide).
-          Right-drag to orbit the view.
-        </p>
-      )}
-      {isSelectingGeometry && operation.type === 'adaptive-outline' && (
-        <p className="geometry-submode">Select top-facing part outline</p>
-      )}
-      {isActive && selectionMode && (operation.type === 'drill' || operation.type === 'helix') && (
-        <p className="geometry-submode">
-          Click holes to add or remove — multiple holes supported
-        </p>
-      )}
-      {isActive && selectionMode && (operation.type === 'pocket' || operation.type === 'contour') && (
-        <p className="geometry-submode">Select faces on the model to define the operation region</p>
       )}
     </div>
   );

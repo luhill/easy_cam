@@ -1,4 +1,5 @@
 import { useSettingsStore } from '../store/useSettingsStore';
+import { HintTooltip } from './HintTooltip';
 
 export function ToolOriginSettings() {
   const toolOrigin = useSettingsStore((s) => s.toolOrigin);
@@ -9,7 +10,10 @@ export function ToolOriginSettings() {
   return (
     <div className="tool-origin-settings">
       <div className="tool-origin-header">
-        <span className="panel-title">Tool Origin (WCS)</span>
+        <span className="panel-title-row">
+          <span className="panel-title">Tool Origin (WCS)</span>
+          <HintTooltip text="WCS zero sits at the tool origin. XY is in world mm. Z is relative to the stock top (CAM Z=0): use −6 to place WCS at the bottom of a 6 mm tall part. Auto mode centers XY and sets Z to 10 mm above stock top." />
+        </span>
         <label className="auto-toggle">
           <input
             type="checkbox"
@@ -37,11 +41,6 @@ export function ToolOriginSettings() {
           </div>
         ))}
       </div>
-      <p className="settings-hint" style={{ marginTop: '0.5rem' }}>
-        WCS zero sits at the tool origin. XY is in world mm. Z is relative to the stock top (CAM
-        Z=0): use −6 to place WCS at the bottom of a 6 mm tall part. Auto mode centers XY and
-        sets Z to 10 mm above stock top.
-      </p>
     </div>
   );
 }

@@ -2,12 +2,8 @@ import { useEffect } from 'react';
 import { useAppStore } from './store/useAppStore';
 import { useSettingsStore } from './store/useSettingsStore';
 import { StlViewer } from './components/Viewer/StlViewer';
-import { FileUpload, OperationPalette } from './components/FileUpload';
-import { PartSetup } from './components/PartSetup';
-import { OperationList } from './components/Operations/OperationList';
-import { GcodeSettings } from './components/GcodeSettings';
-import { ToolOriginSettings } from './components/ToolOriginSettings';
-import { GlobalCamSettings } from './components/GlobalCamSettings';
+import { FileUpload } from './components/FileUpload';
+import { Sidebar } from './components/Sidebar';
 import { ToolpathStatus } from './components/ToolpathStatus';
 import { generateGcode, downloadGcode } from './lib/gcode';
 import './App.css';
@@ -59,14 +55,7 @@ export default function App() {
       </header>
 
       <main className="app-main">
-        <aside className="sidebar">
-          <OperationPalette />
-          <PartSetup />
-          <OperationList />
-          <ToolOriginSettings />
-          <GlobalCamSettings />
-          <GcodeSettings />
-        </aside>
+        <Sidebar />
         <section className="viewer-panel">
           <ToolpathStatus />
           <StlViewer />

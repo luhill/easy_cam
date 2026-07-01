@@ -2,6 +2,7 @@ import { useAppStore } from '../store/useAppStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { DEFAULT_SAFE_HEIGHT, DEFAULT_TOOLPATH_RESOLUTION } from '../lib/toolpathConfig';
 import { MAX_TOOLPATH_POINTS } from '../lib/toolpaths';
+import { HintTooltip, LabelWithHint } from './HintTooltip';
 
 export function GlobalCamSettings() {
   const safeHeight = useSettingsStore((s) => s.safeHeight);
@@ -18,7 +19,10 @@ export function GlobalCamSettings() {
       <div className="settings-grid">
         <div className="setting-row">
           <label>
-            Safe Height <span className="unit">(mm)</span>
+            <LabelWithHint hint="Used at the start and end of every operation for safe Z retract moves.">
+              Safe Height
+            </LabelWithHint>{' '}
+            <span className="unit">(mm)</span>
           </label>
           <input
             type="number"
@@ -34,7 +38,10 @@ export function GlobalCamSettings() {
         </div>
         <div className="setting-row">
           <label>
-            Toolpath Resolution <span className="unit">(×)</span>
+            <LabelWithHint hint="1× is finest detail. 2× (default) uses half as many points. Values below 1× increase point count sharply — raise resolution if toolpaths look jagged or hit the point limit.">
+              Toolpath Resolution
+            </LabelWithHint>{' '}
+            <span className="unit">(×)</span>
           </label>
           <input
             type="number"
@@ -49,13 +56,9 @@ export function GlobalCamSettings() {
           />
         </div>
       </div>
-      <p className="settings-hint toolpath-point-count">
+      <p className="toolpath-point-count">
         Toolpath points: {totalPoints.toLocaleString()} / {MAX_TOOLPATH_POINTS.toLocaleString()}
-      </p>
-      <p className="settings-hint">
-        Safe height is used at the start and end of every operation. Resolution 1× is finest; 2×
-        (default) uses half as many points. Values below 1× are allowed but increase point count
-        sharply — raise resolution if toolpaths look jagged or hit the point limit.
+        <HintTooltip text="Total toolpath samples across all operations. Reduce resolution or simplify geometry if near the limit." />
       </p>
     </div>
   );

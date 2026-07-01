@@ -1,5 +1,6 @@
 import { useAppStore } from '../store/useAppStore';
 import { partDimensionsFromBounds } from '../lib/geometryProcessing';
+import { HintTooltip } from './HintTooltip';
 
 export function PartSetup() {
   const stlUrl = useAppStore((s) => s.stlUrl);
@@ -9,7 +10,14 @@ export function PartSetup() {
   const setSelectionMode = useAppStore((s) => s.setSelectionMode);
   const setActiveOperation = useAppStore((s) => s.setActiveOperation);
 
-  if (!stlUrl) return null;
+  if (!stlUrl) {
+    return (
+      <div className="part-setup">
+        <h3 className="panel-title">Part Setup</h3>
+        <p className="part-setup-empty">Upload an STL to configure part orientation.</p>
+      </div>
+    );
+  }
 
   const dimensions = partBounds ? partDimensionsFromBounds(partBounds) : null;
 
@@ -26,12 +34,14 @@ export function PartSetup() {
 
   return (
     <div className="part-setup">
-      <h3 className="panel-title">Part Setup</h3>
-      <p className="part-setup-desc">STL units are millimeters. Bottom of part sits on Z=0 build plate.</p>
+      <div className="panel-title-row">
+        <h3 className="panel-title">Part Setup</h3>
+        <HintTooltip text="STL units are millimeters. Bottom of part sits on Z=0 build plate." />
+      </div>
       {dimensions && (
-        <p className="part-setup-desc">
-          Size: {dimensions.width.toFixed(1)} × {dimensions.depth.toFixed(1)} ×{' '}
-          {dimensions.height.toFixed(1)} mm (X × Y × Z)
+        <p className="part-setup-dimensions">
+          {dimensions.width.toFixed(1)} × {dimensions.depth.toFixed(1)} ×{' '}
+          {dimensions.height.toFixed(1)} mm
         </p>
       )}
       {isBottomMode ? (
@@ -39,7 +49,11 @@ export function PartSetup() {
           Done / Cancel
         </button>
       ) : (
-        <button className="btn btn-small" onClick={startBottomFace}>
+        <button
+          className="btn btn-small"
+          onClick={startBottomFace}
+          title="Click a face on the model to set the part bottom (build plate)"
+        >
           Set Bottom Face
         </button>
       )}
