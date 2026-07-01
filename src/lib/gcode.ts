@@ -58,6 +58,79 @@ function splitCustomGcodeBlock(block: string): string[] {
     .filter((line, index, lines) => line.length > 0 || index < lines.length - 1);
 }
 
+const COORD_DECIMALS = 3;
+
+function roundCoord(value: number): number {
+  const factor = 10 ** COORD_DECIMALS;
+  return Math.round(value * factor) / factor;
+}
+
+type MotionMode = 'G0' | 'G1';
+
+interface ModalGcodeState {
+  motion: MotionMode | null;
+  x: number | null;
+  y: number | null;
+  z: number | null;
+  f: number | null;
+}
+
+function createModalGcodeState(): ModalGcodeState {
+  return { motion: null, x: null, y: null, z: null, f: null };
+}
+
+interface ModalMoveOptions {
+  motion: MotionMode;
+  x: number;
+  y: number;
+  z: number;
+  feed?: number;
+  comment?: string;
+}
+
+/** Emit a move line with modal X/Y/Z/F — only words that changed since the last move. */
+function formatModalMove(
+  state: ModalGcodeState,
+  opts: ModalMoveOptions
+): { line: string; state: ModalGcodeState } {
+  const x = roundCoord(opts.x);
+  const y = roundCoord(opts.y);
+  const z = roundCoord(opts.z);
+  const feed = opts.feed !== undefined ? Math.round(opts.feed) : undefined;
+
+  const parts: string[] = [];
+
+  if (state.motion !== opts.motion) {
+    parts.push(opts.motion);
+  }
+  if (state.x !== x) {
+    parts.push(`X${x.toFixed(COORD_DECIMALS)}`);
+  }
+  if (state.y !== y) {
+    parts.push(`Y${y.toFixed(COORD_DECIMALS)}`);
+  }
+  if (state.z !== z) {
+    parts.push(`Z${z.toFixed(COORD_DECIMALS)}`);
+  }
+  if (opts.motion === 'G1' && feed !== undefined && state.f !== feed) {
+    parts.push(`F${feed.toFixed(0)}`);
+  }
+
+  const comment = opts.comment ? ` ; ${opts.comment}` : '';
+  const line = parts.length > 0 ? `${parts.join(' ')}${comment}` : '';
+
+  return {
+    line,
+    state: {
+      motion: opts.motion,
+      x,
+      y,
+      z,
+      f: opts.motion === 'G1' && feed !== undefined ? feed : state.f,
+    },
+  };
+}
+
 function generateMarlinGcode(options: GcodeExportOptions): string {
   const {
     operations,
@@ -85,6 +158,13 @@ function generateMarlinGcode(options: GcodeExportOptions): string {
   let previousToolDiameter: number | null = null;
   let toolNumber = 1;
   let wroteOriginPosition = false;
+  let modal = createModalGcodeState();
+
+  const emitMove = (opts: ModalMoveOptions) => {
+    const result = formatModalMove(modal, opts);
+    modal = result.state;
+    if (result.line) lines.push(result.line);
+  };
 
   for (const op of enabledOps) {
     lines.push(`; --- ${op.name} (${op.type}) ---`);
@@ -97,6 +177,7 @@ function generateMarlinGcode(options: GcodeExportOptions): string {
         lines.push('; (empty custom G-code block)');
       }
       lines.push('');
+      modal = createModalGcodeState();
       continue;
     }
 
@@ -108,7 +189,13 @@ function generateMarlinGcode(options: GcodeExportOptions): string {
     }
 
     if (!wroteOriginPosition) {
-      lines.push(`G0 X0.000 Y0.000 Z${gcodeSafeZ(safeHeight, toolOrigin).toFixed(3)} ; tool origin`);
+      emitMove({
+        motion: 'G0',
+        x: 0,
+        y: 0,
+        z: gcodeSafeZ(safeHeight, toolOrigin),
+        comment: 'tool origin',
+      });
       lines.push('');
       wroteOriginPosition = true;
     }
@@ -134,6 +221,7 @@ function generateMarlinGcode(options: GcodeExportOptions): string {
       lines.push(`; --- Tool change before ${op.name} ---`);
       lines.push(...applyGcodeTemplate(templates.toolChangeGcode, templateVars));
       lines.push('');
+      modal = createModalGcodeState();
     }
 
     previousToolDiameter = settings.toolDiameter;
@@ -142,20 +230,32 @@ function generateMarlinGcode(options: GcodeExportOptions): string {
       lines.push(`M3 S${settings.spindleSpeed} ; spindle on`);
     }
 
-    lines.push(`G0 Z${gcodeSafeZ(safeHeight, toolOrigin).toFixed(3)} ; safe Z`);
+    emitMove({
+      motion: 'G0',
+      x: modal.x ?? 0,
+      y: modal.y ?? 0,
+      z: gcodeSafeZ(safeHeight, toolOrigin),
+      comment: 'safe Z',
+    });
 
     for (const pt of path.points) {
       const { x, y } = gcodeXY(pt.x, pt.y, toolOrigin);
       const z = gcodeZFromWorld(pt.z, stockTopWorldZ, toolOrigin);
       if (pt.rapid) {
-        lines.push(`G0 X${x.toFixed(3)} Y${y.toFixed(3)} Z${z.toFixed(3)}`);
+        emitMove({ motion: 'G0', x, y, z });
       } else {
         const feed = pt.feedRate ?? settings.feedRate;
-        lines.push(`G1 X${x.toFixed(3)} Y${y.toFixed(3)} Z${z.toFixed(3)} F${feed.toFixed(0)}`);
+        emitMove({ motion: 'G1', x, y, z, feed });
       }
     }
 
-    lines.push(`G0 Z${gcodeSafeZ(safeHeight, toolOrigin).toFixed(3)} ; retract`);
+    emitMove({
+      motion: 'G0',
+      x: modal.x ?? 0,
+      y: modal.y ?? 0,
+      z: gcodeSafeZ(safeHeight, toolOrigin),
+      comment: 'retract',
+    });
     lines.push('M5 ; spindle off');
     lines.push('');
   }
