@@ -164,12 +164,14 @@ function StlMesh({
     if (!s.activeOperationId) return null;
     return s.operations.find((o) => o.id === s.activeOperationId)?.type ?? null;
   });
-  const activeOperationSettings = useAppStore((s) => {
+  const activeOpSettingsRaw = useAppStore((s) => {
     if (!s.activeOperationId) return null;
-    const op = s.operations.find((o) => o.id === s.activeOperationId);
-    if (!op) return null;
-    return clampOperationSettings({ ...DEFAULT_SETTINGS, ...op.settings });
+    return s.operations.find((o) => o.id === s.activeOperationId)?.settings ?? null;
   });
+  const activeOperationSettings = useMemo(() => {
+    if (!activeOpSettingsRaw) return null;
+    return clampOperationSettings({ ...DEFAULT_SETTINGS, ...activeOpSettingsRaw });
+  }, [activeOpSettingsRaw]);
   const partBounds = useAppStore((s) => s.partBounds);
   const setOperationGeometry = useAppStore((s) => s.setOperationGeometry);
 
