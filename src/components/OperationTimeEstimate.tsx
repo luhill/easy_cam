@@ -25,12 +25,6 @@ export function OperationTimeEstimate() {
           ? '—'
           : formatDuration(estimate.totalSeconds)}
       </span>
-      {estimate.enabledOperationCount > 0 && (
-        <span className="operation-time-meta">
-          {estimate.enabledOperationCount} enabled op
-          {estimate.enabledOperationCount === 1 ? '' : 's'}
-        </span>
-      )}
     </div>
   );
 }

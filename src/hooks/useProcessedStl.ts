@@ -10,11 +10,9 @@ import {
 import { loadStlGeometry } from '../lib/stlLoader';
 import { registerPartTransformBridge } from '../lib/partTransformBridge';
 import { useAppStore } from '../store/useAppStore';
-import { useSettingsStore } from '../store/useSettingsStore';
 
 export function useProcessedStl(stlUrl: string | null) {
   const setPartBounds = useAppStore((s) => s.setPartBounds);
-  const setToolOriginFromBounds = useSettingsStore((s) => s.setToolOriginFromBounds);
 
   const [processedMesh, setProcessedMesh] = useState<ProcessedMesh | null>(null);
   const [meshKey, setMeshKey] = useState(0);
@@ -87,8 +85,7 @@ export function useProcessedStl(stlUrl: string | null) {
   useEffect(() => {
     if (!processedMesh) return;
     setPartBounds(processedMesh.bounds);
-    setToolOriginFromBounds(processedMesh.bounds);
-  }, [processedMesh, meshKey, setPartBounds, setToolOriginFromBounds]);
+  }, [processedMesh, meshKey, setPartBounds]);
 
   const updateMesh = useCallback((mesh: ProcessedMesh) => {
     setProcessedMesh(mesh);

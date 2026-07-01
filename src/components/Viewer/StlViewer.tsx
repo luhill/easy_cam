@@ -68,7 +68,7 @@ import { WebGLFallback } from './WebGLFallback';
 import { Viewer2D } from './Viewer2D';
 import { useProcessedStl } from '../../hooks/useProcessedStl';
 import { getEffectiveSimulationWindow } from '../../lib/simulationLiveBridge';
-import { filterVisibleToolpathSegments } from '../../lib/toolpaths';
+import { buildVisiblePreviewToolpaths } from '../../lib/toolpaths';
 import { ToolpathColorControls } from './ToolpathColorControls';
 import { createCutZContext } from '../../lib/cutDepth';
 import {
@@ -763,8 +763,15 @@ function SceneContent({
   const controlsRef = useRef<OrbitControlsImpl>(null);
 
   const visiblePaths = useMemo(
-    () => filterVisibleToolpathSegments(toolpaths, operations),
-    [toolpaths, operations]
+    () =>
+      buildVisiblePreviewToolpaths(
+        toolpaths,
+        operations,
+        toolOrigin,
+        partBounds?.maxZ ?? 0,
+        safeHeight
+      ),
+    [toolpaths, operations, toolOrigin, partBounds?.maxZ, safeHeight]
   );
 
   const simulationTimeline = useMemo(
@@ -978,12 +985,22 @@ export function StlViewer() {
     return s.operations.find((o) => o.id === id)?.type ?? null;
   });
 
+  const toolOrigin = useSettingsStore((s) => s.toolOrigin);
+  const safeHeight = useSettingsStore((s) => s.safeHeight);
+
   const { processedMesh, meshKey, loading, loadError, updateMesh, commitOrientationSource } =
     useProcessedStl(stlUrl);
 
   const visiblePaths = useMemo(
-    () => filterVisibleToolpathSegments(toolpaths, operations),
-    [toolpaths, operations]
+    () =>
+      buildVisiblePreviewToolpaths(
+        toolpaths,
+        operations,
+        toolOrigin,
+        partBounds?.maxZ ?? 0,
+        safeHeight
+      ),
+    [toolpaths, operations, toolOrigin, partBounds?.maxZ, safeHeight]
   );
 
   const [indexStatus, setIndexStatus] = useState<{ ready: boolean; regions?: number }>({

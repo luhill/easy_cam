@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { PartBounds, ToolOrigin } from '../lib/geometryProcessing';
+import type { ToolOrigin } from '../lib/geometryProcessing';
 import { DEFAULT_WCS_Z_ABOVE_STOCK } from '../lib/cutDepth';
 import {
   DEFAULT_SAFE_HEIGHT,
@@ -46,7 +46,6 @@ interface SettingsState {
   gcodeTemplates: GcodeTemplates;
   gcodeOutputFormat: GcodeOutputFormat;
   toolOrigin: ToolOrigin;
-  toolOriginAuto: boolean;
   safeHeight: number;
   toolpathResolution: number;
   travelFeedRate: number;
@@ -55,8 +54,6 @@ interface SettingsState {
   setGcodeOutputFormat: (format: GcodeOutputFormat) => void;
   resetGcodeTemplates: () => void;
   setToolOrigin: (origin: Partial<ToolOrigin>) => void;
-  setToolOriginFromBounds: (bounds: PartBounds) => void;
-  setToolOriginAuto: (auto: boolean) => void;
   setSafeHeight: (mm: number) => void;
   setToolpathResolution: (factor: number) => void;
   setTravelFeedRate: (mmPerMin: number) => void;
@@ -69,7 +66,6 @@ export const useSettingsStore = create<SettingsState>()(
       gcodeTemplates: DEFAULT_GCODE_TEMPLATES,
       gcodeOutputFormat: 'marlin',
       toolOrigin: { x: 0, y: 0, z: DEFAULT_WCS_Z_ABOVE_STOCK },
-      toolOriginAuto: true,
       safeHeight: DEFAULT_SAFE_HEIGHT,
       toolpathResolution: DEFAULT_TOOLPATH_RESOLUTION,
       travelFeedRate: DEFAULT_TRAVEL_FEED_RATE,
@@ -84,21 +80,7 @@ export const useSettingsStore = create<SettingsState>()(
       setToolOrigin: (origin) =>
         set((state) => ({
           toolOrigin: { ...state.toolOrigin, ...origin },
-          toolOriginAuto: false,
         })),
-      setToolOriginFromBounds: (bounds) =>
-        set((state) => {
-          if (!state.toolOriginAuto) return state;
-          const next = {
-            x: (bounds.minX + bounds.maxX) / 2,
-            y: (bounds.minY + bounds.maxY) / 2,
-            z: DEFAULT_WCS_Z_ABOVE_STOCK,
-          };
-          const cur = state.toolOrigin;
-          if (cur.x === next.x && cur.y === next.y && cur.z === next.z) return state;
-          return { toolOrigin: next };
-        }),
-      setToolOriginAuto: (auto) => set({ toolOriginAuto: auto }),
       setSafeHeight: (mm) =>
         set({ safeHeight: Math.max(0, Number.isFinite(mm) ? mm : DEFAULT_SAFE_HEIGHT) }),
       setToolpathResolution: (factor) =>

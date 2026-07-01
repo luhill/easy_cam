@@ -726,7 +726,12 @@ body {
 
 .gcode-download-btn {
   flex-shrink: 0;
-  white-space: nowrap;
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+  font-weight: 700;
 }
 
 .gcode-format-row select {

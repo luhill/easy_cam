@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/useAppStore';
-import { filterVisibleToolpathSegments } from '../../lib/toolpaths';
+import { buildVisiblePreviewToolpaths } from '../../lib/toolpaths';
 import {
   buildSimulationTimeline,
   clampDistanceToWindow,
@@ -16,12 +16,16 @@ import {
   setLiveSimulationDistance,
   syncLiveSimulationDistanceFromStore,
 } from '../../lib/simulationLiveBridge';
+import { useSettingsStore } from '../../store/useSettingsStore';
 import { RangeWindowSlider } from './RangeWindowSlider';
 
 export function ToolSimulationControls() {
   const stlUrl = useAppStore((s) => s.stlUrl);
   const toolpaths = useAppStore((s) => s.toolpaths);
   const operations = useAppStore((s) => s.operations);
+  const partBounds = useAppStore((s) => s.partBounds);
+  const toolOrigin = useSettingsStore((s) => s.toolOrigin);
+  const safeHeight = useSettingsStore((s) => s.safeHeight);
   const simulationPlaying = useAppStore((s) => s.simulationPlaying);
   const simulationDistance = useAppStore((s) => s.simulationDistance);
   const simulationSpeed = useAppStore((s) => s.simulationSpeed);
@@ -47,8 +51,15 @@ export function ToolSimulationControls() {
   const lastDisplayRef = useRef({ distance: 0, start: 0, end: 0 });
 
   const visiblePaths = useMemo(
-    () => filterVisibleToolpathSegments(toolpaths, operations),
-    [toolpaths, operations]
+    () =>
+      buildVisiblePreviewToolpaths(
+        toolpaths,
+        operations,
+        toolOrigin,
+        partBounds?.maxZ ?? 0,
+        safeHeight
+      ),
+    [toolpaths, operations, toolOrigin, partBounds?.maxZ, safeHeight]
   );
 
   const timeline = useMemo(() => buildSimulationTimeline(visiblePaths), [visiblePaths]);

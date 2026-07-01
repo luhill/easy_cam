@@ -52,13 +52,14 @@ export function OperationsTabFooter() {
         className="btn btn-small btn-primary gcode-download-btn"
         onClick={() => void handleDownload()}
         disabled={enabledCount === 0}
+        aria-label="Download G-code"
         title={
           enabledCount === 0
             ? 'Enable at least one operation to export G-code'
             : `Download ${defaultGcodeFilename(stlFileName)}`
         }
       >
-        Download G-code
+        ↓
       </button>
     </div>
   );

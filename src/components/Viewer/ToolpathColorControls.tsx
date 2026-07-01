@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useAppStore } from '../../store/useAppStore';
-import { filterVisibleToolpathSegments } from '../../lib/toolpaths';
+import { buildVisiblePreviewToolpaths } from '../../lib/toolpaths';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import {
   TOOLPATH_MOVE_COLORS,
@@ -24,10 +24,20 @@ export function ToolpathColorControls() {
   const colorMode = useAppStore((s) => s.toolpathColorMode);
   const setToolpathColorMode = useAppStore((s) => s.setToolpathColorMode);
   const travelFeedRate = useSettingsStore((s) => s.travelFeedRate);
+  const toolOrigin = useSettingsStore((s) => s.toolOrigin);
+  const safeHeight = useSettingsStore((s) => s.safeHeight);
+  const partBounds = useAppStore((s) => s.partBounds);
 
   const visiblePaths = useMemo(
-    () => filterVisibleToolpathSegments(toolpaths, operations),
-    [toolpaths, operations]
+    () =>
+      buildVisiblePreviewToolpaths(
+        toolpaths,
+        operations,
+        toolOrigin,
+        partBounds?.maxZ ?? 0,
+        safeHeight
+      ),
+    [toolpaths, operations, toolOrigin, partBounds?.maxZ, safeHeight]
   );
 
   const feedRange = useMemo(

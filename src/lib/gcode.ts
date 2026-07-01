@@ -1,6 +1,11 @@
 import type { GcodeOutputFormat, GcodeTemplates } from '../store/useSettingsStore';
 import type { ToolOrigin } from './geometryProcessing';
-import { DEFAULT_WCS_Z_ABOVE_STOCK, worldZToCamZ } from './cutDepth';
+import { DEFAULT_WCS_Z_ABOVE_STOCK } from './cutDepth';
+import {
+  gcodeSafeZ,
+  gcodeXY,
+  gcodeZFromWorld,
+} from './toolOriginProgram';
 import type { Operation, ToolpathSegment } from '../types/operations';
 
 export interface GcodeTemplateVars {
@@ -79,6 +84,7 @@ function generateMarlinGcode(options: GcodeExportOptions): string {
 
   let previousToolDiameter: number | null = null;
   let toolNumber = 1;
+  let wroteOriginPosition = false;
 
   for (const op of enabledOps) {
     lines.push(`; --- ${op.name} (${op.type}) ---`);
@@ -99,6 +105,12 @@ function generateMarlinGcode(options: GcodeExportOptions): string {
       lines.push('; (skipped — no toolpath)');
       lines.push('');
       continue;
+    }
+
+    if (!wroteOriginPosition) {
+      lines.push(`G0 X0.000 Y0.000 Z${gcodeSafeZ(safeHeight, toolOrigin).toFixed(3)} ; tool origin`);
+      lines.push('');
+      wroteOriginPosition = true;
     }
 
     const { settings } = op;
@@ -130,13 +142,11 @@ function generateMarlinGcode(options: GcodeExportOptions): string {
       lines.push(`M3 S${settings.spindleSpeed} ; spindle on`);
     }
 
-    lines.push(`G0 Z${safeHeight.toFixed(3)} ; safe Z`);
+    lines.push(`G0 Z${gcodeSafeZ(safeHeight, toolOrigin).toFixed(3)} ; safe Z`);
 
     for (const pt of path.points) {
-      const x = pt.x - toolOrigin.x;
-      const y = pt.y - toolOrigin.y;
-      const camZ = worldZToCamZ(pt.z, stockTopWorldZ);
-      const z = camZ - toolOrigin.z;
+      const { x, y } = gcodeXY(pt.x, pt.y, toolOrigin);
+      const z = gcodeZFromWorld(pt.z, stockTopWorldZ, toolOrigin);
       if (pt.rapid) {
         lines.push(`G0 X${x.toFixed(3)} Y${y.toFixed(3)} Z${z.toFixed(3)}`);
       } else {
@@ -145,7 +155,7 @@ function generateMarlinGcode(options: GcodeExportOptions): string {
       }
     }
 
-    lines.push(`G0 Z${safeHeight.toFixed(3)} ; retract`);
+    lines.push(`G0 Z${gcodeSafeZ(safeHeight, toolOrigin).toFixed(3)} ; retract`);
     lines.push('M5 ; spindle off');
     lines.push('');
   }

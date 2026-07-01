@@ -1,4 +1,6 @@
 import type { Operation, ToolpathPoint, ToolpathSegment } from '../types/operations';
+import type { ToolOrigin } from './geometryProcessing';
+import { prependToolOriginApproach } from './toolOriginProgram';
 import type { LoopPoint } from '../types/operations';
 import { DEFAULT_SETTINGS } from '../types/operations';
 import type { PartBounds } from './geometryProcessing';
@@ -1101,4 +1103,20 @@ export function filterVisibleToolpathSegments(
   }
 
   return filtered;
+}
+
+/** Visible toolpaths with origin-to-first-point approach for preview/simulation. */
+export function buildVisiblePreviewToolpaths(
+  toolpaths: ToolpathSegment[],
+  operations: Operation[],
+  toolOrigin: ToolOrigin,
+  stockTopWorldZ: number,
+  safeHeight: number
+): ToolpathSegment[] {
+  const visible = filterVisibleToolpathSegments(toolpaths, operations);
+  return prependToolOriginApproach(
+    visible,
+    toolOrigin,
+    safeHeightWorldZ({ worldTopZ: stockTopWorldZ }, safeHeight)
+  );
 }
