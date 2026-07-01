@@ -88,7 +88,7 @@ interface ModalMoveOptions {
   comment?: string;
 }
 
-/** Emit a move line with modal X/Y/Z/F — only words that changed since the last move. */
+/** Emit a move line: G0/G1 every time; X/Y/Z/F only when changed since the last move. */
 function formatModalMove(
   state: ModalGcodeState,
   opts: ModalMoveOptions
@@ -98,11 +98,8 @@ function formatModalMove(
   const z = roundCoord(opts.z);
   const feed = opts.feed !== undefined ? Math.round(opts.feed) : undefined;
 
-  const parts: string[] = [];
+  const parts: string[] = [opts.motion];
 
-  if (state.motion !== opts.motion) {
-    parts.push(opts.motion);
-  }
   if (state.x !== x) {
     parts.push(`X${x.toFixed(COORD_DECIMALS)}`);
   }
@@ -117,7 +114,7 @@ function formatModalMove(
   }
 
   const comment = opts.comment ? ` ; ${opts.comment}` : '';
-  const line = parts.length > 0 ? `${parts.join(' ')}${comment}` : '';
+  const line = `${parts.join(' ')}${comment}`;
 
   return {
     line,
@@ -163,7 +160,7 @@ function generateMarlinGcode(options: GcodeExportOptions): string {
   const emitMove = (opts: ModalMoveOptions) => {
     const result = formatModalMove(modal, opts);
     modal = result.state;
-    if (result.line) lines.push(result.line);
+    lines.push(result.line);
   };
 
   for (const op of enabledOps) {
