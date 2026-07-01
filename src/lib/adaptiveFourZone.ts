@@ -378,7 +378,7 @@ function generateTrochoidAlongGuide(
 
   const emitOrbit = (sAlong: number, phase: number, skipDuplicate: boolean) => {
     const sSample = guideSign >= 0 ? startS + sAlong : startS - sAlong;
-    const theta = -Math.PI / 2 + rotSign * (1 - phase) * 2 * Math.PI;
+    const theta = trochoidOrbitAngleAtPhase(phase, rotSign);
     const sampled = sampleAtS(sSample);
     const { z, rapid } = orbitZProfile(phase, zCut, liftAmount);
 
