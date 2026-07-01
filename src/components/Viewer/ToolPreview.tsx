@@ -66,13 +66,17 @@ export function ToolPreviewLive({ timeline, toolDiameter }: ToolPreviewLiveProps
 
     if (simulationShowTool) {
       if (bodyRef.current) {
+        bodyRef.current.visible = true;
         (bodyRef.current.material as THREE.MeshStandardMaterial).color.copy(color);
       }
       if (ringRef.current) {
+        ringRef.current.visible = true;
         (ringRef.current.material as THREE.MeshBasicMaterial).color.copy(ring);
       }
       if (markerRef.current) markerRef.current.visible = false;
     } else {
+      if (bodyRef.current) bodyRef.current.visible = false;
+      if (ringRef.current) ringRef.current.visible = false;
       if (markerRef.current) {
         markerRef.current.visible = true;
         (markerRef.current.material as THREE.MeshBasicMaterial).color.copy(color);
