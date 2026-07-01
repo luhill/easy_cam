@@ -1,4 +1,4 @@
-import { useRef, useEffect, useMemo, useCallback, useState } from 'react';
+import { useRef, useEffect, useMemo, useCallback, useState, type RefObject } from 'react';
 import { Canvas, useThree, useFrame, type GLProps } from '@react-three/fiber';
 import { OrbitControls, Grid, GizmoHelper, GizmoViewport } from '@react-three/drei';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { useAppStore } from '../../store/useAppStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { OPERATION_COLORS, getSelectedHoles } from '../../types/operations';
-import type { LoopPoint, OperationType, ToolpathSegment } from '../../types/operations';
+import type { LoopPoint, OperationType, ToolpathSegment, Operation } from '../../types/operations';
 import {
   createFaceColorAttribute,
   FaceColorManager,
@@ -18,7 +18,6 @@ import {
   finalizePartPlacement,
   orientFaceToBottom,
   loopCentroid,
-  partDimensionsFromBounds,
   type PartBounds,
   type ProcessedMesh,
 } from '../../lib/geometryProcessing';
@@ -56,32 +55,76 @@ import {
 import { minkowskiSegmentLen, trochoidSampleSpacing } from '../../lib/toolpathConfig';
 import { resolveAdaptiveSlotGeometry } from '../../lib/adaptiveOutline';
 import { createViewerRenderer, detectWebGLSupport } from '../../lib/webglSupport';
-import { registerViewerCameraBridge, setTopDownHomeView, goToViewerHome } from '../../lib/viewerCamera';
+import { registerViewerCameraBridge, goHomeWithCamera, goToViewerHome } from '../../lib/viewerCamera';
+import {
+  applyOrthographicFrustum,
+  cameraAspect,
+  fitPerspectiveToPartBounds,
+  replaceWithOrthographicCamera,
+  replaceWithPerspectiveCamera,
+} from '../../lib/viewportCamera';
+import type { ToolpathColorMode } from '../../lib/toolpathColors';
 import { WebGLFallback } from './WebGLFallback';
 import { Viewer2D } from './Viewer2D';
 import { useProcessedStl } from '../../hooks/useProcessedStl';
 import { getEffectiveSimulationWindow } from '../../lib/simulationLiveBridge';
+import { ToolpathColorControls } from './ToolpathColorControls';
 
-function fitCameraToPartBounds(camera: THREE.PerspectiveCamera, bounds: PartBounds | null): void {
-  if (!bounds) {
-    camera.position.set(60, -60, 60);
-    camera.up.set(0, 0, 1);
-    camera.lookAt(0, 0, 0);
-    camera.far = 1000;
-    camera.updateProjectionMatrix();
-    return;
-  }
+function ViewportCameraSync({
+  partBounds,
+  controlsRef,
+}: {
+  partBounds: PartBounds | null;
+  controlsRef: RefObject<OrbitControlsImpl | null>;
+}) {
+  const isometricProjection = useSettingsStore((s) => s.isometricProjection);
+  const { camera, set, size } = useThree();
+  const projectionRef = useRef(isometricProjection);
 
-  const dims = partDimensionsFromBounds(bounds);
-  const maxDim = Math.max(dims.width, dims.depth, dims.height, 1);
-  const centerZ = (bounds.minZ + bounds.maxZ) / 2;
-  const distance = maxDim * 2.2;
+  const boundsKey = partBounds
+    ? `${partBounds.minX}:${partBounds.maxX}:${partBounds.minY}:${partBounds.maxY}:${partBounds.minZ}:${partBounds.maxZ}`
+    : null;
 
-  camera.position.set(distance, -distance, centerZ + distance * 0.75);
-  camera.up.set(0, 0, 1);
-  camera.lookAt(0, 0, centerZ);
-  camera.far = Math.max(1000, distance * 8);
-  camera.updateProjectionMatrix();
+  useEffect(() => {
+    registerViewerCameraBridge({
+      goHome: () => {
+        goHomeWithCamera(
+          camera,
+          controlsRef.current,
+          partBounds,
+          cameraAspect(size.width, size.height)
+        );
+      },
+    });
+    return () => registerViewerCameraBridge(null);
+  }, [camera, partBounds, controlsRef, size.width, size.height]);
+
+  useEffect(() => {
+    const aspect = cameraAspect(size.width, size.height);
+    const modeChanged = projectionRef.current !== isometricProjection;
+    projectionRef.current = isometricProjection;
+
+    if (isometricProjection) {
+      if (!(camera instanceof THREE.OrthographicCamera) || modeChanged) {
+        const next = replaceWithOrthographicCamera(camera, partBounds, aspect);
+        set({ camera: next });
+        return;
+      }
+      applyOrthographicFrustum(camera, partBounds, aspect);
+      return;
+    }
+
+    if (!(camera instanceof THREE.PerspectiveCamera) || modeChanged) {
+      const next = replaceWithPerspectiveCamera(camera, partBounds, aspect);
+      set({ camera: next });
+      return;
+    }
+
+    camera.aspect = aspect;
+    fitPerspectiveToPartBounds(camera, partBounds);
+  }, [isometricProjection, boundsKey, partBounds, camera, set, size.width, size.height]);
+
+  return null;
 }
 
 interface StlMeshProps {
@@ -533,9 +576,15 @@ function StlMesh({
 function ToolpathWindowLive({
   visiblePaths,
   totalDistance,
+  colorMode,
+  operations,
+  travelFeedRate,
 }: {
   visiblePaths: ToolpathSegment[];
   totalDistance: number;
+  colorMode: ToolpathColorMode;
+  operations: Operation[];
+  travelFeedRate: number;
 }) {
   const [windowFrac, setWindowFrac] = useState(getEffectiveSimulationWindow);
   const lastKeyRef = useRef('');
@@ -557,7 +606,14 @@ function ToolpathWindowLive({
     return filterToolpathSegmentsByDistance(visiblePaths, start, end);
   }, [visiblePaths, totalDistance, windowFrac.start, windowFrac.end]);
 
-  return <ToolpathLines segments={previewPaths} />;
+  return (
+    <ToolpathLines
+      segments={previewPaths}
+      colorMode={colorMode}
+      operations={operations}
+      travelFeedRate={travelFeedRate}
+    />
+  );
 }
 
 function SimulationLayer({
@@ -612,29 +668,8 @@ function SceneContent({
   const updateOperation = useAppStore((s) => s.updateOperation);
   const toolpathResolution = useSettingsStore((s) => s.toolpathResolution);
   const travelFeedRate = useSettingsStore((s) => s.travelFeedRate);
-  const { camera } = useThree();
+  const toolpathColorMode = useAppStore((s) => s.toolpathColorMode);
   const controlsRef = useRef<OrbitControlsImpl>(null);
-
-  useEffect(() => {
-    registerViewerCameraBridge({
-      goHome: () => {
-        setTopDownHomeView(
-          camera as THREE.PerspectiveCamera,
-          controlsRef.current,
-          partBounds
-        );
-      },
-    });
-    return () => registerViewerCameraBridge(null);
-  }, [camera, partBounds]);
-
-  const boundsKey = partBounds
-    ? `${partBounds.minX}:${partBounds.maxX}:${partBounds.minY}:${partBounds.maxY}:${partBounds.minZ}:${partBounds.maxZ}`
-    : null;
-
-  useEffect(() => {
-    fitCameraToPartBounds(camera as THREE.PerspectiveCamera, partBounds);
-  }, [camera, boundsKey, partBounds]);
 
   const visiblePaths = useMemo(() => {
     const visibleIds = new Set(
@@ -784,6 +819,9 @@ function SceneContent({
       <ToolpathWindowLive
         visiblePaths={visiblePaths}
         totalDistance={simulationTimeline.totalDistance}
+        colorMode={toolpathColorMode}
+        operations={operations}
+        travelFeedRate={travelFeedRate}
       />
       {adaptiveDebugGuides && (
         <DebugGuideLines
@@ -809,6 +847,7 @@ function SceneContent({
         previewToolDiameter={previewToolDiameter}
       />
       <ToolOriginMarker origin={toolOrigin} stockTopWorldZ={partBounds?.maxZ ?? 0} />
+      <ViewportCameraSync partBounds={partBounds} controlsRef={controlsRef} />
       <OrbitControls
         ref={controlsRef}
         makeDefault
@@ -961,7 +1000,9 @@ export function StlViewer() {
         <div className="selection-hint">{selectionHint} — right-drag to orbit</div>
       )}
       {webglReady && processedMesh && (
-        <button
+        <>
+          <ToolpathColorControls />
+          <button
           type="button"
           className="viewer-home-btn"
           onClick={() => goToViewerHome()}
@@ -970,6 +1011,7 @@ export function StlViewer() {
         >
           ⌂
         </button>
+        </>
       )}
       <ToolSimulationControls />
     </div>

@@ -16,6 +16,7 @@ import {
 } from '../types/operations';
 import { clampOperationSettings } from '../lib/settingLimits';
 import { generateToolpaths } from '../lib/toolpaths';
+import type { ToolpathColorMode } from '../lib/toolpathColors';
 import { DEFAULT_DEV_STL_NAME, DEFAULT_DEV_STL_URL } from '../lib/defaultStl';
 import { useSettingsStore } from './useSettingsStore';
 
@@ -47,6 +48,7 @@ interface AppState {
   simulationWindowStart: number;
   simulationWindowEnd: number;
   simulationShowTool: boolean;
+  toolpathColorMode: ToolpathColorMode;
 
   setStlFile: (file: File) => void;
   loadDefaultStl: () => void;
@@ -74,6 +76,7 @@ interface AppState {
   setSimulationSpeed: (speed: number) => void;
   setSimulationWindow: (start: number, end: number) => void;
   setSimulationShowTool: (show: boolean) => void;
+  setToolpathColorMode: (mode: ToolpathColorMode) => void;
   resetSimulation: () => void;
 }
 
@@ -95,6 +98,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   simulationWindowStart: 0,
   simulationWindowEnd: 1,
   simulationShowTool: true,
+  toolpathColorMode: 'type',
 
   setStlFile: (file) => {
     const prev = get().stlUrl;
@@ -326,6 +330,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setSimulationShowTool: (show) => set({ simulationShowTool: show }),
+
+  setToolpathColorMode: (mode) => set({ toolpathColorMode: mode }),
 
   resetSimulation: () =>
     set({

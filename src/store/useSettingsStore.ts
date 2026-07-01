@@ -43,6 +43,7 @@ interface SettingsState {
   safeHeight: number;
   toolpathResolution: number;
   travelFeedRate: number;
+  isometricProjection: boolean;
   setGcodeTemplate: (key: keyof GcodeTemplates, value: string) => void;
   resetGcodeTemplates: () => void;
   setToolOrigin: (origin: Partial<ToolOrigin>) => void;
@@ -51,6 +52,7 @@ interface SettingsState {
   setSafeHeight: (mm: number) => void;
   setToolpathResolution: (factor: number) => void;
   setTravelFeedRate: (mmPerMin: number) => void;
+  setIsometricProjection: (enabled: boolean) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -62,6 +64,7 @@ export const useSettingsStore = create<SettingsState>()(
       safeHeight: DEFAULT_SAFE_HEIGHT,
       toolpathResolution: DEFAULT_TOOLPATH_RESOLUTION,
       travelFeedRate: DEFAULT_TRAVEL_FEED_RATE,
+      isometricProjection: false,
       setGcodeTemplate: (key, value) =>
         set((state) => ({
           gcodeTemplates: { ...state.gcodeTemplates, [key]: value },
@@ -102,6 +105,7 @@ export const useSettingsStore = create<SettingsState>()(
             Math.max(1, Number.isFinite(mmPerMin) ? mmPerMin : DEFAULT_TRAVEL_FEED_RATE)
           ),
         }),
+      setIsometricProjection: (enabled) => set({ isometricProjection: !!enabled }),
     }),
     { name: 'easy-cam-gcode-settings' }
   )

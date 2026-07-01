@@ -40,7 +40,9 @@ export function ToolSimulationControls() {
     end: simulationWindowEnd,
   });
   const scrubbingRef = useRef(false);
+  const steppingRef = useRef(false);
   const windowDraggingRef = useRef(false);
+  const stepCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastDisplayRef = useRef({ distance: 0, start: 0, end: 0 });
 
   const visiblePaths = useMemo(() => {
@@ -68,7 +70,7 @@ export function ToolSimulationControls() {
   }, [simulationWindowStart, simulationWindowEnd]);
 
   useEffect(() => {
-    if (scrubbingRef.current || simulationPlaying || windowDraggingRef.current) return;
+    if (scrubbingRef.current || steppingRef.current || simulationPlaying || windowDraggingRef.current) return;
     setDisplayDistance(simulationDistance);
   }, [simulationDistance, simulationPlaying]);
 
@@ -79,6 +81,7 @@ export function ToolSimulationControls() {
       const active =
         simulationPlaying ||
         scrubbingRef.current ||
+        steppingRef.current ||
         windowDraggingRef.current ||
         hasLiveSimulationOverride();
 
@@ -104,6 +107,13 @@ export function ToolSimulationControls() {
     return () => cancelAnimationFrame(frameId);
   }, [simulationPlaying]);
 
+  useEffect(
+    () => () => {
+      if (stepCommitTimerRef.current) clearTimeout(stepCommitTimerRef.current);
+    },
+    []
+  );
+
   useEffect(() => {
     const clamped = clampDistanceToWindow(
       getEffectiveSimulationDistance(),
@@ -112,7 +122,7 @@ export function ToolSimulationControls() {
     );
     if (Math.abs(clamped - getEffectiveSimulationDistance()) > 1e-6) {
       setLiveSimulationDistance(clamped);
-      if (!windowDraggingRef.current && !scrubbingRef.current) {
+      if (!windowDraggingRef.current && !scrubbingRef.current && !steppingRef.current) {
         setSimulationDistance(clamped);
         clearLiveSimulationDistance();
       }
@@ -142,8 +152,18 @@ export function ToolSimulationControls() {
     setDisplayWindow({ start, end });
   };
 
+  const scheduleStepCommit = () => {
+    if (stepCommitTimerRef.current) clearTimeout(stepCommitTimerRef.current);
+    stepCommitTimerRef.current = setTimeout(() => {
+      steppingRef.current = false;
+      commitLiveSimulationDistance();
+      stepCommitTimerRef.current = null;
+    }, 200);
+  };
+
   const stepBy = (delta: number) => {
     setSimulationPlaying(false);
+    steppingRef.current = true;
     const next = stepSimulationDistance(
       timeline,
       getEffectiveSimulationDistance(),
@@ -152,10 +172,8 @@ export function ToolSimulationControls() {
       windowEndDist
     );
     setLiveSimulationDistance(next);
-    setDisplayDistance(next);
-    requestAnimationFrame(() => {
-      commitLiveSimulationDistance();
-    });
+    lastDisplayRef.current.distance = next;
+    scheduleStepCommit();
   };
 
   const handlePlayToggle = () => {
@@ -209,7 +227,9 @@ export function ToolSimulationControls() {
           className="btn btn-small btn-secondary"
           onClick={() => {
             scrubbingRef.current = false;
+            steppingRef.current = false;
             windowDraggingRef.current = false;
+            if (stepCommitTimerRef.current) clearTimeout(stepCommitTimerRef.current);
             clearLiveSimulationDistance();
             resetSimulation();
             setDisplayDistance(0);
@@ -264,6 +284,8 @@ export function ToolSimulationControls() {
         value={Math.max(0, Math.min(100, progressInWindow))}
         onPointerDown={() => {
           scrubbingRef.current = true;
+          steppingRef.current = false;
+          if (stepCommitTimerRef.current) clearTimeout(stepCommitTimerRef.current);
           setSimulationPlaying(false);
           syncLiveSimulationDistanceFromStore();
         }}

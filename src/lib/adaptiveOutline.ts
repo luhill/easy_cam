@@ -39,9 +39,13 @@ export interface AdaptiveSlotOptions {
  * unchanged; the whole slot (inner wall, centerline, outer wall) shifts outward from the part.
  */
 export function cornerSpurOptionsForRoughing(settings: OperationDefaults): CornerSpurOptions {
-  if (!settings.finishingPass) return {};
+  const base: CornerSpurOptions = { maxInternalAngleDeg: 130 };
+  if (!settings.finishingPass) return base;
   const finish = resolveAdaptiveSlotGeometry(settings, { roughing: false });
-  return { roughTipInnerOffset: finish.innerCenterOffset + FINISHING_STOCK_ALLOWANCE };
+  return {
+    ...base,
+    roughTipInnerOffset: finish.innerCenterOffset + FINISHING_STOCK_ALLOWANCE,
+  };
 }
 
 export function resolveAdaptiveSlotGeometry(

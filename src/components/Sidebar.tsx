@@ -4,6 +4,7 @@ import { PartSetup } from './PartSetup';
 import { OperationList } from './Operations/OperationList';
 import { ToolOriginSettings } from './ToolOriginSettings';
 import { GlobalCamSettings } from './GlobalCamSettings';
+import { ViewportSettings } from './ViewportSettings';
 import { GcodeSettings } from './GcodeSettings';
 import { OperationTimeEstimate } from './OperationTimeEstimate';
 
@@ -54,6 +55,7 @@ export function Sidebar() {
           <div className="sidebar-tab-content sidebar-tab-content--settings">
             <ToolOriginSettings />
             <GlobalCamSettings />
+            <ViewportSettings />
             <GcodeSettings />
           </div>
         )}
