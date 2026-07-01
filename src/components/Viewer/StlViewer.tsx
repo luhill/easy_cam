@@ -1,6 +1,7 @@
 import { useRef, useEffect, useMemo, useCallback, useState } from 'react';
 import { Canvas, useThree, useFrame, type GLProps } from '@react-three/fiber';
 import { OrbitControls, Grid, GizmoHelper, GizmoViewport } from '@react-three/drei';
+import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import * as THREE from 'three';
 import { useAppStore } from '../../store/useAppStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
@@ -55,6 +56,7 @@ import {
 import { minkowskiSegmentLen, trochoidSampleSpacing } from '../../lib/toolpathConfig';
 import { resolveAdaptiveSlotGeometry } from '../../lib/adaptiveOutline';
 import { createViewerRenderer, detectWebGLSupport } from '../../lib/webglSupport';
+import { registerViewerCameraBridge, setTopDownHomeView, goToViewerHome } from '../../lib/viewerCamera';
 import { WebGLFallback } from './WebGLFallback';
 import { Viewer2D } from './Viewer2D';
 import { useProcessedStl } from '../../hooks/useProcessedStl';
@@ -565,7 +567,6 @@ function SimulationLayer({
         feedRate={previewFeedRate}
         rapidFeedRate={PREVIEW_RAPID_FEED}
         timeline={timeline}
-        timelineLength={timeline.totalDistance}
       />
     </>
   );
@@ -597,6 +598,20 @@ function SceneContent({
   const updateOperation = useAppStore((s) => s.updateOperation);
   const toolpathResolution = useSettingsStore((s) => s.toolpathResolution);
   const { camera } = useThree();
+  const controlsRef = useRef<OrbitControlsImpl>(null);
+
+  useEffect(() => {
+    registerViewerCameraBridge({
+      goHome: () => {
+        setTopDownHomeView(
+          camera as THREE.PerspectiveCamera,
+          controlsRef.current,
+          partBounds
+        );
+      },
+    });
+    return () => registerViewerCameraBridge(null);
+  }, [camera, partBounds]);
 
   const boundsKey = partBounds
     ? `${partBounds.minX}:${partBounds.maxX}:${partBounds.minY}:${partBounds.maxY}:${partBounds.minZ}:${partBounds.maxZ}`
@@ -779,6 +794,7 @@ function SceneContent({
       />
       <ToolOriginMarker origin={toolOrigin} stockTopWorldZ={partBounds?.maxZ ?? 0} />
       <OrbitControls
+        ref={controlsRef}
         makeDefault
         enableDamping
         dampingFactor={0.1}
@@ -798,7 +814,7 @@ function SceneContent({
               }
         }
       />
-      <GizmoHelper alignment="bottom-right" margin={[60, 60]}>
+      <GizmoHelper alignment="top-right" margin={[12, 12]}>
         <GizmoViewport axisColors={['#ef4444', '#22c55e', '#3b82f6']} labelColor="white" />
       </GizmoHelper>
     </>
@@ -927,6 +943,17 @@ export function StlViewer() {
       )}
       {selectionMode && webglReady && indexStatus.ready && (
         <div className="selection-hint">{selectionHint} — right-drag to orbit</div>
+      )}
+      {webglReady && processedMesh && (
+        <button
+          type="button"
+          className="viewer-home-btn"
+          onClick={() => goToViewerHome()}
+          title="Top view — look straight down with Y up"
+          aria-label="Reset camera to top view"
+        >
+          ⌂
+        </button>
       )}
       <ToolSimulationControls />
     </div>

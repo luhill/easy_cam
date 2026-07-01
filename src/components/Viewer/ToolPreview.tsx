@@ -3,7 +3,16 @@ import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useAppStore } from '../../store/useAppStore';
 import type { SimulationTimeline } from '../../lib/toolpathSimulation';
-import { sampleSimulationTimeline } from '../../lib/toolpathSimulation';
+import {
+  getEffectiveSimulationDistance,
+  setLiveSimulationDistance,
+  clearLiveSimulationDistance,
+  commitLiveSimulationDistance,
+} from '../../lib/simulationLiveBridge';
+import {
+  previewWindowDistances,
+  sampleSimulationTimeline,
+} from '../../lib/toolpathSimulation';
 
 interface ToolPreviewLiveProps {
   timeline: SimulationTimeline;
@@ -24,26 +33,24 @@ export function ToolPreviewLive({ timeline, toolDiameter }: ToolPreviewLiveProps
     const group = groupRef.current;
     if (!group || timeline.samples.length === 0) return;
 
-    const {
-      simulationDistance,
-      simulationWindowStart,
-      simulationWindowEnd,
-      simulationShowTool,
-    } = useAppStore.getState();
+    const { simulationWindowStart, simulationWindowEnd, simulationShowTool } =
+      useAppStore.getState();
 
-    const total = timeline.totalDistance;
-    const start = simulationWindowStart * total;
-    const end = simulationWindowEnd * total;
+    const distance = getEffectiveSimulationDistance();
+    const { start, end } = previewWindowDistances(
+      timeline.totalDistance,
+      simulationWindowStart,
+      simulationWindowEnd
+    );
     const inWindow =
-      total <= 0 ||
-      (simulationDistance >= start - 1e-6 && simulationDistance <= end + 1e-6);
+      timeline.totalDistance <= 0 || (distance >= start - 1e-6 && distance <= end + 1e-6);
 
     if (!inWindow) {
       group.visible = false;
       return;
     }
 
-    const sample = sampleSimulationTimeline(timeline, simulationDistance);
+    const sample = sampleSimulationTimeline(timeline, distance);
     if (!sample) {
       group.visible = false;
       return;
@@ -97,7 +104,6 @@ interface ToolSimulationDriverProps {
   feedRate: number;
   rapidFeedRate: number;
   timeline: SimulationTimeline;
-  timelineLength: number;
 }
 
 export function ToolSimulationDriver({
@@ -106,25 +112,34 @@ export function ToolSimulationDriver({
   feedRate,
   rapidFeedRate,
   timeline,
-  timelineLength,
 }: ToolSimulationDriverProps) {
   useFrame((_, delta) => {
-    if (!playing || timelineLength <= 0) return;
+    if (!playing || timeline.totalDistance <= 0) return;
 
     const store = useAppStore.getState();
-    const current = store.simulationDistance;
+    const { end } = previewWindowDistances(
+      timeline.totalDistance,
+      store.simulationWindowStart,
+      store.simulationWindowEnd
+    );
+
+    const current = getEffectiveSimulationDistance();
     const sample = sampleSimulationTimeline(timeline, current);
     const rate = sample?.rapid ? rapidFeedRate : feedRate;
     const next = current + rate * speed * (delta / 60);
 
-    if (next >= timelineLength) {
-      store.setSimulationDistance(timelineLength);
+    if (next >= end) {
+      setLiveSimulationDistance(end);
+      store.setSimulationDistance(end);
+      clearLiveSimulationDistance();
       store.setSimulationPlaying(false);
       return;
     }
 
-    store.setSimulationDistance(next);
+    setLiveSimulationDistance(next);
   });
 
   return null;
 }
+
+export { commitLiveSimulationDistance, clearLiveSimulationDistance, setLiveSimulationDistance };

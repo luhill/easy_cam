@@ -38,52 +38,84 @@ export function buildSimulationTimeline(segments: ToolpathSegment[]): Simulation
   return { samples, totalDistance: distance };
 }
 
+export function previewWindowDistances(
+  totalDistance: number,
+  windowStart: number,
+  windowEnd: number
+): { start: number; end: number; span: number } {
+  const start = windowStart * totalDistance;
+  const end = windowEnd * totalDistance;
+  return { start, end, span: Math.max(end - start, 0) };
+}
+
+export function clampDistanceToWindow(distance: number, start: number, end: number): number {
+  return Math.max(start, Math.min(end, distance));
+}
+
 export function sampleSimulationTimeline(
   timeline: SimulationTimeline,
   distance: number
 ): SimulationSample | null {
   const { samples, totalDistance } = timeline;
   if (samples.length === 0) return null;
-  if (distance <= 0) return samples[0];
-  if (distance >= totalDistance) return samples[samples.length - 1];
+  if (distance <= samples[0].distance) return { ...samples[0], distance };
+  if (distance >= totalDistance) return { ...samples[samples.length - 1], distance };
 
-  for (let i = 1; i < samples.length; i++) {
-    const b = samples[i];
-    if (b.distance >= distance) {
-      const a = samples[i - 1];
-      const span = b.distance - a.distance || 1;
-      const t = (distance - a.distance) / span;
-      return {
-        x: a.x + (b.x - a.x) * t,
-        y: a.y + (b.y - a.y) * t,
-        z: a.z + (b.z - a.z) * t,
-        rapid: a.rapid || b.rapid,
-        distance,
-      };
-    }
+  let lo = 0;
+  let hi = samples.length - 1;
+  while (lo < hi - 1) {
+    const mid = (lo + hi) >> 1;
+    if (samples[mid].distance <= distance) lo = mid;
+    else hi = mid;
   }
 
-  return samples[samples.length - 1];
+  const a = samples[lo];
+  const b = samples[hi];
+  const span = b.distance - a.distance || 1;
+  const t = (distance - a.distance) / span;
+  return {
+    x: a.x + (b.x - a.x) * t,
+    y: a.y + (b.y - a.y) * t,
+    z: a.z + (b.z - a.z) * t,
+    rapid: a.rapid || b.rapid,
+    distance,
+  };
 }
 
 /** Step simulation to the next or previous toolpath point (sample index). */
 export function stepSimulationDistance(
   timeline: SimulationTimeline,
   distance: number,
-  stepPoints: number
+  stepPoints: number,
+  windowStart = 0,
+  windowEnd?: number
 ): number {
   const { samples, totalDistance } = timeline;
-  if (samples.length === 0) return 0;
-  if (stepPoints === 0) return Math.max(0, Math.min(totalDistance, distance));
+  const end = windowEnd ?? totalDistance;
+  if (samples.length === 0) return windowStart;
+  if (stepPoints === 0) {
+    return clampDistanceToWindow(
+      Math.max(0, Math.min(totalDistance, distance)),
+      windowStart,
+      end
+    );
+  }
 
   let idx = 0;
-  for (let i = 0; i < samples.length; i++) {
-    if (samples[i].distance <= distance + 1e-6) idx = i;
-    else break;
+  let lo = 0;
+  let hi = samples.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (samples[mid].distance <= distance + 1e-6) {
+      idx = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
   }
 
   const nextIdx = Math.max(0, Math.min(samples.length - 1, idx + stepPoints));
-  return samples[nextIdx].distance;
+  return clampDistanceToWindow(samples[nextIdx].distance, windowStart, end);
 }
 
 /** Default mm/min for rapid segments in preview (not exported G-code). */

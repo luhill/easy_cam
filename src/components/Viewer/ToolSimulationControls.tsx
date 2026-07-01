@@ -1,17 +1,26 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/useAppStore';
 import {
   buildSimulationTimeline,
+  clampDistanceToWindow,
+  previewWindowDistances,
   stepSimulationDistance,
 } from '../../lib/toolpathSimulation';
+import {
+  clearLiveSimulationDistance,
+  commitLiveSimulationDistance,
+  getEffectiveSimulationDistance,
+  setLiveSimulationDistance,
+  syncLiveSimulationDistanceFromStore,
+} from '../../lib/simulationLiveBridge';
 import { RangeWindowSlider } from './RangeWindowSlider';
 
 export function ToolSimulationControls() {
   const stlUrl = useAppStore((s) => s.stlUrl);
   const toolpaths = useAppStore((s) => s.toolpaths);
   const operations = useAppStore((s) => s.operations);
-  const simulationDistance = useAppStore((s) => s.simulationDistance);
   const simulationPlaying = useAppStore((s) => s.simulationPlaying);
+  const simulationDistance = useAppStore((s) => s.simulationDistance);
   const simulationSpeed = useAppStore((s) => s.simulationSpeed);
   const simulationWindowStart = useAppStore((s) => s.simulationWindowStart);
   const simulationWindowEnd = useAppStore((s) => s.simulationWindowEnd);
@@ -23,9 +32,8 @@ export function ToolSimulationControls() {
   const setSimulationShowTool = useAppStore((s) => s.setSimulationShowTool);
   const resetSimulation = useAppStore((s) => s.resetSimulation);
 
-  const [scrubDistance, setScrubDistance] = useState<number | null>(null);
-  const scrubRafRef = useRef<number | null>(null);
-  const scrubTargetRef = useRef(0);
+  const [displayDistance, setDisplayDistance] = useState(0);
+  const scrubbingRef = useRef(false);
 
   const visiblePaths = useMemo(() => {
     const visibleIds = new Set(operations.filter((o) => o.visible).map((o) => o.id));
@@ -34,27 +42,104 @@ export function ToolSimulationControls() {
 
   const timeline = useMemo(() => buildSimulationTimeline(visiblePaths), [visiblePaths]);
 
+  const windowDistances = useMemo(
+    () =>
+      previewWindowDistances(
+        timeline.totalDistance,
+        simulationWindowStart,
+        simulationWindowEnd
+      ),
+    [timeline.totalDistance, simulationWindowStart, simulationWindowEnd]
+  );
+
+  useEffect(() => {
+    syncLiveSimulationDistanceFromStore();
+    setDisplayDistance(getEffectiveSimulationDistance());
+  }, [timeline.totalDistance]);
+
+  useEffect(() => {
+    if (scrubbingRef.current || simulationPlaying) return;
+    setDisplayDistance(simulationDistance);
+  }, [simulationDistance, simulationPlaying]);
+
+  useEffect(() => {
+    const clamped = clampDistanceToWindow(
+      getEffectiveSimulationDistance(),
+      windowDistances.start,
+      windowDistances.end
+    );
+    if (Math.abs(clamped - getEffectiveSimulationDistance()) > 1e-6) {
+      setLiveSimulationDistance(clamped);
+      setSimulationDistance(clamped);
+      clearLiveSimulationDistance();
+      setDisplayDistance(clamped);
+    }
+  }, [windowDistances.start, windowDistances.end, setSimulationDistance]);
+
+  useEffect(() => {
+    if (!simulationPlaying) return;
+    let frameId = 0;
+    const tick = () => {
+      setDisplayDistance(getEffectiveSimulationDistance());
+      frameId = requestAnimationFrame(tick);
+    };
+    frameId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frameId);
+  }, [simulationPlaying]);
+
   if (!stlUrl || timeline.samples.length === 0) return null;
 
-  const displayDistance = scrubDistance ?? simulationDistance;
-  const progress =
-    timeline.totalDistance > 0 ? (displayDistance / timeline.totalDistance) * 100 : 0;
-  const windowStartDist = simulationWindowStart * timeline.totalDistance;
-  const windowEndDist = simulationWindowEnd * timeline.totalDistance;
+  const { start: windowStartDist, end: windowEndDist, span: windowSpan } = windowDistances;
+  const progressInWindow =
+    windowSpan > 0 ? ((displayDistance - windowStartDist) / windowSpan) * 100 : 0;
+  const offsetInWindow = displayDistance - windowStartDist;
 
-  const commitScrubDistance = (distance: number) => {
-    scrubTargetRef.current = distance;
-    if (scrubRafRef.current !== null) return;
-    scrubRafRef.current = requestAnimationFrame(() => {
-      setSimulationDistance(scrubTargetRef.current);
-      scrubRafRef.current = null;
-    });
+  const handleWindowChange = (start: number, end: number) => {
+    setSimulationWindow(start, end);
+    const nextWindow = previewWindowDistances(timeline.totalDistance, start, end);
+    const clamped = clampDistanceToWindow(
+      getEffectiveSimulationDistance(),
+      nextWindow.start,
+      nextWindow.end
+    );
+    setLiveSimulationDistance(clamped);
+    setSimulationDistance(clamped);
+    clearLiveSimulationDistance();
+    setDisplayDistance(clamped);
   };
 
   const stepBy = (delta: number) => {
     setSimulationPlaying(false);
-    setScrubDistance(null);
-    setSimulationDistance(stepSimulationDistance(timeline, simulationDistance, delta));
+    scrubbingRef.current = false;
+    clearLiveSimulationDistance();
+    const next = stepSimulationDistance(
+      timeline,
+      getEffectiveSimulationDistance(),
+      delta,
+      windowStartDist,
+      windowEndDist
+    );
+    setSimulationDistance(next);
+    setDisplayDistance(next);
+  };
+
+  const handlePlayToggle = () => {
+    if (!simulationPlaying) {
+      let current = clampDistanceToWindow(
+        getEffectiveSimulationDistance(),
+        windowStartDist,
+        windowEndDist
+      );
+      if (current >= windowEndDist - 1e-6) {
+        current = windowStartDist;
+      }
+      setLiveSimulationDistance(current);
+      setSimulationDistance(current);
+      setDisplayDistance(current);
+    } else {
+      commitLiveSimulationDistance();
+    }
+    setSimulationPlaying(!simulationPlaying);
   };
 
   return (
@@ -72,11 +157,7 @@ export function ToolSimulationControls() {
         >
           ‹
         </button>
-        <button
-          type="button"
-          className="btn btn-small"
-          onClick={() => setSimulationPlaying(!simulationPlaying)}
-        >
+        <button type="button" className="btn btn-small" onClick={handlePlayToggle}>
           {simulationPlaying ? 'Pause' : 'Play'}
         </button>
         <button
@@ -88,7 +169,16 @@ export function ToolSimulationControls() {
         >
           ›
         </button>
-        <button type="button" className="btn btn-small btn-secondary" onClick={resetSimulation}>
+        <button
+          type="button"
+          className="btn btn-small btn-secondary"
+          onClick={() => {
+            scrubbingRef.current = false;
+            clearLiveSimulationDistance();
+            resetSimulation();
+            setDisplayDistance(0);
+          }}
+        >
           Reset
         </button>
         <label className="tool-simulation-speed">
@@ -117,7 +207,7 @@ export function ToolSimulationControls() {
       <RangeWindowSlider
         start={simulationWindowStart}
         end={simulationWindowEnd}
-        onChange={setSimulationWindow}
+        onChange={handleWindowChange}
       />
       <div className="tool-simulation-meta tool-simulation-window-meta">
         <span>
@@ -131,20 +221,34 @@ export function ToolSimulationControls() {
         min={0}
         max={100}
         step={0.05}
-        value={progress}
-        onPointerDown={() => setSimulationPlaying(false)}
+        value={Math.max(0, Math.min(100, progressInWindow))}
+        onPointerDown={() => {
+          scrubbingRef.current = true;
+          setSimulationPlaying(false);
+          syncLiveSimulationDistanceFromStore();
+        }}
         onChange={(e) => {
           const t = parseFloat(e.target.value) / 100;
-          const distance = t * timeline.totalDistance;
-          setScrubDistance(distance);
-          commitScrubDistance(distance);
+          const distance = windowStartDist + t * windowSpan;
+          setLiveSimulationDistance(distance);
+          setDisplayDistance(distance);
         }}
-        onPointerUp={() => setScrubDistance(null)}
-        onPointerCancel={() => setScrubDistance(null)}
+        onPointerUp={() => {
+          scrubbingRef.current = false;
+          commitLiveSimulationDistance();
+          setDisplayDistance(getEffectiveSimulationDistance());
+        }}
+        onPointerCancel={() => {
+          scrubbingRef.current = false;
+          commitLiveSimulationDistance();
+          setDisplayDistance(getEffectiveSimulationDistance());
+        }}
       />
       <div className="tool-simulation-meta">
-        <span>{displayDistance.toFixed(1)} mm</span>
-        <span>{progress.toFixed(0)}%</span>
+        <span>
+          {offsetInWindow.toFixed(1)} / {windowSpan.toFixed(1)} mm
+        </span>
+        <span>{progressInWindow.toFixed(0)}%</span>
       </div>
     </div>
   );
