@@ -419,6 +419,7 @@ function appendFreshSlotWidthBore(
     helixR: slotHelixR,
     taperFromStart: true,
     startAngle,
+    rotDir: resolveHelixRotationDir(settings.climbMilling),
     feedRate: settings.plungeRate,
   });
   appendPoints(target, bore.points);
@@ -592,6 +593,7 @@ function generateAdaptiveOutlinePath(
     ...helixOpts,
     taper: true,
     startAngle: boreHelixAngle,
+    rotDir: resolveHelixRotationDir(settings.climbMilling),
     feedRate: plungeFeed,
   });
   appendPoints(points, initialBore.points);
@@ -619,6 +621,7 @@ function generateAdaptiveOutlinePath(
         ...helixOpts,
         taper: true,
         startAngle: boreHelixAngle,
+        rotDir: resolveHelixRotationDir(settings.climbMilling),
         feedRate: plungeFeed,
       });
       if (!appendPoints(points, layerBore.points)) {

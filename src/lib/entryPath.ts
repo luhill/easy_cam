@@ -76,9 +76,9 @@ export function resolveSlotHelixRadius(slotClearance: number): number {
   return Math.max(slotClearance / 2, 0.05);
 }
 
-/** +1 = CCW helix, −1 = CW helix (climb external default). */
+/** +1 = CCW helix, −1 = CW helix. Adaptive outline bore and slotting helix. */
 export function resolveHelixRotationDir(climbMilling: boolean): number {
-  return climbMilling ? -1 : 1;
+  return climbMilling ? 1 : -1;
 }
 
 /** Interior helix bore: climb milling = CCW (+1), conventional = CW (−1). */

@@ -11,6 +11,7 @@ import {
   type ArcLengthGuide,
 } from './trochoidalPath';
 import { clampToolCenterMinDistanceFromPart, signedLoopArea2D } from './geometryProcessing';
+import { resolveHelixRotationDir } from './entryPath';
 import {
   trochoidRadiusAtGuideS,
   spurPeakHoldAtGuideS,
@@ -134,14 +135,30 @@ export function trochoidOrbitAngleAtPhase(phase: number, rotSign: number): numbe
   return -Math.PI / 2 + rotSign * (0.5 - phase) * 2 * Math.PI;
 }
 
-/** Climb milling on external CCW loops → clockwise tool motion around the part. */
-export function resolveGuideTraverseSign(guideLoop: LoopPoint[], climbMilling: boolean): number {
+export type AdaptiveOutlineSide = 'exterior' | 'interior';
+
+/**
+ * Progression direction along the slot centerline guide (+1 forward / −1 reverse).
+ * Exterior climb → clockwise around the part; interior climb → counter-clockwise.
+ */
+export function resolveGuideTraverseSign(
+  guideLoop: LoopPoint[],
+  climbMilling: boolean,
+  side: AdaptiveOutlineSide = 'exterior'
+): number {
   const ccw = signedLoopArea2D(guideLoop) >= 0;
+  if (side === 'interior') {
+    return climbMilling ? (ccw ? 1 : -1) : ccw ? -1 : 1;
+  }
   return climbMilling ? (ccw ? -1 : 1) : ccw ? 1 : -1;
 }
 
-export function resolveOrbitRotSign(guideLoop: LoopPoint[], climbMilling: boolean): number {
-  return resolveGuideTraverseSign(guideLoop, climbMilling);
+/** Trochoid micro-loop orbit direction — matches bore/slotting helix (+1 CCW climb). */
+export function resolveOrbitRotSign(
+  _guideLoop: LoopPoint[],
+  climbMilling: boolean
+): number {
+  return resolveHelixRotationDir(climbMilling);
 }
 
 function sampleOrbitPoint(
