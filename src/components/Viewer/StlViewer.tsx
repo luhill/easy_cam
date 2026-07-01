@@ -70,6 +70,13 @@ import { useProcessedStl } from '../../hooks/useProcessedStl';
 import { getEffectiveSimulationWindow } from '../../lib/simulationLiveBridge';
 import { filterVisibleToolpathSegments } from '../../lib/toolpaths';
 import { ToolpathColorControls } from './ToolpathColorControls';
+import { createCutZContext } from '../../lib/cutDepth';
+import {
+  collectInvalidHelixHoleFaces,
+  validateHelixHole,
+} from '../../lib/helixValidation';
+import { clampOperationSettings } from '../../lib/settingLimits';
+import { DEFAULT_SETTINGS } from '../../types/operations';
 
 function ViewportCameraSync({
   partBounds,
@@ -157,6 +164,13 @@ function StlMesh({
     if (!s.activeOperationId) return null;
     return s.operations.find((o) => o.id === s.activeOperationId)?.type ?? null;
   });
+  const activeOperationSettings = useAppStore((s) => {
+    if (!s.activeOperationId) return null;
+    const op = s.operations.find((o) => o.id === s.activeOperationId);
+    if (!op) return null;
+    return clampOperationSettings({ ...DEFAULT_SETTINGS, ...op.settings });
+  });
+  const partBounds = useAppStore((s) => s.partBounds);
   const setOperationGeometry = useAppStore((s) => s.setOperationGeometry);
 
   const processedGeometry = processedMesh.geometry;
@@ -180,6 +194,25 @@ function StlMesh({
     }
     return loops;
   }, [activeGeometry, activeOperationType]);
+
+  const cutZContext = useMemo(() => createCutZContext(partBounds), [partBounds]);
+
+  const { validHelixLoops, invalidHelixLoops } = useMemo(() => {
+    if (activeOperationType !== 'helix' || !activeOperationSettings) {
+      return { validHelixLoops: selectedLoops, invalidHelixLoops: [] as LoopPoint[][] };
+    }
+    const valid: LoopPoint[][] = [];
+    const invalid: LoopPoint[][] = [];
+    for (const hole of getSelectedHoles(activeGeometry)) {
+      if (!hole.loop?.length) continue;
+      if (validateHelixHole(hole.radius, activeOperationSettings, cutZContext).valid) {
+        valid.push(hole.loop);
+      } else {
+        invalid.push(hole.loop);
+      }
+    }
+    return { validHelixLoops: valid, invalidHelixLoops: invalid };
+  }, [activeGeometry, activeOperationType, activeOperationSettings, cutZContext, selectedLoops]);
   const accentColor = activeOperationType
     ? OPERATION_COLORS[activeOperationType]
     : '#3b82f6';
@@ -193,6 +226,8 @@ function StlMesh({
   const prevHoveredFacesRef = useRef<number[]>([]);
   const selectedColorRef = useRef(selectedColor);
   const prevSelectedRef = useRef<Set<number>>(new Set());
+  const prevInvalidRef = useRef<Set<number>>(new Set());
+  const invalidFacesRef = useRef<Set<number>>(new Set());
   const selectionModeRef = useRef(selectionMode);
   const selectionSubModeRef = useRef(selectionSubMode);
   const activeOperationTypeRef = useRef(activeOperationType);
@@ -249,8 +284,31 @@ function StlMesh({
     const hoverColor =
       selectionSubMode === 'bottom-face' ? FACE_COLORS.hoverBottom : FACE_COLORS.hover;
 
+    let nextInvalid = new Set<number>();
+    if (
+      activeOperationType === 'helix' &&
+      activeOperationSettings &&
+      meshIndexRef.current
+    ) {
+      nextInvalid = collectInvalidHelixHoleFaces(
+        getSelectedHoles(activeGeometry),
+        activeOperationSettings,
+        cutZContext,
+        meshIndexRef.current
+      );
+    }
+
     colorManager.updateSelectionDiff(
       prevSelectedRef.current,
+      nextSelected,
+      hovered,
+      selectedColor,
+      hoverColor,
+      nextInvalid
+    );
+    colorManager.updateInvalidDiff(
+      prevInvalidRef.current,
+      nextInvalid,
       nextSelected,
       hovered,
       selectedColor,
@@ -258,11 +316,23 @@ function StlMesh({
     );
     colorAttr.needsUpdate = true;
     prevSelectedRef.current = nextSelected;
+    prevInvalidRef.current = nextInvalid;
+    invalidFacesRef.current = nextInvalid;
     selectedFacesRef.current = nextSelected;
-  }, [activeGeometry?.faceIndices, activeGeometry, activeOperationType, selectedColor, selectionSubMode]);
+  }, [
+    activeGeometry?.faceIndices,
+    activeGeometry,
+    activeOperationType,
+    activeOperationSettings,
+    cutZContext,
+    selectedColor,
+    selectionSubMode,
+  ]);
 
   useEffect(() => {
     prevSelectedRef.current = new Set();
+    prevInvalidRef.current = new Set();
+    invalidFacesRef.current = new Set();
     prevHoveredFacesRef.current = [];
     lastHoverKeyRef.current = '';
   }, [meshKey]);
@@ -327,7 +397,8 @@ function StlMesh({
         nextFaces,
         selectedFacesRef.current,
         selectedColorRef.current,
-        hoverColor
+        hoverColor,
+        invalidFacesRef.current
       );
       colorAttr.needsUpdate = true;
 
@@ -578,7 +649,13 @@ function StlMesh({
         />
       )}
 
-      {selectedLoops.length > 0 && (
+      {validHelixLoops.length > 0 && (
+        <SelectionLoopLines loops={validHelixLoops} color={accentColor} opacity={1} />
+      )}
+      {invalidHelixLoops.length > 0 && (
+        <SelectionLoopLines loops={invalidHelixLoops} color="#ef4444" opacity={1} />
+      )}
+      {activeOperationType !== 'helix' && selectedLoops.length > 0 && (
         <SelectionLoopLines loops={selectedLoops} color={accentColor} opacity={1} />
       )}
     </>

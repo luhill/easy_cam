@@ -30,7 +30,6 @@ const BASE_FIELDS: {
 const HELIX_BASE_FIELDS: typeof BASE_FIELDS = [
   { key: 'toolDiameter', label: 'Tool Diameter', unit: 'mm', step: 0.1 },
   { key: 'plungeRate', label: 'Plunge Rate', unit: 'mm/min', step: 25 },
-  { key: 'stepDown', label: 'Step Down', unit: 'mm', step: 0.1 },
   { key: 'stepover', label: 'Stepover', unit: '%', step: 1 },
   { key: 'spindleSpeed', label: 'Spindle Speed', unit: 'RPM', step: 500 },
   { key: 'depthOffset', label: 'Z Offset', unit: 'mm', step: 0.1 },
@@ -180,7 +179,7 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
       )}
       {operation.type === 'helix' && (
         <div className="operation-settings-footer">
-          <HintTooltip text="Click holes to add/remove. Each hole is helixed in selection order. Hover highlights cylindrical walls; selected holes show wall tint plus top loop." />
+          <HintTooltip text="Click holes to add/remove. Invalid holes (red) are skipped: hole diameter must exceed tool diameter, and taper must not collapse the helix radius before final depth." />
         </div>
       )}
     </div>

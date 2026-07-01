@@ -1,8 +1,13 @@
+import { useMemo } from 'react';
 import type { Operation } from '../../types/operations';
 import {
   getSelectionStrategy,
   getSelectedHoles,
+  DEFAULT_SETTINGS,
 } from '../../types/operations';
+import { createCutZContext, type CutZContext } from '../../lib/cutDepth';
+import { validateHelixHole } from '../../lib/helixValidation';
+import { clampOperationSettings } from '../../lib/settingLimits';
 import {
   adaptiveEntryOverridesFromGeometry,
   resolveAdaptiveEntryLayout,
@@ -17,12 +22,27 @@ interface OperationGeometrySectionProps {
   operation: Operation;
 }
 
-function formatGeometrySummary(operation: Operation): string {
+function formatGeometrySummary(operation: Operation, cutZContext: CutZContext): string {
   const geo = operation.geometry;
   if (!geo) return 'None selected';
 
   const holes = getSelectedHoles(geo);
   if (holes.length > 0 && (operation.type === 'drill' || operation.type === 'helix')) {
+    if (operation.type === 'helix') {
+      const settings = clampOperationSettings({ ...DEFAULT_SETTINGS, ...operation.settings });
+      const invalidCount = holes.filter(
+        (hole) => !validateHelixHole(hole.radius, settings, cutZContext).valid
+      ).length;
+      const validCount = holes.length - invalidCount;
+      const parts: string[] = [];
+      if (validCount > 0) {
+        parts.push(validCount === 1 ? `1 hole` : `${validCount} holes`);
+      }
+      if (invalidCount > 0) {
+        parts.push(`${invalidCount} invalid`);
+      }
+      return parts.join(', ') || 'None selected';
+    }
     if (holes.length === 1) {
       return `Hole ⌀${(holes[0].radius * 2).toFixed(1)} mm`;
     }
@@ -80,8 +100,11 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
     updateOperation,
   } = useAppStore();
 
+  const partBounds = useAppStore((s) => s.partBounds);
+  const cutZContext = useMemo(() => createCutZContext(partBounds), [partBounds]);
+
   const isActive = activeOperationId === operation.id;
-  const geometrySummary = formatGeometrySummary(operation);
+  const geometrySummary = formatGeometrySummary(operation, cutZContext);
   const hasOutlineLoop =
     operation.type === 'adaptive-outline' &&
     !!operation.geometry?.loops &&

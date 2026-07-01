@@ -6,12 +6,33 @@ export const FACE_COLORS = {
   hoverBottom: new THREE.Color('#f59e0b'),
   hoverSelected: new THREE.Color('#fbbf24'),
   selected: new THREE.Color('#3b82f6'),
+  invalid: new THREE.Color('#ef4444'),
+  hoverInvalid: new THREE.Color('#f87171'),
 };
 
 const STATE_BASE = 0;
 const STATE_HOVER = 1;
 const STATE_SELECTED = 2;
 const STATE_HOVER_SELECTED = 3;
+const STATE_INVALID = 4;
+const STATE_HOVER_INVALID = 5;
+
+function resolveState(
+  faceIndex: number,
+  selected: ReadonlySet<number>,
+  hovered: ReadonlySet<number>,
+  invalid: ReadonlySet<number> = new Set()
+): number {
+  const isInvalid = invalid.has(faceIndex);
+  const isSelected = selected.has(faceIndex);
+  const isHovered = hovered.has(faceIndex);
+  if (isInvalid && isSelected && isHovered) return STATE_HOVER_INVALID;
+  if (isInvalid && isSelected) return STATE_INVALID;
+  if (isSelected && isHovered) return STATE_HOVER_SELECTED;
+  if (isSelected) return STATE_SELECTED;
+  if (isHovered) return STATE_HOVER;
+  return STATE_BASE;
+}
 
 export function getFaceCount(geometry: THREE.BufferGeometry): number {
   const index = geometry.getIndex();
@@ -74,18 +95,13 @@ function colorForState(
       return selectedColor;
     case STATE_HOVER_SELECTED:
       return FACE_COLORS.hoverSelected;
+    case STATE_INVALID:
+      return FACE_COLORS.invalid;
+    case STATE_HOVER_INVALID:
+      return FACE_COLORS.hoverInvalid;
     default:
       return FACE_COLORS.base;
   }
-}
-
-function resolveState(faceIndex: number, selected: ReadonlySet<number>, hovered: ReadonlySet<number>): number {
-  const isSelected = selected.has(faceIndex);
-  const isHovered = hovered.has(faceIndex);
-  if (isSelected && isHovered) return STATE_HOVER_SELECTED;
-  if (isSelected) return STATE_SELECTED;
-  if (isHovered) return STATE_HOVER;
-  return STATE_BASE;
 }
 
 /** Incrementally updates vertex colors — only repaints faces whose state changed. */
@@ -106,12 +122,13 @@ export class FaceColorManager {
     selected: ReadonlySet<number>,
     hovered: ReadonlySet<number>,
     selectedColor: THREE.Color = FACE_COLORS.selected,
-    hoverColor: THREE.Color = FACE_COLORS.hover
+    hoverColor: THREE.Color = FACE_COLORS.hover,
+    invalid: ReadonlySet<number> = new Set()
   ): void {
     for (let faceIndex = 0; faceIndex < this.faceCount; faceIndex++) {
       this.applyState(
         faceIndex,
-        resolveState(faceIndex, selected, hovered),
+        resolveState(faceIndex, selected, hovered, invalid),
         selectedColor,
         hoverColor
       );
@@ -124,20 +141,26 @@ export class FaceColorManager {
     nextFaces: readonly number[],
     selected: ReadonlySet<number>,
     selectedColor: THREE.Color = FACE_COLORS.selected,
-    hoverColor: THREE.Color = FACE_COLORS.hover
+    hoverColor: THREE.Color = FACE_COLORS.hover,
+    invalid: ReadonlySet<number> = new Set()
   ): void {
     const nextSet = new Set(nextFaces);
 
     for (const face of prevFaces) {
       if (!nextSet.has(face)) {
-        this.applyState(face, selected.has(face) ? STATE_SELECTED : STATE_BASE, selectedColor, hoverColor);
+        this.applyState(
+          face,
+          resolveState(face, selected, new Set(), invalid),
+          selectedColor,
+          hoverColor
+        );
       }
     }
 
     for (const face of nextFaces) {
       this.applyState(
         face,
-        selected.has(face) ? STATE_HOVER_SELECTED : STATE_HOVER,
+        resolveState(face, selected, nextSet, invalid),
         selectedColor,
         hoverColor
       );
@@ -150,16 +173,58 @@ export class FaceColorManager {
     nextSelected: ReadonlySet<number>,
     hovered: ReadonlySet<number>,
     selectedColor: THREE.Color = FACE_COLORS.selected,
-    hoverColor: THREE.Color = FACE_COLORS.hover
+    hoverColor: THREE.Color = FACE_COLORS.hover,
+    invalid: ReadonlySet<number> = new Set()
   ): void {
     for (const face of prevSelected) {
       if (!nextSelected.has(face)) {
-        this.applyState(face, hovered.has(face) ? STATE_HOVER : STATE_BASE, selectedColor, hoverColor);
+        this.applyState(
+          face,
+          resolveState(face, nextSelected, hovered, invalid),
+          selectedColor,
+          hoverColor
+        );
       }
     }
     for (const face of nextSelected) {
       if (!prevSelected.has(face)) {
-        this.applyState(face, resolveState(face, nextSelected, hovered), selectedColor, hoverColor);
+        this.applyState(
+          face,
+          resolveState(face, nextSelected, hovered, invalid),
+          selectedColor,
+          hoverColor
+        );
+      }
+    }
+  }
+
+  /** Repaint faces whose invalid status changed. */
+  updateInvalidDiff(
+    prevInvalid: ReadonlySet<number>,
+    nextInvalid: ReadonlySet<number>,
+    selected: ReadonlySet<number>,
+    hovered: ReadonlySet<number>,
+    selectedColor: THREE.Color = FACE_COLORS.selected,
+    hoverColor: THREE.Color = FACE_COLORS.hover
+  ): void {
+    for (const face of prevInvalid) {
+      if (!nextInvalid.has(face)) {
+        this.applyState(
+          face,
+          resolveState(face, selected, hovered, nextInvalid),
+          selectedColor,
+          hoverColor
+        );
+      }
+    }
+    for (const face of nextInvalid) {
+      if (!prevInvalid.has(face)) {
+        this.applyState(
+          face,
+          resolveState(face, selected, hovered, nextInvalid),
+          selectedColor,
+          hoverColor
+        );
       }
     }
   }

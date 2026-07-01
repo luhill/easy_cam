@@ -54,6 +54,10 @@ import {
   type CutZContext,
 } from './cutDepth';
 import {
+  helixHoleInvalidLabel,
+  validateHelixHole,
+} from './helixValidation';
+import {
   contourSteps,
   helixSegmentsPerRev,
   minkowskiSegmentLen,
@@ -489,12 +493,6 @@ function appendRetractViaSlotCenter(
   points.push({ x: slotCenter.x, y: slotCenter.y, z: clearanceZ, feedRate: travelFeedRate });
 }
 
-function boreAngleAtPoint(
-  center: { x: number; y: number },
-  point: { x: number; y: number }
-): number {
-  return Math.atan2(point.y - center.y, point.x - center.x);
-}
 
 function helixStartWorldZ(
   topZ: number,
@@ -801,12 +799,10 @@ function generateHelixPathForHole(
   settings: Operation['settings'],
   ctx: CutZContext,
   safeZ: number,
-  globals: ToolpathGlobalOptions,
-  _isFirst: boolean
+  globals: ToolpathGlobalOptions
 ): ToolpathPoint[] {
   const topZ = stockTopWorldZ(ctx);
-  const finalZ = finalCutWorldZ(ctx, settings.depthOffset);
-  const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
+  const targetZ = finalCutWorldZ(ctx, settings.depthOffset);
   const toolR = toolRadius(settings);
   const cutR = resolveInteriorHelixRadius(holeR, toolR, settings.radialOffset ?? 0);
   const useTaper = settings.boreTaperAngleDeg > 0;
@@ -827,40 +823,25 @@ function generateHelixPathForHole(
     feedRate: plungeFeed,
   };
   const points: ToolpathPoint[] = [];
-  const zTargets = layers.length > 0 ? layers : [finalZ];
 
   points.push({ x: entryX, y: entryY, z: safeZ, rapid: true });
   if (helixStartZ < safeZ - 1e-4) {
     points.push({ x: entryX, y: entryY, z: helixStartZ, feedRate: plungeFeed });
   }
 
-  let currentZ = helixStartZ;
-  let boreAngle = 0;
-
-  for (const layerZ of zTargets) {
-    if (layerZ >= currentZ - 1e-4) continue;
-
-    const layerBore = generateHelixBorePoints(
-      center,
-      settings,
-      currentZ,
-      layerZ,
-      {
-        ...helixOpts,
-        startAngle: boreAngle,
-      }
-    );
-    appendPoints(points, layerBore.points);
-    boreAngle = layerBore.endAngle;
+  if (targetZ < helixStartZ - 1e-4) {
+    const helixBore = generateHelixBorePoints(center, settings, helixStartZ, targetZ, helixOpts);
+    appendPoints(points, helixBore.points);
+    let boreAngle = helixBore.endAngle;
 
     if (useTaper) {
-      const bottomR = interiorHelixRadiusAtZ(cutR, layerZ, topZ, settings.boreTaperAngleDeg);
+      const bottomR = interiorHelixRadiusAtZ(cutR, targetZ, topZ, settings.boreTaperAngleDeg);
       if (bottomR + 1e-3 < cutR) {
         const spiralPoints = adjustBoreRadiusToSlotWidth(
           center,
           bottomR,
           cutR,
-          layerZ,
+          targetZ,
           radialStepPerRev,
           rotDir,
           segmentsPerRev,
@@ -868,14 +849,8 @@ function generateHelixPathForHole(
           plungeFeed
         );
         appendPoints(points, spiralPoints);
-        const spiralEnd = lastPathPoint(spiralPoints);
-        if (spiralEnd) {
-          boreAngle = boreAngleAtPoint(center, spiralEnd);
-        }
       }
     }
-
-    currentZ = layerZ;
   }
 
   appendRetractViaSlotCenter(points, center, safeZ, globals.travelFeedRate);
@@ -885,7 +860,8 @@ function generateHelixPathForHole(
 function generateHelixPath(
   op: Operation,
   ctx: CutZContext,
-  globals: ToolpathGlobalOptions
+  globals: ToolpathGlobalOptions,
+  warnings: string[] = []
 ): ToolpathPoint[] {
   const { settings, geometry } = op;
   const holes = getSelectedHoles(geometry);
@@ -894,7 +870,15 @@ function generateHelixPath(
   const safeZ = safeHeightWorldZ(ctx, globals.safeHeight);
   const points: ToolpathPoint[] = [];
 
-  holes.forEach((hole, index) => {
+  holes.forEach((hole) => {
+    const validation = validateHelixHole(hole.radius, settings, ctx);
+    if (!validation.valid) {
+      warnings.push(
+        `Helix skipped hole at (${hole.center.x.toFixed(1)}, ${hole.center.y.toFixed(1)}): ${helixHoleInvalidLabel(validation.reason!)}`
+      );
+      return;
+    }
+
     appendPoints(
       points,
       generateHelixPathForHole(
@@ -904,8 +888,7 @@ function generateHelixPath(
         settings,
         ctx,
         safeZ,
-        globals,
-        index === 0
+        globals
       )
     );
   });
@@ -982,7 +965,8 @@ function normalizedSettings(settings: Operation['settings']): Operation['setting
 function generatePathForOperation(
   op: Operation,
   ctx: CutZContext,
-  globals: ToolpathGlobalOptions
+  globals: ToolpathGlobalOptions,
+  warnings: string[] = []
 ): ToolpathPoint[] {
   const settings = normalizedSettings(op.settings);
   const operation = { ...op, settings };
@@ -995,7 +979,7 @@ function generatePathForOperation(
     case 'drill':
       return generateDrillPath(operation, ctx, globals);
     case 'helix':
-      return generateHelixPath(operation, ctx, globals);
+      return generateHelixPath(operation, ctx, globals, warnings);
     case 'pocket':
       return generatePocketPath(operation, ctx, globals);
     case 'contour':
@@ -1022,11 +1006,14 @@ export function generateToolpaths(
 
   const enabledOps = operations.filter((op) => op.enabled);
   const segments: ToolpathSegment[] = [];
+  const warnings: string[] = [];
   let prevLastPoint: ToolpathPoint | null = null;
 
   for (let i = 0; i < enabledOps.length; i++) {
     const op = enabledOps[i];
-    const points = generatePathForOperation(op, ctx, globals);
+    const opWarnings: string[] = [];
+    const points = generatePathForOperation(op, ctx, globals, opWarnings);
+    warnings.push(...opWarnings);
     if (points.length === 0) continue;
 
     if (prevLastPoint) {
@@ -1050,7 +1037,6 @@ export function generateToolpaths(
 
   activePointBudget = null;
 
-  const warnings: string[] = [];
   if (budget.discarded > 0) {
     const totalPoints = segments.reduce((sum, seg) => sum + seg.points.length, 0);
     warnings.push(
