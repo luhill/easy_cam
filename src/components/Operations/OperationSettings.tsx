@@ -27,8 +27,23 @@ const BASE_FIELDS: {
   { key: 'depthOffset', label: 'Depth Offset', unit: 'mm', step: 0.1 },
 ];
 
+const HELIX_BASE_FIELDS: typeof BASE_FIELDS = [
+  { key: 'toolDiameter', label: 'Tool Diameter', unit: 'mm', step: 0.1 },
+  { key: 'plungeRate', label: 'Plunge Rate', unit: 'mm/min', step: 25 },
+  { key: 'stepDown', label: 'Step Down', unit: 'mm', step: 0.1 },
+  { key: 'stepover', label: 'Stepover', unit: '%', step: 1 },
+  { key: 'spindleSpeed', label: 'Spindle Speed', unit: 'RPM', step: 500 },
+  { key: 'depthOffset', label: 'Z Offset', unit: 'mm', step: 0.1 },
+];
+
 const OUTLINE_FIELDS: typeof BASE_FIELDS = [
   { key: 'radialOffset', label: 'Additional Offset', unit: 'mm', step: 0.1 },
+];
+
+const HELIX_FIELDS: typeof BASE_FIELDS = [
+  { key: 'radialOffset', label: 'XY Offset', unit: 'mm', step: 0.1 },
+  { key: 'helixAngleDeg', label: 'Helix Pitch Angle', unit: '°', step: 0.1 },
+  { key: 'boreTaperAngleDeg', label: 'Taper', unit: '°', step: 0.5 },
 ];
 
 const ADAPTIVE_FIELDS: typeof BASE_FIELDS = [
@@ -41,11 +56,14 @@ const ADAPTIVE_FIELDS: typeof BASE_FIELDS = [
 ];
 
 const DEPTH_HINT =
-  'Z=0 at stock top; cuts are negative Z. Depth offset is measured from the part bottom (+ stops short). Step down sets the maximum per-pass depth; passes are spaced evenly to the target.';
+  'Z=0 at stock top; cuts are negative Z. Z offset is measured from the part bottom (+ stops short). Step down sets the maximum per-pass depth; passes are spaced evenly to the target.';
 
 function fieldLabel(operation: Operation, key: NumericSettingKey, fallback: string): string {
   if (operation.type === 'adaptive-outline' && key === 'stepover') {
     return 'Pass Advance (Stepover)';
+  }
+  if (operation.type === 'helix' && key === 'stepover') {
+    return 'Bottom Widen Stepover';
   }
   return fallback;
 }
@@ -57,12 +75,16 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
   const fields =
     operation.type === 'adaptive-outline'
       ? [...BASE_FIELDS, ...ADAPTIVE_FIELDS]
-      : operation.type === 'outline'
-        ? [...BASE_FIELDS, ...OUTLINE_FIELDS]
-        : BASE_FIELDS;
+      : operation.type === 'helix'
+        ? [...HELIX_BASE_FIELDS, ...HELIX_FIELDS]
+        : operation.type === 'outline'
+          ? [...BASE_FIELDS, ...OUTLINE_FIELDS]
+          : BASE_FIELDS;
 
   const showDepthHint =
-    operation.type === 'outline' || operation.type === 'adaptive-outline';
+    operation.type === 'outline' ||
+    operation.type === 'adaptive-outline' ||
+    operation.type === 'helix';
 
   return (
     <div className="operation-settings">
@@ -75,7 +97,9 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
         />
       </div>
 
-      {(operation.type === 'outline' || operation.type === 'adaptive-outline') && (
+      {(operation.type === 'outline' ||
+        operation.type === 'adaptive-outline' ||
+        operation.type === 'helix') && (
         <div className="settings-checkboxes">
           <label className="checkbox-row">
             <input
@@ -110,7 +134,9 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
               ? DEPTH_HINT
               : key === 'stepDown' && showDepthHint
                 ? DEPTH_HINT
-                : undefined;
+                : key === 'boreTaperAngleDeg' && operation.type === 'helix'
+                  ? 'Set to 0 to disable. At each pass bottom the tool spirals outward to full diameter using stepover.'
+                  : undefined;
           return (
             <div className="setting-row" key={key}>
               <label>
@@ -144,9 +170,14 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
           <HintTooltip text="Viewer debug: orange = slot centerline guide; green trochoid loops = samples classified as on-spur (scaled radius)." />
         </div>
       )}
-      {(operation.type === 'drill' || operation.type === 'helix') && (
+      {operation.type === 'drill' && (
         <div className="operation-settings-footer">
           <HintTooltip text="Click holes to add/remove. Multiple holes are drilled in selection order with rapid moves between them." />
+        </div>
+      )}
+      {operation.type === 'helix' && (
+        <div className="operation-settings-footer">
+          <HintTooltip text="Click holes to add/remove. Each hole is helixed in selection order. Hover highlights cylindrical walls; selected holes show wall tint plus top loop." />
         </div>
       )}
     </div>

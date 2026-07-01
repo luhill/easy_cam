@@ -81,6 +81,33 @@ export function resolveHelixRotationDir(climbMilling: boolean): number {
   return climbMilling ? -1 : 1;
 }
 
+/** Interior helix bore: climb milling = CCW (+1), conventional = CW (−1). */
+export function resolveInteriorHelixRotationDir(climbMilling: boolean): number {
+  return climbMilling ? 1 : -1;
+}
+
+/** Tool-center helix radius for finishing an interior hole. */
+export function resolveInteriorHelixRadius(
+  holeRadius: number,
+  toolRadius: number,
+  radialOffset: number
+): number {
+  return Math.max(holeRadius - toolRadius - radialOffset, toolRadius * 0.25);
+}
+
+/** Tapered interior helix radius at depth (narrows with Z below stock top). */
+export function interiorHelixRadiusAtZ(
+  cutRadius: number,
+  z: number,
+  stockTopZ: number,
+  taperAngleDeg: number
+): number {
+  if (taperAngleDeg <= 0 || z >= stockTopZ - 1e-6) return cutRadius;
+  const depthBelowTop = stockTopZ - z;
+  const taperRad = (taperAngleDeg * Math.PI) / 180;
+  return Math.max(cutRadius - depthBelowTop * Math.tan(taperRad), 0.05);
+}
+
 export function loopCentroid2D(loop: LoopPoint[]): { x: number; y: number } {
   if (loop.length === 0) return { x: 0, y: 0 };
   let x = 0;
@@ -1347,6 +1374,10 @@ export interface HelixBoreOptions {
   startAngle?: number;
   /** Override feed rate (e.g. plunge rate for adaptive bores). */
   feedRate?: number;
+  /** Interior hole finish radius at stock top (tool center). */
+  interiorCutR?: number;
+  /** Override helix rotation (+1 CCW, −1 CW). */
+  rotDir?: number;
 }
 
 export interface HelixBoreResult {
@@ -1363,6 +1394,11 @@ function resolveBoreHelixR(
   defaultHelixR: number
 ): number {
   const startR = options.helixR ?? defaultHelixR;
+  if (options.interiorCutR !== undefined) {
+    if (!options.taper || settings.boreTaperAngleDeg <= 0) return options.interiorCutR;
+    return interiorHelixRadiusAtZ(options.interiorCutR, z, stockTopZ, settings.boreTaperAngleDeg);
+  }
+
   if (!options.taper) return startR;
 
   if (options.taperFromStart && options.helixR !== undefined) {
@@ -1382,9 +1418,10 @@ export function generateHelixBorePoints(
   options: HelixBoreOptions
 ): HelixBoreResult {
   const feedRate = options.feedRate ?? settings.helixFeedRate;
-  const rotDir = resolveHelixRotationDir(settings.climbMilling);
+  const rotDir = options.rotDir ?? resolveHelixRotationDir(settings.climbMilling);
   const segments = helixSegmentsPerRev(options.globals.resolution);
-  const defaultHelixR = options.helixR ?? resolveHelixRadius(settings);
+  const defaultHelixR =
+    options.interiorCutR ?? options.helixR ?? resolveHelixRadius(settings);
   const points: ToolpathPoint[] = [];
 
   let z = startZ;

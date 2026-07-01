@@ -35,8 +35,11 @@ import {
   generateHelixBorePoints,
   helixRadiusAtZ,
   helixRadiusTaperedFromStart,
+  interiorHelixRadiusAtZ,
   isGuideOutwardCCW,
   resolveHelixRotationDir,
+  resolveInteriorHelixRadius,
+  resolveInteriorHelixRotationDir,
   resolveSlotHelixRadius,
 } from './entryPath';
 import {
@@ -764,35 +767,73 @@ function generateHelixPathForHole(
   const topZ = stockTopWorldZ(ctx);
   const finalZ = finalCutWorldZ(ctx, settings.depthOffset);
   const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
-  const cutR = Math.max(holeR - toolRadius(settings), toolRadius(settings) * 0.25);
+  const toolR = toolRadius(settings);
+  const cutR = resolveInteriorHelixRadius(holeR, toolR, settings.radialOffset ?? 0);
+  const useTaper = settings.boreTaperAngleDeg > 0;
+  const plungeFeed = settings.plungeRate;
+  const rotDir = resolveInteriorHelixRotationDir(settings.climbMilling);
+  const segmentsPerRev = helixSegmentsPerRev(globals.resolution);
+  const radialStepPerRev = settings.toolDiameter * (settings.stepover / 100);
+  const helixOpts = {
+    stockTopZ: topZ,
+    globals,
+    taper: useTaper,
+    interiorCutR: cutR,
+    rotDir,
+    feedRate: plungeFeed,
+  };
   const points: ToolpathPoint[] = [];
-  const segments = Math.max(8, Math.round(36 / Math.max(globals.resolution, 0.5)));
+  const zTargets = layers.length > 0 ? layers : [finalZ];
 
   if (isFirst) {
     points.push({ x: cx + cutR, y: cy, z: safeZ, rapid: true });
+    points.push({ x: cx + cutR, y: cy, z: topZ, feedRate: plungeFeed });
   } else {
     points.push({ x: cx, y: cy, z: safeZ, rapid: true });
-    points.push({ x: cx + cutR, y: cy, z: topZ });
+    points.push({ x: cx + cutR, y: cy, z: topZ, feedRate: plungeFeed });
   }
 
-  const zTargets = layers.length > 0 ? layers : [finalZ];
   let currentZ = topZ;
-  let angle = 0;
+  let boreAngle = 0;
 
-  for (const targetZ of zTargets) {
-    const zSpan = currentZ - targetZ;
-    if (zSpan <= 1e-6) continue;
-    const zStep = zSpan / segments;
-    for (let i = 0; i < segments; i++) {
-      angle += (Math.PI * 2) / segments;
-      currentZ = Math.max(currentZ - zStep, targetZ);
-      points.push({
-        x: cx + Math.cos(angle) * cutR,
-        y: cy + Math.sin(angle) * cutR,
-        z: currentZ,
-      });
+  for (const layerZ of zTargets) {
+    if (layerZ >= currentZ - 1e-4) continue;
+
+    const layerBore = generateHelixBorePoints(
+      { x: cx, y: cy },
+      settings,
+      currentZ,
+      layerZ,
+      {
+        ...helixOpts,
+        startAngle: boreAngle,
+      }
+    );
+    appendPoints(points, layerBore.points);
+    boreAngle = layerBore.endAngle;
+
+    if (useTaper) {
+      const bottomR = interiorHelixRadiusAtZ(cutR, layerZ, topZ, settings.boreTaperAngleDeg);
+      if (bottomR + 1e-3 < cutR) {
+        appendPoints(
+          points,
+          adjustBoreRadiusToSlotWidth(
+            { x: cx, y: cy },
+            bottomR,
+            cutR,
+            layerZ,
+            radialStepPerRev,
+            rotDir,
+            segmentsPerRev,
+            boreAngle,
+            plungeFeed
+          )
+        );
+        boreAngle += rotDir * Math.PI * 2 * Math.max(1, Math.ceil((cutR - bottomR) / radialStepPerRev));
+      }
     }
-    currentZ = targetZ;
+
+    currentZ = layerZ;
   }
 
   return points;
@@ -824,6 +865,9 @@ function generateHelixPath(
         index === 0
       )
     );
+    if (index < holes.length - 1) {
+      points.push({ x: hole.center.x, y: hole.center.y, z: safeZ, rapid: true });
+    }
   });
 
   const last = holes[holes.length - 1];

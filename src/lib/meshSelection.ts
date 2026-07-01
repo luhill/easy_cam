@@ -31,6 +31,8 @@ export interface HoleFeature {
   loop: LoopPoint[];
   isVertical: boolean;
   regionId: number;
+  /** Cylindrical wall faces surrounding this hole. */
+  wallFaceIndices: number[];
 }
 
 export interface SelectionRegion {
@@ -279,6 +281,7 @@ export class MeshIndex {
   readonly faceToRegion: Int32Array;
   private readonly edgeToFaces: Map<string, number[]>;
   private readonly positions: THREE.BufferAttribute;
+  private readonly faceNormals: THREE.Vector3[];
   private readonly epsilon: number;
 
   constructor(geometry: THREE.BufferGeometry) {
@@ -290,7 +293,7 @@ export class MeshIndex {
     this.bounds = boundsFromGeometry(geometry);
     this.epsilon = computeEpsilon(this.bounds);
 
-    const faceNormals: THREE.Vector3[] = [];
+    this.faceNormals = [];
     const facePlaneKeys: string[] = [];
     const adjacency: number[][] = Array.from({ length: this.faceCount }, () => []);
 
@@ -302,7 +305,7 @@ export class MeshIndex {
       const normal = new THREE.Vector3()
         .crossVectors(v1.clone().sub(v0), v2.clone().sub(v0))
         .normalize();
-      faceNormals.push(normal);
+      this.faceNormals.push(normal);
       facePlaneKeys.push(planeKey(normal, normal.dot(v0), this.epsilon));
 
       const verts = [v0, v1, v2];
@@ -320,7 +323,7 @@ export class MeshIndex {
           const a = faces[i];
           const b = faces[j];
           if (facePlaneKeys[a] !== facePlaneKeys[b]) continue;
-          if (faceNormals[a].dot(faceNormals[b]) < COPLANAR_DOT_THRESHOLD) continue;
+          if (this.faceNormals[a].dot(this.faceNormals[b]) < COPLANAR_DOT_THRESHOLD) continue;
           adjacency[a].push(b);
           adjacency[b].push(a);
         }
@@ -349,7 +352,7 @@ export class MeshIndex {
 
         const regionId = this.regions.length;
         const loops = this.computeBoundaryLoops(faceIndices);
-        const normal = averageNormal(faceIndices, faceNormals);
+        const normal = averageNormal(faceIndices, this.faceNormals);
         const centroid = regionCentroid(faceIndices, geometry, this.positions);
         const kind = classifyRegionKind(normal, centroid, this.bounds);
         const { outerLoop, innerLoops } = classifyLoops(loops);
@@ -381,12 +384,58 @@ export class MeshIndex {
                 loop: inner,
                 isVertical: true,
                 regionId,
+                wallFaceIndices: [],
               });
             }
           }
         }
       }
     }
+
+    for (const hole of this.holes) {
+      hole.wallFaceIndices = this.findWallFacesForCylinder(hole.center, hole.radius);
+    }
+  }
+
+  private faceCentroid(faceIndex: number): THREE.Vector3 {
+    const sum = new THREE.Vector3();
+    for (let i = 0; i < 3; i++) {
+      sum.add(getFaceVertex(this.geometry, this.positions, faceIndex, i, new THREE.Vector3()));
+    }
+    return sum.multiplyScalar(1 / 3);
+  }
+
+  private findWallFacesForCylinder(center: LoopPoint, radius: number): number[] {
+    if (radius <= 0) return [];
+
+    const minR = radius * 0.82;
+    const maxR = radius * 1.18;
+    const zMin = this.bounds.minZ - this.epsilon;
+    const zMax = this.bounds.maxZ + this.epsilon;
+    const faces: number[] = [];
+
+    for (let faceIndex = 0; faceIndex < this.faceCount; faceIndex++) {
+      const normal = this.faceNormals[faceIndex];
+      if (Math.abs(normal.z) > 0.35) continue;
+
+      const c = this.faceCentroid(faceIndex);
+      if (c.z < zMin || c.z > zMax) continue;
+
+      const dist = Math.hypot(c.x - center.x, c.y - center.y);
+      if (dist >= minR && dist <= maxR) {
+        faces.push(faceIndex);
+      }
+    }
+
+    return faces;
+  }
+
+  getWallFacesForHole(hole: { center: LoopPoint; radius: number; holeId?: number }): number[] {
+    if (hole.holeId !== undefined && hole.holeId >= 0) {
+      const feature = this.holes.find((h) => h.id === hole.holeId);
+      if (feature?.wallFaceIndices.length) return feature.wallFaceIndices;
+    }
+    return this.findWallFacesForCylinder(hole.center, hole.radius);
   }
 
   private computeBoundaryLoops(faceIndices: number[]): LoopPoint[][] {
@@ -459,6 +508,7 @@ export class MeshIndex {
           loop: inner,
           isVertical: true,
           regionId: region.id,
+          wallFaceIndices: this.findWallFacesForCylinder(fit.center, fit.radius),
         };
 
         if (!best || score < best.score) {
@@ -523,11 +573,8 @@ export class MeshIndex {
       const hole = this.findHoleAtPoint(point.x, point.y, operationType);
       if (!hole) return null;
 
-      const regionForHole =
-        hole.regionId >= 0 ? this.regions[hole.regionId] ?? region : region;
-
       return {
-        faceIndices: regionForHole.faceIndices,
+        faceIndices: hole.wallFaceIndices,
         loops: [hole.loop],
         holeId: hole.id >= 0 ? hole.id : undefined,
         outerLoop: null,

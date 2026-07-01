@@ -233,6 +233,17 @@ function StlMesh({
     if (!colorManager || !colorAttr) return;
 
     const nextSelected = new Set(activeGeometry?.faceIndices ?? []);
+    if (
+      (activeOperationType === 'drill' || activeOperationType === 'helix') &&
+      meshIndexRef.current
+    ) {
+      for (const hole of getSelectedHoles(activeGeometry)) {
+        for (const faceIndex of meshIndexRef.current.getWallFacesForHole(hole)) {
+          nextSelected.add(faceIndex);
+        }
+      }
+    }
+
     const hovered = new Set(prevHoveredFacesRef.current);
     const hoverColor =
       selectionSubMode === 'bottom-face' ? FACE_COLORS.hoverBottom : FACE_COLORS.hover;
@@ -247,7 +258,7 @@ function StlMesh({
     colorAttr.needsUpdate = true;
     prevSelectedRef.current = nextSelected;
     selectedFacesRef.current = nextSelected;
-  }, [activeGeometry?.faceIndices, selectedColor, selectionSubMode]);
+  }, [activeGeometry?.faceIndices, activeGeometry, activeOperationType, selectedColor, selectionSubMode]);
 
   useEffect(() => {
     prevSelectedRef.current = new Set();
