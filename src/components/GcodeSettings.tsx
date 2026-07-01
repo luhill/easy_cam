@@ -1,4 +1,5 @@
 import {
+  GCODE_OUTPUT_FORMATS,
   useSettingsStore,
   type GcodeTemplates,
 } from '../store/useSettingsStore';
@@ -32,7 +33,9 @@ const TEMPLATE_FIELDS: {
 
 export function GcodeSettings() {
   const gcodeTemplates = useSettingsStore((s) => s.gcodeTemplates);
+  const gcodeOutputFormat = useSettingsStore((s) => s.gcodeOutputFormat);
   const setGcodeTemplate = useSettingsStore((s) => s.setGcodeTemplate);
+  const setGcodeOutputFormat = useSettingsStore((s) => s.setGcodeOutputFormat);
   const resetGcodeTemplates = useSettingsStore((s) => s.resetGcodeTemplates);
 
   return (
@@ -43,6 +46,27 @@ export function GcodeSettings() {
       </div>
 
       <div className="gcode-settings-body">
+        <div className="setting-row gcode-format-row">
+          <label htmlFor="gcode-output-format">
+            <LabelWithHint hint="Target firmware dialect for exported programs. Additional formats will be added later.">
+              Output format
+            </LabelWithHint>
+          </label>
+          <select
+            id="gcode-output-format"
+            value={gcodeOutputFormat}
+            onChange={(e) =>
+              setGcodeOutputFormat(e.target.value as typeof gcodeOutputFormat)
+            }
+          >
+            {GCODE_OUTPUT_FORMATS.map(({ id, label }) => (
+              <option key={id} value={id}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </div>
+
         {TEMPLATE_FIELDS.map(({ key, label, hint, rows }) => (
           <div className="gcode-template-field" key={key}>
             <label htmlFor={`gcode-${key}`}>

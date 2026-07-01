@@ -1005,6 +1005,8 @@ function generatePathForOperation(
       return generatePocketPath(operation, ctx, globals);
     case 'contour':
       return generateContourPath(operation, ctx, globals);
+    case 'custom-gcode':
+      return [];
     default:
       return [];
   }

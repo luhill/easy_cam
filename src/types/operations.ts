@@ -4,7 +4,8 @@ export type OperationType =
   | 'drill'
   | 'helix'
   | 'pocket'
-  | 'contour';
+  | 'contour'
+  | 'custom-gcode';
 
 export interface OperationDefaults {
   toolDiameter: number;
@@ -80,6 +81,8 @@ export interface Operation {
   collapsed: boolean;
   settings: OperationDefaults;
   geometry: SelectedGeometry | null;
+  /** Raw G-code block inserted verbatim when this operation runs. */
+  customGcode?: string;
 }
 
 export interface OperationTemplate {
@@ -143,6 +146,12 @@ export const OPERATION_TEMPLATES: OperationTemplate[] = [
     description: '3D contour following surface',
     icon: '〜',
   },
+  {
+    type: 'custom-gcode',
+    label: 'Custom G-code',
+    description: 'Insert custom G-code into the program',
+    icon: '⌨',
+  },
 ];
 
 export const DEFAULT_SETTINGS: OperationDefaults = {
@@ -174,6 +183,7 @@ export const OPERATION_COLORS: Record<OperationType, string> = {
   helix: '#f59e0b',
   pocket: '#10b981',
   contour: '#06b6d4',
+  'custom-gcode': '#64748b',
 };
 
 export function getSelectionStrategy(type: OperationType): SelectionStrategy {
@@ -184,6 +194,8 @@ export function getSelectionStrategy(type: OperationType): SelectionStrategy {
     case 'drill':
     case 'helix':
       return 'point';
+    case 'custom-gcode':
+      return 'region';
     default:
       return 'region';
   }

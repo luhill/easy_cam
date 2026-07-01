@@ -174,12 +174,13 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
   };
 
   const supportsModelSelection =
-    operation.type === 'outline' ||
+    operation.type !== 'custom-gcode' &&
+    (operation.type === 'outline' ||
     operation.type === 'adaptive-outline' ||
     operation.type === 'drill' ||
     operation.type === 'helix' ||
     operation.type === 'pocket' ||
-    operation.type === 'contour';
+    operation.type === 'contour');
 
   if (!supportsModelSelection) return null;
 

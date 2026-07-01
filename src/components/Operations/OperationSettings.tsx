@@ -72,6 +72,38 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
   const updateOperationSettings = useAppStore((s) => s.updateOperationSettings);
   const updateOperation = useAppStore((s) => s.updateOperation);
 
+  if (operation.type === 'custom-gcode') {
+    return (
+      <div className="operation-settings">
+        <div className="setting-row">
+          <label>Name</label>
+          <input
+            type="text"
+            value={operation.name}
+            onChange={(e) => updateOperation(operation.id, { name: e.target.value })}
+          />
+        </div>
+        <div className="gcode-template-field custom-gcode-field">
+          <label htmlFor={`custom-gcode-${operation.id}`}>
+            <LabelWithHint hint="Marlin G-code inserted verbatim at this step in the exported program. One command per line.">
+              G-code
+            </LabelWithHint>
+          </label>
+          <textarea
+            id={`custom-gcode-${operation.id}`}
+            className="custom-gcode-textarea"
+            value={operation.customGcode ?? ''}
+            onChange={(e) =>
+              updateOperation(operation.id, { customGcode: e.target.value })
+            }
+            rows={12}
+            spellCheck={false}
+          />
+        </div>
+      </div>
+    );
+  }
+
   const fields =
     operation.type === 'adaptive-outline'
       ? [...BASE_FIELDS, ...ADAPTIVE_FIELDS]

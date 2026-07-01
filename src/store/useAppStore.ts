@@ -172,6 +172,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       collapsed: false,
       settings: clampOperationSettings({ ...DEFAULT_SETTINGS }),
       geometry: null,
+      ...(type === 'custom-gcode'
+        ? { customGcode: '; Custom G-code\n; Insert Marlin commands below\n' }
+        : {}),
     };
     set((state) => ({
       operations: [

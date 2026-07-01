@@ -8,6 +8,12 @@ import {
   DEFAULT_TRAVEL_FEED_RATE,
 } from '../lib/toolpathConfig';
 
+export type GcodeOutputFormat = 'marlin';
+
+export const GCODE_OUTPUT_FORMATS: { id: GcodeOutputFormat; label: string }[] = [
+  { id: 'marlin', label: 'Marlin' },
+];
+
 export interface GcodeTemplates {
   startGcode: string;
   endGcode: string;
@@ -38,6 +44,7 @@ M3 S{spindleSpeed} ; spindle on
 
 interface SettingsState {
   gcodeTemplates: GcodeTemplates;
+  gcodeOutputFormat: GcodeOutputFormat;
   toolOrigin: ToolOrigin;
   toolOriginAuto: boolean;
   safeHeight: number;
@@ -45,6 +52,7 @@ interface SettingsState {
   travelFeedRate: number;
   isometricProjection: boolean;
   setGcodeTemplate: (key: keyof GcodeTemplates, value: string) => void;
+  setGcodeOutputFormat: (format: GcodeOutputFormat) => void;
   resetGcodeTemplates: () => void;
   setToolOrigin: (origin: Partial<ToolOrigin>) => void;
   setToolOriginFromBounds: (bounds: PartBounds) => void;
@@ -59,6 +67,7 @@ export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
       gcodeTemplates: DEFAULT_GCODE_TEMPLATES,
+      gcodeOutputFormat: 'marlin',
       toolOrigin: { x: 0, y: 0, z: DEFAULT_WCS_Z_ABOVE_STOCK },
       toolOriginAuto: true,
       safeHeight: DEFAULT_SAFE_HEIGHT,
@@ -69,6 +78,7 @@ export const useSettingsStore = create<SettingsState>()(
         set((state) => ({
           gcodeTemplates: { ...state.gcodeTemplates, [key]: value },
         })),
+      setGcodeOutputFormat: (format) => set({ gcodeOutputFormat: format }),
       resetGcodeTemplates: () =>
         set({ gcodeTemplates: { ...DEFAULT_GCODE_TEMPLATES } }),
       setToolOrigin: (origin) =>
