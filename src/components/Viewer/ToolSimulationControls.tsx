@@ -1,8 +1,7 @@
-import { useMemo } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/useAppStore';
 import {
   buildSimulationTimeline,
-  sampleSimulationTimeline,
   stepSimulationDistance,
 } from '../../lib/toolpathSimulation';
 import { RangeWindowSlider } from './RangeWindowSlider';
@@ -24,26 +23,37 @@ export function ToolSimulationControls() {
   const setSimulationShowTool = useAppStore((s) => s.setSimulationShowTool);
   const resetSimulation = useAppStore((s) => s.resetSimulation);
 
+  const [scrubDistance, setScrubDistance] = useState<number | null>(null);
+  const scrubRafRef = useRef<number | null>(null);
+  const scrubTargetRef = useRef(0);
+
   const visiblePaths = useMemo(() => {
     const visibleIds = new Set(operations.filter((o) => o.visible).map((o) => o.id));
     return toolpaths.filter((tp) => visibleIds.has(tp.operationId));
   }, [toolpaths, operations]);
 
   const timeline = useMemo(() => buildSimulationTimeline(visiblePaths), [visiblePaths]);
-  const sample = useMemo(
-    () => sampleSimulationTimeline(timeline, simulationDistance),
-    [timeline, simulationDistance]
-  );
 
   if (!stlUrl || timeline.samples.length === 0) return null;
 
+  const displayDistance = scrubDistance ?? simulationDistance;
   const progress =
-    timeline.totalDistance > 0 ? (simulationDistance / timeline.totalDistance) * 100 : 0;
+    timeline.totalDistance > 0 ? (displayDistance / timeline.totalDistance) * 100 : 0;
   const windowStartDist = simulationWindowStart * timeline.totalDistance;
   const windowEndDist = simulationWindowEnd * timeline.totalDistance;
 
+  const commitScrubDistance = (distance: number) => {
+    scrubTargetRef.current = distance;
+    if (scrubRafRef.current !== null) return;
+    scrubRafRef.current = requestAnimationFrame(() => {
+      setSimulationDistance(scrubTargetRef.current);
+      scrubRafRef.current = null;
+    });
+  };
+
   const stepBy = (delta: number) => {
     setSimulationPlaying(false);
+    setScrubDistance(null);
     setSimulationDistance(stepSimulationDistance(timeline, simulationDistance, delta));
   };
 
@@ -51,7 +61,6 @@ export function ToolSimulationControls() {
     <div className="tool-simulation-controls">
       <div className="tool-simulation-header">
         <span className="tool-simulation-title">Tool Preview</span>
-        <span className="tool-simulation-mode">{sample?.rapid ? 'Rapid' : 'Cutting'}</span>
       </div>
       <div className="tool-simulation-buttons">
         <button
@@ -123,14 +132,18 @@ export function ToolSimulationControls() {
         max={100}
         step={0.05}
         value={progress}
+        onPointerDown={() => setSimulationPlaying(false)}
         onChange={(e) => {
-          setSimulationPlaying(false);
           const t = parseFloat(e.target.value) / 100;
-          setSimulationDistance(t * timeline.totalDistance);
+          const distance = t * timeline.totalDistance;
+          setScrubDistance(distance);
+          commitScrubDistance(distance);
         }}
+        onPointerUp={() => setScrubDistance(null)}
+        onPointerCancel={() => setScrubDistance(null)}
       />
       <div className="tool-simulation-meta">
-        <span>{simulationDistance.toFixed(1)} mm</span>
+        <span>{displayDistance.toFixed(1)} mm</span>
         <span>{progress.toFixed(0)}%</span>
       </div>
     </div>

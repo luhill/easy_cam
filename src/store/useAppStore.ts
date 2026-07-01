@@ -8,7 +8,8 @@ import type {
   ToolpathSegment,
 } from '../types/operations';
 import type { PartBounds } from '../lib/geometryProcessing';
-import { partBoundsEqual } from '../lib/geometryProcessing';
+import { partBoundsEqual, rotateSelectedGeometry, snapRotationDegrees } from '../lib/geometryProcessing';
+import { getPartTransformBridge } from '../lib/partTransformBridge';
 import {
   DEFAULT_SETTINGS,
   getOperationLabel,
@@ -35,6 +36,8 @@ interface AppState {
   selectionMode: boolean;
   selectionSubMode: SelectionSubMode;
   partBounds: PartBounds | null;
+  /** Part rotation around Z (degrees), snapped to 30° steps. */
+  partRotationZ: number;
   toolpaths: ToolpathSegment[];
   toolpathWarnings: string[];
   simulationDistance: number;
@@ -64,6 +67,7 @@ interface AppState {
   toggleOperationVisible: (id: string) => void;
   toggleOperationCollapsed: (id: string) => void;
   setPartBounds: (bounds: PartBounds | null) => void;
+  setPartRotationZ: (degrees: number) => void;
   regenerateToolpaths: () => void;
   setSimulationDistance: (distance: number) => void;
   setSimulationPlaying: (playing: boolean) => void;
@@ -82,6 +86,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectionMode: false,
   selectionSubMode: 'geometry',
   partBounds: null,
+  partRotationZ: 0,
   toolpaths: [],
   toolpathWarnings: [],
   simulationDistance: 0,
@@ -103,6 +108,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       toolpaths: [],
       toolpathWarnings: [],
       partBounds: null,
+      partRotationZ: 0,
       simulationDistance: 0,
       simulationPlaying: false,
       simulationWindowStart: 0,
@@ -121,6 +127,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       toolpaths: [],
       toolpathWarnings: [],
       partBounds: null,
+      partRotationZ: 0,
       simulationDistance: 0,
       simulationPlaying: false,
       simulationWindowStart: 0,
@@ -139,6 +146,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       toolpaths: [],
       toolpathWarnings: [],
       partBounds: null,
+      partRotationZ: 0,
       activeOperationId: null,
       simulationDistance: 0,
       simulationPlaying: false,
@@ -266,6 +274,29 @@ export const useAppStore = create<AppState>((set, get) => ({
   setPartBounds: (bounds) => {
     if (partBoundsEqual(get().partBounds, bounds)) return;
     set({ partBounds: bounds });
+    get().regenerateToolpaths();
+  },
+
+  setPartRotationZ: (degrees) => {
+    const snapped = snapRotationDegrees(degrees);
+    const prev = get().partRotationZ;
+    let delta = snapped - prev;
+    if (delta > 180) delta -= 360;
+    if (delta < -180) delta += 360;
+
+    if (Math.abs(delta) < 1e-6 && snapped === prev) return;
+
+    const bridge = getPartTransformBridge();
+    if (!bridge) return;
+
+    set((state) => ({
+      partRotationZ: snapped,
+      operations: state.operations.map((op) =>
+        op.geometry ? { ...op, geometry: rotateSelectedGeometry(op.geometry, delta) } : op
+      ),
+    }));
+
+    bridge.applyRotationZ(snapped);
     get().regenerateToolpaths();
   },
 

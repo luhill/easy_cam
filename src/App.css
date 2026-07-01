@@ -646,6 +646,71 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.part-rotation-control {
+  margin-bottom: 12px;
+}
+
+.part-rotation-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.part-rotation-header label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.part-rotation-value {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.part-rotation-slider {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.operation-time-estimate {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-primary);
+  font-size: 12px;
+}
+
+.operation-time-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+}
+
+.operation-time-value {
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.operation-time-meta {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 .viewer-axis-hint {
   font-size: 12px;
   color: var(--text-muted);

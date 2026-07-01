@@ -5,6 +5,7 @@ import { OperationList } from './Operations/OperationList';
 import { ToolOriginSettings } from './ToolOriginSettings';
 import { GlobalCamSettings } from './GlobalCamSettings';
 import { GcodeSettings } from './GcodeSettings';
+import { OperationTimeEstimate } from './OperationTimeEstimate';
 
 type SidebarTab = 'part' | 'operations' | 'settings';
 
@@ -45,6 +46,7 @@ export function Sidebar() {
           <div className="sidebar-tab-content sidebar-tab-content--operations">
             <OperationPalette />
             <OperationList />
+            <OperationTimeEstimate />
           </div>
         )}
 

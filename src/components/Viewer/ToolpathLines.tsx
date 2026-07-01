@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import * as THREE from 'three';
 import type { ToolpathSegment } from '../../types/operations';
 
@@ -9,7 +9,7 @@ interface ToolpathLinesProps {
   segments: ToolpathSegment[];
 }
 
-function PathLine({ segment }: { segment: ToolpathSegment }) {
+const PathLine = memo(function PathLine({ segment }: { segment: ToolpathSegment }) {
   const geometry = useMemo(() => {
     const positions: number[] = [];
     const colors: number[] = [];
@@ -39,7 +39,7 @@ function PathLine({ segment }: { segment: ToolpathSegment }) {
       <lineBasicMaterial vertexColors linewidth={2} />
     </lineSegments>
   );
-}
+});
 
 export function ToolpathLines({ segments }: ToolpathLinesProps) {
   return (

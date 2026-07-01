@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { useAppStore } from '../../store/useAppStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { OPERATION_COLORS, getSelectedHoles } from '../../types/operations';
-import type { LoopPoint, OperationType } from '../../types/operations';
+import type { LoopPoint, OperationType, ToolpathSegment } from '../../types/operations';
 import {
   createFaceColorAttribute,
   FaceColorManager,
@@ -35,12 +35,11 @@ import {
 } from '../../lib/meshSelection';
 import { ToolpathLines } from './ToolpathLines';
 import { DebugGuideLines } from './DebugGuideLines';
-import { ToolPreview, ToolSimulationDriver } from './ToolPreview';
+import { ToolPreviewLive, ToolSimulationDriver } from './ToolPreview';
 import { ToolSimulationControls } from './ToolSimulationControls';
 import {
   buildSimulationTimeline,
   filterToolpathSegmentsByDistance,
-  sampleSimulationTimeline,
   pickPreviewToolDiameter,
   PREVIEW_RAPID_FEED,
 } from '../../lib/toolpathSimulation';
@@ -86,10 +85,17 @@ interface StlMeshProps {
   processedMesh: ProcessedMesh;
   meshKey: number;
   onMeshUpdate: (mesh: ProcessedMesh) => void;
+  onOrientationCommitted: (geometry: THREE.BufferGeometry) => void;
   onIndexReady: (ready: boolean, regionCount?: number) => void;
 }
 
-function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMeshProps) {
+function StlMesh({
+  processedMesh,
+  meshKey,
+  onMeshUpdate,
+  onOrientationCommitted,
+  onIndexReady,
+}: StlMeshProps) {
   const activeOperationId = useAppStore((s) => s.activeOperationId);
   const selectionMode = useAppStore((s) => s.selectionMode);
   const selectionSubMode = useAppStore((s) => s.selectionSubMode);
@@ -330,11 +336,17 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
       const newMesh = finalizePartPlacement(rotated);
       createFaceColorAttribute(newMesh.geometry);
 
+      onOrientationCommitted(newMesh.geometry);
       onMeshUpdate(newMesh);
       setSelectionMode(false);
+
+      useAppStore.setState({
+        partRotationZ: 0,
+        operations: useAppStore.getState().operations.map((op) => ({ ...op, geometry: null })),
+      });
       regenerateToolpaths();
     },
-    [processedGeometry, onMeshUpdate, setSelectionMode, regenerateToolpaths]
+    [processedGeometry, onMeshUpdate, onOrientationCommitted, setSelectionMode, regenerateToolpaths]
   );
 
   const applyGeometrySelection = useCallback(
@@ -508,29 +520,76 @@ function StlMesh({ processedMesh, meshKey, onMeshUpdate, onIndexReady }: StlMesh
   );
 }
 
+function ToolpathWindow({
+  visiblePaths,
+  totalDistance,
+  windowStart,
+  windowEnd,
+}: {
+  visiblePaths: ToolpathSegment[];
+  totalDistance: number;
+  windowStart: number;
+  windowEnd: number;
+}) {
+  const previewPaths = useMemo(() => {
+    const isFullWindow = windowStart <= 1e-4 && windowEnd >= 1 - 1e-4;
+    if (isFullWindow) return visiblePaths;
+    const start = windowStart * totalDistance;
+    const end = windowEnd * totalDistance;
+    return filterToolpathSegmentsByDistance(visiblePaths, start, end);
+  }, [visiblePaths, totalDistance, windowStart, windowEnd]);
+
+  return <ToolpathLines segments={previewPaths} />;
+}
+
+function SimulationLayer({
+  timeline,
+  previewFeedRate,
+  previewToolDiameter,
+}: {
+  timeline: ReturnType<typeof buildSimulationTimeline>;
+  previewFeedRate: number;
+  previewToolDiameter: number;
+}) {
+  const simulationPlaying = useAppStore((s) => s.simulationPlaying);
+  const simulationSpeed = useAppStore((s) => s.simulationSpeed);
+
+  if (timeline.samples.length === 0) return null;
+
+  return (
+    <>
+      <ToolPreviewLive timeline={timeline} toolDiameter={previewToolDiameter} />
+      <ToolSimulationDriver
+        playing={simulationPlaying}
+        speed={simulationSpeed}
+        feedRate={previewFeedRate}
+        rapidFeedRate={PREVIEW_RAPID_FEED}
+        timeline={timeline}
+        timelineLength={timeline.totalDistance}
+      />
+    </>
+  );
+}
+
 function SceneContent({
   processedMesh,
   meshKey,
   onMeshUpdate,
+  onOrientationCommitted,
   onIndexReady,
 }: {
   processedMesh: ProcessedMesh;
   meshKey: number;
   onMeshUpdate: (mesh: ProcessedMesh) => void;
+  onOrientationCommitted: (geometry: THREE.BufferGeometry) => void;
   onIndexReady: (ready: boolean, regionCount?: number) => void;
 }) {
   const toolpaths = useAppStore((s) => s.toolpaths);
   const operations = useAppStore((s) => s.operations);
   const selectionMode = useAppStore((s) => s.selectionMode);
   const selectionSubMode = useAppStore((s) => s.selectionSubMode);
-  const simulationDistance = useAppStore((s) => s.simulationDistance);
-  const simulationPlaying = useAppStore((s) => s.simulationPlaying);
-  const simulationSpeed = useAppStore((s) => s.simulationSpeed);
   const simulationWindowStart = useAppStore((s) => s.simulationWindowStart);
   const simulationWindowEnd = useAppStore((s) => s.simulationWindowEnd);
-  const simulationShowTool = useAppStore((s) => s.simulationShowTool);
-  const setSimulationDistance = useAppStore((s) => s.setSimulationDistance);
-  const setSimulationPlaying = useAppStore((s) => s.setSimulationPlaying);
   const activeOperationId = useAppStore((s) => s.activeOperationId);
   const partBounds = useAppStore((s) => s.partBounds);
   const toolOrigin = useSettingsStore((s) => s.toolOrigin);
@@ -538,8 +597,6 @@ function SceneContent({
   const updateOperation = useAppStore((s) => s.updateOperation);
   const toolpathResolution = useSettingsStore((s) => s.toolpathResolution);
   const { camera } = useThree();
-  const simulationDistanceRef = useRef(simulationDistance);
-  simulationDistanceRef.current = simulationDistance;
 
   const boundsKey = partBounds
     ? `${partBounds.minX}:${partBounds.maxX}:${partBounds.minY}:${partBounds.maxY}:${partBounds.minZ}:${partBounds.maxZ}`
@@ -560,38 +617,6 @@ function SceneContent({
     () => buildSimulationTimeline(visiblePaths),
     [visiblePaths]
   );
-
-  const previewPaths = useMemo(() => {
-    const isFullWindow =
-      simulationWindowStart <= 1e-4 && simulationWindowEnd >= 1 - 1e-4;
-    if (isFullWindow) return visiblePaths;
-    const start = simulationWindowStart * simulationTimeline.totalDistance;
-    const end = simulationWindowEnd * simulationTimeline.totalDistance;
-    return filterToolpathSegmentsByDistance(visiblePaths, start, end);
-  }, [
-    visiblePaths,
-    simulationTimeline.totalDistance,
-    simulationWindowStart,
-    simulationWindowEnd,
-  ]);
-
-  const simulationSample = useMemo(
-    () => sampleSimulationTimeline(simulationTimeline, simulationDistance),
-    [simulationTimeline, simulationDistance]
-  );
-
-  const toolInPreviewWindow = useMemo(() => {
-    const total = simulationTimeline.totalDistance;
-    if (total <= 0) return true;
-    const start = simulationWindowStart * total;
-    const end = simulationWindowEnd * total;
-    return simulationDistance >= start - 1e-6 && simulationDistance <= end + 1e-6;
-  }, [
-    simulationTimeline.totalDistance,
-    simulationWindowStart,
-    simulationWindowEnd,
-    simulationDistance,
-  ]);
 
   const previewToolDiameter = useMemo(
     () => pickPreviewToolDiameter(operations, visiblePaths),
@@ -720,9 +745,15 @@ function SceneContent({
         processedMesh={processedMesh}
         meshKey={meshKey}
         onMeshUpdate={onMeshUpdate}
+        onOrientationCommitted={onOrientationCommitted}
         onIndexReady={onIndexReady}
       />
-      <ToolpathLines segments={previewPaths} />
+      <ToolpathWindow
+        visiblePaths={visiblePaths}
+        totalDistance={simulationTimeline.totalDistance}
+        windowStart={simulationWindowStart}
+        windowEnd={simulationWindowEnd}
+      />
       {adaptiveDebugGuides && (
         <DebugGuideLines
           slotCenterline={adaptiveDebugGuides.slotCenterline}
@@ -741,27 +772,10 @@ function SceneContent({
           onSlotJoinChange={handleSlotJoinChange}
         />
       )}
-      {toolInPreviewWindow && (
-        <ToolPreview
-          sample={simulationSample}
-          toolDiameter={previewToolDiameter}
-          showTool={simulationShowTool}
-        />
-      )}
-      <ToolSimulationDriver
-        playing={simulationPlaying}
-        speed={simulationSpeed}
-        feedRate={previewFeedRate}
-        rapidFeedRate={PREVIEW_RAPID_FEED}
+      <SimulationLayer
         timeline={simulationTimeline}
-        timelineLength={simulationTimeline.totalDistance}
-        onDistanceChange={(distance) => {
-          setSimulationDistance(distance);
-          if (distance >= simulationTimeline.totalDistance) {
-            setSimulationPlaying(false);
-          }
-        }}
-        getDistance={() => simulationDistanceRef.current}
+        previewFeedRate={previewFeedRate}
+        previewToolDiameter={previewToolDiameter}
       />
       <ToolOriginMarker origin={toolOrigin} stockTopWorldZ={partBounds?.maxZ ?? 0} />
       <OrbitControls
@@ -804,7 +818,8 @@ export function StlViewer() {
     return s.operations.find((o) => o.id === id)?.type ?? null;
   });
 
-  const { processedMesh, meshKey, loading, loadError, updateMesh } = useProcessedStl(stlUrl);
+  const { processedMesh, meshKey, loading, loadError, updateMesh, commitOrientationSource } =
+    useProcessedStl(stlUrl);
 
   const visiblePaths = useMemo(() => {
     const visibleIds = new Set(operations.filter((o) => o.visible).map((o) => o.id));
@@ -905,6 +920,7 @@ export function StlViewer() {
             processedMesh={processedMesh}
             meshKey={meshKey}
             onMeshUpdate={updateMesh}
+            onOrientationCommitted={commitOrientationSource}
             onIndexReady={handleIndexReady}
           />
         </Canvas>

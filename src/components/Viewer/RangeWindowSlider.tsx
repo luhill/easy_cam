@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 interface RangeWindowSliderProps {
   start: number;
@@ -24,6 +24,28 @@ export function RangeWindowSlider({ start, end, onChange }: RangeWindowSliderPro
     | { mode: 'start' | 'end' | 'window'; start0: number; end0: number; originFrac: number }
     | null
   >(null);
+  const [localStart, setLocalStart] = useState(start);
+  const [localEnd, setLocalEnd] = useState(end);
+  const localRef = useRef({ start, end });
+  const draggingRef = useRef(false);
+
+  useEffect(() => {
+    if (!draggingRef.current) {
+      setLocalStart(start);
+      setLocalEnd(end);
+      localRef.current = { start, end };
+    }
+  }, [start, end]);
+
+  const displayStart = localStart;
+  const displayEnd = localEnd;
+
+  const applyLocal = (nextStart: number, nextEnd: number) => {
+    const [s, e] = clampWindow(nextStart, nextEnd);
+    setLocalStart(s);
+    setLocalEnd(e);
+    localRef.current = { start: s, end: e };
+  };
 
   const fractionFromEvent = useCallback((clientX: number) => {
     const track = trackRef.current;
@@ -36,10 +58,11 @@ export function RangeWindowSlider({ start, end, onChange }: RangeWindowSliderPro
   const onPointerDown =
     (mode: 'start' | 'end' | 'window') => (event: React.PointerEvent<HTMLDivElement>) => {
       event.preventDefault();
+      draggingRef.current = true;
       dragRef.current = {
         mode,
-        start0: start,
-        end0: end,
+        start0: localRef.current.start,
+        end0: localRef.current.end,
         originFrac: fractionFromEvent(event.clientX),
       };
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -51,13 +74,11 @@ export function RangeWindowSlider({ start, end, onChange }: RangeWindowSliderPro
     const frac = fractionFromEvent(event.clientX);
 
     if (drag.mode === 'start') {
-      const [s, e] = clampWindow(frac, end);
-      onChange(s, e);
+      applyLocal(frac, localRef.current.end);
       return;
     }
     if (drag.mode === 'end') {
-      const [s, e] = clampWindow(start, frac);
-      onChange(s, e);
+      applyLocal(localRef.current.start, frac);
       return;
     }
 
@@ -73,12 +94,18 @@ export function RangeWindowSlider({ start, end, onChange }: RangeWindowSliderPro
       nextEnd = 1;
       nextStart = 1 - width;
     }
-    onChange(...clampWindow(nextStart, nextEnd));
+    const [s, e] = clampWindow(nextStart, nextEnd);
+    applyLocal(s, e);
   };
 
   const onPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
     dragRef.current = null;
+    draggingRef.current = false;
     event.currentTarget.releasePointerCapture(event.pointerId);
+    if (drag) {
+      onChange(localRef.current.start, localRef.current.end);
+    }
   };
 
   return (
@@ -92,28 +119,28 @@ export function RangeWindowSlider({ start, end, onChange }: RangeWindowSliderPro
       <div className="range-window-track" />
       <div
         className="range-window-selection"
-        style={{ left: `${start * 100}%`, width: `${(end - start) * 100}%` }}
+        style={{ left: `${displayStart * 100}%`, width: `${(displayEnd - displayStart) * 100}%` }}
         onPointerDown={onPointerDown('window')}
       />
       <div
         className="range-window-handle range-window-handle--start"
-        style={{ left: `${start * 100}%` }}
+        style={{ left: `${displayStart * 100}%` }}
         onPointerDown={onPointerDown('start')}
         role="slider"
         aria-label="Preview range start"
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={Math.round(start * 100)}
+        aria-valuenow={Math.round(displayStart * 100)}
       />
       <div
         className="range-window-handle range-window-handle--end"
-        style={{ left: `${end * 100}%` }}
+        style={{ left: `${displayEnd * 100}%` }}
         onPointerDown={onPointerDown('end')}
         role="slider"
         aria-label="Preview range end"
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={Math.round(end * 100)}
+        aria-valuenow={Math.round(displayEnd * 100)}
       />
     </div>
   );
