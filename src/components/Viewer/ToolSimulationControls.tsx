@@ -10,6 +10,8 @@ import {
   clearLiveSimulationDistance,
   commitLiveSimulationDistance,
   getEffectiveSimulationDistance,
+  getEffectiveSimulationWindow,
+  hasLiveSimulationOverride,
   setLiveSimulationDistance,
   syncLiveSimulationDistanceFromStore,
 } from '../../lib/simulationLiveBridge';
@@ -33,7 +35,13 @@ export function ToolSimulationControls() {
   const resetSimulation = useAppStore((s) => s.resetSimulation);
 
   const [displayDistance, setDisplayDistance] = useState(0);
+  const [displayWindow, setDisplayWindow] = useState({
+    start: simulationWindowStart,
+    end: simulationWindowEnd,
+  });
   const scrubbingRef = useRef(false);
+  const windowDraggingRef = useRef(false);
+  const lastDisplayRef = useRef({ distance: 0, start: 0, end: 0 });
 
   const visiblePaths = useMemo(() => {
     const visibleIds = new Set(operations.filter((o) => o.visible).map((o) => o.id));
@@ -44,23 +52,57 @@ export function ToolSimulationControls() {
 
   const windowDistances = useMemo(
     () =>
-      previewWindowDistances(
-        timeline.totalDistance,
-        simulationWindowStart,
-        simulationWindowEnd
-      ),
-    [timeline.totalDistance, simulationWindowStart, simulationWindowEnd]
+      previewWindowDistances(timeline.totalDistance, displayWindow.start, displayWindow.end),
+    [timeline.totalDistance, displayWindow.start, displayWindow.end]
   );
 
   useEffect(() => {
     syncLiveSimulationDistanceFromStore();
+    const w = getEffectiveSimulationWindow();
+    setDisplayWindow(w);
     setDisplayDistance(getEffectiveSimulationDistance());
   }, [timeline.totalDistance]);
 
   useEffect(() => {
-    if (scrubbingRef.current || simulationPlaying) return;
+    setDisplayWindow({ start: simulationWindowStart, end: simulationWindowEnd });
+  }, [simulationWindowStart, simulationWindowEnd]);
+
+  useEffect(() => {
+    if (scrubbingRef.current || simulationPlaying || windowDraggingRef.current) return;
     setDisplayDistance(simulationDistance);
   }, [simulationDistance, simulationPlaying]);
+
+  useEffect(() => {
+    let frameId = 0;
+
+    const tick = () => {
+      const active =
+        simulationPlaying ||
+        scrubbingRef.current ||
+        windowDraggingRef.current ||
+        hasLiveSimulationOverride();
+
+      if (active) {
+        const distance = getEffectiveSimulationDistance();
+        const window = getEffectiveSimulationWindow();
+        const last = lastDisplayRef.current;
+        if (
+          Math.abs(distance - last.distance) > 1e-4 ||
+          Math.abs(window.start - last.start) > 1e-6 ||
+          Math.abs(window.end - last.end) > 1e-6
+        ) {
+          lastDisplayRef.current = { distance, start: window.start, end: window.end };
+          setDisplayDistance(distance);
+          setDisplayWindow(window);
+        }
+      }
+
+      frameId = requestAnimationFrame(tick);
+    };
+
+    frameId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frameId);
+  }, [simulationPlaying]);
 
   useEffect(() => {
     const clamped = clampDistanceToWindow(
@@ -70,22 +112,13 @@ export function ToolSimulationControls() {
     );
     if (Math.abs(clamped - getEffectiveSimulationDistance()) > 1e-6) {
       setLiveSimulationDistance(clamped);
-      setSimulationDistance(clamped);
-      clearLiveSimulationDistance();
+      if (!windowDraggingRef.current && !scrubbingRef.current) {
+        setSimulationDistance(clamped);
+        clearLiveSimulationDistance();
+      }
       setDisplayDistance(clamped);
     }
   }, [windowDistances.start, windowDistances.end, setSimulationDistance]);
-
-  useEffect(() => {
-    if (!simulationPlaying) return;
-    let frameId = 0;
-    const tick = () => {
-      setDisplayDistance(getEffectiveSimulationDistance());
-      frameId = requestAnimationFrame(tick);
-    };
-    frameId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frameId);
-  }, [simulationPlaying]);
 
   if (!stlUrl || timeline.samples.length === 0) return null;
 
@@ -106,6 +139,7 @@ export function ToolSimulationControls() {
     setSimulationDistance(clamped);
     clearLiveSimulationDistance();
     setDisplayDistance(clamped);
+    setDisplayWindow({ start, end });
   };
 
   const stepBy = (delta: number) => {
@@ -174,9 +208,11 @@ export function ToolSimulationControls() {
           className="btn btn-small btn-secondary"
           onClick={() => {
             scrubbingRef.current = false;
+            windowDraggingRef.current = false;
             clearLiveSimulationDistance();
             resetSimulation();
             setDisplayDistance(0);
+            setDisplayWindow({ start: 0, end: 1 });
           }}
         >
           Reset
@@ -208,12 +244,15 @@ export function ToolSimulationControls() {
         start={simulationWindowStart}
         end={simulationWindowEnd}
         onChange={handleWindowChange}
+        onDraggingChange={(dragging) => {
+          windowDraggingRef.current = dragging;
+        }}
       />
       <div className="tool-simulation-meta tool-simulation-window-meta">
         <span>
           {windowStartDist.toFixed(1)}–{windowEndDist.toFixed(1)} mm
         </span>
-        <span>{((simulationWindowEnd - simulationWindowStart) * 100).toFixed(0)}% of path</span>
+        <span>{((displayWindow.end - displayWindow.start) * 100).toFixed(0)}% of path</span>
       </div>
       <input
         type="range"

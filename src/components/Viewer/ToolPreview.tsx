@@ -4,15 +4,16 @@ import * as THREE from 'three';
 import { useAppStore } from '../../store/useAppStore';
 import type { SimulationTimeline } from '../../lib/toolpathSimulation';
 import {
+  previewWindowDistances,
+  sampleSimulationTimeline,
+} from '../../lib/toolpathSimulation';
+import {
   getEffectiveSimulationDistance,
+  getEffectiveSimulationWindow,
   setLiveSimulationDistance,
   clearLiveSimulationDistance,
   commitLiveSimulationDistance,
 } from '../../lib/simulationLiveBridge';
-import {
-  previewWindowDistances,
-  sampleSimulationTimeline,
-} from '../../lib/toolpathSimulation';
 
 interface ToolPreviewLiveProps {
   timeline: SimulationTimeline;
@@ -33,10 +34,11 @@ export function ToolPreviewLive({ timeline, toolDiameter }: ToolPreviewLiveProps
     const group = groupRef.current;
     if (!group || timeline.samples.length === 0) return;
 
-    const { simulationWindowStart, simulationWindowEnd, simulationShowTool } =
-      useAppStore.getState();
-
     const distance = getEffectiveSimulationDistance();
+    const { start: simulationWindowStart, end: simulationWindowEnd } =
+      getEffectiveSimulationWindow();
+    const { simulationShowTool } = useAppStore.getState();
+
     const { start, end } = previewWindowDistances(
       timeline.totalDistance,
       simulationWindowStart,
@@ -117,10 +119,11 @@ export function ToolSimulationDriver({
     if (!playing || timeline.totalDistance <= 0) return;
 
     const store = useAppStore.getState();
+    const { start: windowStart, end: windowEnd } = getEffectiveSimulationWindow();
     const { end } = previewWindowDistances(
       timeline.totalDistance,
-      store.simulationWindowStart,
-      store.simulationWindowEnd
+      windowStart,
+      windowEnd
     );
 
     const current = getEffectiveSimulationDistance();

@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  clearLiveSimulationWindow,
+  setLiveSimulationWindow,
+  syncLiveSimulationWindowFromStore,
+} from '../../lib/simulationLiveBridge';
 
 interface RangeWindowSliderProps {
   start: number;
   end: number;
   onChange: (start: number, end: number) => void;
+  onDraggingChange?: (dragging: boolean) => void;
 }
 
 const MIN_GAP = 0.02;
@@ -18,7 +24,12 @@ function clampWindow(start: number, end: number): [number, number] {
   return [s, e];
 }
 
-export function RangeWindowSlider({ start, end, onChange }: RangeWindowSliderProps) {
+export function RangeWindowSlider({
+  start,
+  end,
+  onChange,
+  onDraggingChange,
+}: RangeWindowSliderProps) {
   const trackRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<
     | { mode: 'start' | 'end' | 'window'; start0: number; end0: number; originFrac: number }
@@ -37,14 +48,12 @@ export function RangeWindowSlider({ start, end, onChange }: RangeWindowSliderPro
     }
   }, [start, end]);
 
-  const displayStart = localStart;
-  const displayEnd = localEnd;
-
   const applyLocal = (nextStart: number, nextEnd: number) => {
     const [s, e] = clampWindow(nextStart, nextEnd);
     setLocalStart(s);
     setLocalEnd(e);
     localRef.current = { start: s, end: e };
+    setLiveSimulationWindow(s, e);
   };
 
   const fractionFromEvent = useCallback((clientX: number) => {
@@ -59,6 +68,8 @@ export function RangeWindowSlider({ start, end, onChange }: RangeWindowSliderPro
     (mode: 'start' | 'end' | 'window') => (event: React.PointerEvent<HTMLDivElement>) => {
       event.preventDefault();
       draggingRef.current = true;
+      onDraggingChange?.(true);
+      syncLiveSimulationWindowFromStore();
       dragRef.current = {
         mode,
         start0: localRef.current.start,
@@ -101,10 +112,13 @@ export function RangeWindowSlider({ start, end, onChange }: RangeWindowSliderPro
   const onPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
     dragRef.current = null;
+    const wasDragging = draggingRef.current;
     draggingRef.current = false;
+    onDraggingChange?.(false);
     event.currentTarget.releasePointerCapture(event.pointerId);
-    if (drag) {
+    if (drag && wasDragging) {
       onChange(localRef.current.start, localRef.current.end);
+      clearLiveSimulationWindow();
     }
   };
 
@@ -119,28 +133,28 @@ export function RangeWindowSlider({ start, end, onChange }: RangeWindowSliderPro
       <div className="range-window-track" />
       <div
         className="range-window-selection"
-        style={{ left: `${displayStart * 100}%`, width: `${(displayEnd - displayStart) * 100}%` }}
+        style={{ left: `${localStart * 100}%`, width: `${(localEnd - localStart) * 100}%` }}
         onPointerDown={onPointerDown('window')}
       />
       <div
         className="range-window-handle range-window-handle--start"
-        style={{ left: `${displayStart * 100}%` }}
+        style={{ left: `${localStart * 100}%` }}
         onPointerDown={onPointerDown('start')}
         role="slider"
         aria-label="Preview range start"
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={Math.round(displayStart * 100)}
+        aria-valuenow={Math.round(localStart * 100)}
       />
       <div
         className="range-window-handle range-window-handle--end"
-        style={{ left: `${displayEnd * 100}%` }}
+        style={{ left: `${localEnd * 100}%` }}
         onPointerDown={onPointerDown('end')}
         role="slider"
         aria-label="Preview range end"
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={Math.round(displayEnd * 100)}
+        aria-valuenow={Math.round(localEnd * 100)}
       />
     </div>
   );

@@ -60,6 +60,7 @@ import { registerViewerCameraBridge, setTopDownHomeView, goToViewerHome } from '
 import { WebGLFallback } from './WebGLFallback';
 import { Viewer2D } from './Viewer2D';
 import { useProcessedStl } from '../../hooks/useProcessedStl';
+import { getEffectiveSimulationWindow } from '../../lib/simulationLiveBridge';
 
 function fitCameraToPartBounds(camera: THREE.PerspectiveCamera, bounds: PartBounds | null): void {
   if (!bounds) {
@@ -522,24 +523,32 @@ function StlMesh({
   );
 }
 
-function ToolpathWindow({
+function ToolpathWindowLive({
   visiblePaths,
   totalDistance,
-  windowStart,
-  windowEnd,
 }: {
   visiblePaths: ToolpathSegment[];
   totalDistance: number;
-  windowStart: number;
-  windowEnd: number;
 }) {
+  const [windowFrac, setWindowFrac] = useState(getEffectiveSimulationWindow);
+  const lastKeyRef = useRef('');
+
+  useFrame(() => {
+    const w = getEffectiveSimulationWindow();
+    const key = `${w.start}:${w.end}`;
+    if (key !== lastKeyRef.current) {
+      lastKeyRef.current = key;
+      setWindowFrac(w);
+    }
+  });
+
   const previewPaths = useMemo(() => {
-    const isFullWindow = windowStart <= 1e-4 && windowEnd >= 1 - 1e-4;
+    const isFullWindow = windowFrac.start <= 1e-4 && windowFrac.end >= 1 - 1e-4;
     if (isFullWindow) return visiblePaths;
-    const start = windowStart * totalDistance;
-    const end = windowEnd * totalDistance;
+    const start = windowFrac.start * totalDistance;
+    const end = windowFrac.end * totalDistance;
     return filterToolpathSegmentsByDistance(visiblePaths, start, end);
-  }, [visiblePaths, totalDistance, windowStart, windowEnd]);
+  }, [visiblePaths, totalDistance, windowFrac.start, windowFrac.end]);
 
   return <ToolpathLines segments={previewPaths} />;
 }
@@ -589,8 +598,6 @@ function SceneContent({
   const operations = useAppStore((s) => s.operations);
   const selectionMode = useAppStore((s) => s.selectionMode);
   const selectionSubMode = useAppStore((s) => s.selectionSubMode);
-  const simulationWindowStart = useAppStore((s) => s.simulationWindowStart);
-  const simulationWindowEnd = useAppStore((s) => s.simulationWindowEnd);
   const activeOperationId = useAppStore((s) => s.activeOperationId);
   const partBounds = useAppStore((s) => s.partBounds);
   const toolOrigin = useSettingsStore((s) => s.toolOrigin);
@@ -763,11 +770,9 @@ function SceneContent({
         onOrientationCommitted={onOrientationCommitted}
         onIndexReady={onIndexReady}
       />
-      <ToolpathWindow
+      <ToolpathWindowLive
         visiblePaths={visiblePaths}
         totalDistance={simulationTimeline.totalDistance}
-        windowStart={simulationWindowStart}
-        windowEnd={simulationWindowEnd}
       />
       {adaptiveDebugGuides && (
         <DebugGuideLines
