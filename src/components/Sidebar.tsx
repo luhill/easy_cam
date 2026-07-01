@@ -12,7 +12,7 @@ type SidebarTab = 'part' | 'operations' | 'settings';
 const TABS: { id: SidebarTab; label: string; title: string }[] = [
   { id: 'part', label: 'Part', title: 'Part setup' },
   { id: 'operations', label: 'Ops', title: 'Operations' },
-  { id: 'settings', label: 'Set', title: 'Settings' },
+  { id: 'settings', label: 'Settings', title: 'Settings' },
 ];
 
 export function Sidebar() {

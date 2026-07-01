@@ -47,6 +47,8 @@ export interface FourZoneParams {
   /** First orbit sample already cut by entry spiral — omit duplicate at phase 0. */
   omitFirstOrbitSample?: boolean;
   feedRate?: number;
+  /** Feed rate for return/lift segments within a micro-loop. */
+  travelFeedRate?: number;
   sampleSpacing?: number;
   /** Points per trochoid orbit; scales with global toolpath resolution. */
   orbitStepsPerRev?: number;
@@ -272,7 +274,15 @@ function generateTrochoidAlongGuide(
   params: FourZoneParams
 ): ToolpathPoint[] {
   const stepover = params.forwardIncrement;
-  const { slotClearance, z: zCut, liftAmount = 0, rotSign = -1, guideSign = 1, feedRate } = params;
+  const {
+    slotClearance,
+    z: zCut,
+    liftAmount = 0,
+    rotSign = -1,
+    guideSign = 1,
+    feedRate,
+    travelFeedRate,
+  } = params;
 
   if (totalLength <= 0 || stepover <= 0 || slotClearance <= 0) return [];
 
@@ -430,8 +440,12 @@ function generateTrochoidAlongGuide(
       const c = clampToolCenterMinDistanceFromPart(partLoop, pt.x, pt.y, minCenterDist);
       pt = { ...pt, x: c.x, y: c.y };
     }
-    if (rapid) pt = { ...pt, rapid: true };
-    if (feedRate !== undefined && !rapid) pt = { ...pt, feedRate };
+    if (rapid) {
+      if (travelFeedRate !== undefined) pt = { ...pt, feedRate: travelFeedRate };
+      else pt = { ...pt, rapid: true };
+    } else if (feedRate !== undefined) {
+      pt = { ...pt, feedRate };
+    }
     if (spurState) pt = { ...pt, onSpur: true };
 
     if (skipDuplicate) return;

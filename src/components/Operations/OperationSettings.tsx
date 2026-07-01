@@ -38,7 +38,6 @@ const ADAPTIVE_FIELDS: typeof BASE_FIELDS = [
   { key: 'boreDiameterPercent', label: 'Bore Diameter', unit: '% of tool ⌀', step: 5 },
   { key: 'helixAngleDeg', label: 'Helix Pitch Angle', unit: '°', step: 0.1 },
   { key: 'boreTaperAngleDeg', label: 'Bore Taper', unit: '°', step: 0.5 },
-  { key: 'helixFeedRate', label: 'Helix Feed Rate', unit: 'mm/min', step: 25 },
 ];
 
 const DEPTH_HINT =

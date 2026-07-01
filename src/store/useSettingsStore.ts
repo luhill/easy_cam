@@ -5,6 +5,7 @@ import { DEFAULT_WCS_Z_ABOVE_STOCK } from '../lib/cutDepth';
 import {
   DEFAULT_SAFE_HEIGHT,
   DEFAULT_TOOLPATH_RESOLUTION,
+  DEFAULT_TRAVEL_FEED_RATE,
 } from '../lib/toolpathConfig';
 
 export interface GcodeTemplates {
@@ -41,6 +42,7 @@ interface SettingsState {
   toolOriginAuto: boolean;
   safeHeight: number;
   toolpathResolution: number;
+  travelFeedRate: number;
   setGcodeTemplate: (key: keyof GcodeTemplates, value: string) => void;
   resetGcodeTemplates: () => void;
   setToolOrigin: (origin: Partial<ToolOrigin>) => void;
@@ -48,6 +50,7 @@ interface SettingsState {
   setToolOriginAuto: (auto: boolean) => void;
   setSafeHeight: (mm: number) => void;
   setToolpathResolution: (factor: number) => void;
+  setTravelFeedRate: (mmPerMin: number) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -58,6 +61,7 @@ export const useSettingsStore = create<SettingsState>()(
       toolOriginAuto: true,
       safeHeight: DEFAULT_SAFE_HEIGHT,
       toolpathResolution: DEFAULT_TOOLPATH_RESOLUTION,
+      travelFeedRate: DEFAULT_TRAVEL_FEED_RATE,
       setGcodeTemplate: (key, value) =>
         set((state) => ({
           gcodeTemplates: { ...state.gcodeTemplates, [key]: value },
@@ -89,6 +93,13 @@ export const useSettingsStore = create<SettingsState>()(
           toolpathResolution: Math.min(
             8,
             Math.max(0.5, Number.isFinite(factor) ? factor : DEFAULT_TOOLPATH_RESOLUTION)
+          ),
+        }),
+      setTravelFeedRate: (mmPerMin) =>
+        set({
+          travelFeedRate: Math.min(
+            10000,
+            Math.max(1, Number.isFinite(mmPerMin) ? mmPerMin : DEFAULT_TRAVEL_FEED_RATE)
           ),
         }),
     }),

@@ -93,7 +93,7 @@ body {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  width: 44px;
+  width: 52px;
   border-right: 1px solid var(--border);
   background: var(--bg-primary);
 }
@@ -625,8 +625,8 @@ body {
 
 .viewer-home-btn {
   position: absolute;
-  top: 12px;
-  right: 72px;
+  top: 56px;
+  right: 108px;
   z-index: 3;
   width: 36px;
   height: 36px;

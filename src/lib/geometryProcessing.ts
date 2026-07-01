@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeVertices } from 'three-stdlib';
 import type { LoopPoint, SelectedGeometry } from '../types/operations';
 
 export interface PartBounds {
@@ -37,7 +38,9 @@ export function boundsFromGeometry(geometry: THREE.BufferGeometry): PartBounds {
 
 /** Center XY footprint and place bottom of part at Z = 0. */
 export function finalizePartPlacement(geometry: THREE.BufferGeometry): ProcessedMesh {
-  const geo = geometry;
+  const welded = mergeVertices(geometry, 1e-4);
+  welded.computeVertexNormals();
+  const geo = welded;
   geo.computeBoundingBox();
   const box = geo.boundingBox!;
   const center = new THREE.Vector3();

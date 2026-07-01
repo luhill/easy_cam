@@ -1,14 +1,16 @@
 import { useAppStore } from '../store/useAppStore';
 import { useSettingsStore } from '../store/useSettingsStore';
-import { DEFAULT_SAFE_HEIGHT, DEFAULT_TOOLPATH_RESOLUTION } from '../lib/toolpathConfig';
+import { DEFAULT_SAFE_HEIGHT, DEFAULT_TOOLPATH_RESOLUTION, DEFAULT_TRAVEL_FEED_RATE } from '../lib/toolpathConfig';
 import { MAX_TOOLPATH_POINTS } from '../lib/toolpaths';
 import { HintTooltip, LabelWithHint } from './HintTooltip';
 
 export function GlobalCamSettings() {
   const safeHeight = useSettingsStore((s) => s.safeHeight);
   const toolpathResolution = useSettingsStore((s) => s.toolpathResolution);
+  const travelFeedRate = useSettingsStore((s) => s.travelFeedRate);
   const setSafeHeight = useSettingsStore((s) => s.setSafeHeight);
   const setToolpathResolution = useSettingsStore((s) => s.setToolpathResolution);
+  const setTravelFeedRate = useSettingsStore((s) => s.setTravelFeedRate);
   const regenerateToolpaths = useAppStore((s) => s.regenerateToolpaths);
   const toolpaths = useAppStore((s) => s.toolpaths);
   const totalPoints = toolpaths.reduce((sum, seg) => sum + seg.points.length, 0);
@@ -51,6 +53,25 @@ export function GlobalCamSettings() {
             step={0.5}
             onChange={(e) => {
               setToolpathResolution(parseFloat(e.target.value) || DEFAULT_TOOLPATH_RESOLUTION);
+              regenerateToolpaths();
+            }}
+          />
+        </div>
+        <div className="setting-row">
+          <label>
+            <LabelWithHint hint="Feed rate for non-cutting moves: slot return loops, retractions, and repositioning between cuts.">
+              Travel Feed Rate
+            </LabelWithHint>{' '}
+            <span className="unit">(mm/min)</span>
+          </label>
+          <input
+            type="number"
+            value={travelFeedRate}
+            min={1}
+            max={10000}
+            step={50}
+            onChange={(e) => {
+              setTravelFeedRate(parseFloat(e.target.value) || DEFAULT_TRAVEL_FEED_RATE);
               regenerateToolpaths();
             }}
           />

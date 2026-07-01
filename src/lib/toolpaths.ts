@@ -59,6 +59,7 @@ import {
   type ToolpathGlobalOptions,
   DEFAULT_SAFE_HEIGHT,
   DEFAULT_TOOLPATH_RESOLUTION,
+  DEFAULT_TRAVEL_FEED_RATE,
 } from './toolpathConfig';
 
 export const MAX_TOOLPATH_POINTS = 500_000;
@@ -194,7 +195,7 @@ function trochoidParams(
   z: number,
   roughing: boolean,
   globals: ToolpathGlobalOptions,
-  feedRate?: number
+  cutFeedRate?: number
 ) {
   const slot = resolveAdaptiveSlotGeometry(settings, { roughing });
   const guideSign = resolveGuideTraverseSign(slotCenterGuide, settings.climbMilling);
@@ -207,7 +208,8 @@ function trochoidParams(
     minCenterDist: slot.minCenterDist,
     rotSign: resolveOrbitRotSign(slotCenterGuide, settings.climbMilling),
     guideSign,
-    feedRate,
+    feedRate: cutFeedRate ?? settings.feedRate,
+    travelFeedRate: globals.travelFeedRate,
     sampleSpacing: trochoidSampleSpacing(
       slot.forwardIncrement,
       slot.trochoidRadius,
@@ -384,9 +386,9 @@ function appendFreshSlotWidthBore(
   targetZ: number,
   slotHelixR: number,
   settings: Operation['settings'],
-  helixOpts: { stockTopZ: number; globals: ToolpathGlobalOptions },
-  helixFeed: number
+  helixOpts: { stockTopZ: number; globals: ToolpathGlobalOptions }
 ): void {
+  const travelFeed = helixOpts.globals.travelFeedRate;
   const last = lastPathPoint(target);
   const startAngle = 0;
   const boreStartX = boreCenter.x + Math.cos(startAngle) * slotHelixR;
@@ -395,11 +397,11 @@ function appendFreshSlotWidthBore(
   let at = last;
   if (at) {
     if (Math.abs(at.z - startZ) > 1e-4) {
-      target.push({ x: at.x, y: at.y, z: startZ, feedRate: helixFeed });
+      target.push({ x: at.x, y: at.y, z: startZ, feedRate: travelFeed });
       at = { x: at.x, y: at.y, z: startZ };
     }
     if (Math.hypot(at.x - boreStartX, at.y - boreStartY) > 0.12) {
-      target.push({ x: boreStartX, y: boreStartY, z: startZ, feedRate: helixFeed });
+      target.push({ x: boreStartX, y: boreStartY, z: startZ, feedRate: travelFeed });
     }
   }
 
@@ -409,6 +411,7 @@ function appendFreshSlotWidthBore(
     helixR: slotHelixR,
     taperFromStart: true,
     startAngle,
+    feedRate: settings.plungeRate,
   });
   appendPoints(target, bore.points);
 }
@@ -422,7 +425,7 @@ function appendBoreBottomWidenAndLeadIn(
   stepoverIncrement: number,
   rotDir: number,
   segmentsPerRev: number,
-  helixFeed: number,
+  plungeFeed: number,
   firstLeadIn: ToolpathPoint
 ): boolean {
   const boreBottom = lastPathPoint(target);
@@ -445,7 +448,7 @@ function appendBoreBottomWidenAndLeadIn(
         rotDir,
         segmentsPerRev,
         boreStartAngle,
-        helixFeed
+        plungeFeed
       )
     )
   ) {
@@ -463,7 +466,7 @@ function appendBoreBottomWidenAndLeadIn(
       stepoverIncrement,
       rotDir,
       segmentsPerRev,
-      helixFeed
+      plungeFeed
     )
   );
 }
@@ -472,15 +475,15 @@ function appendRetractViaSlotCenter(
   points: ToolpathPoint[],
   slotCenter: { x: number; y: number },
   clearanceZ: number,
-  feedRate?: number
+  travelFeedRate: number
 ): void {
   const last = lastPathPoint(points);
   if (!last) return;
 
   if (Math.hypot(last.x - slotCenter.x, last.y - slotCenter.y) > 0.12) {
-    points.push({ x: slotCenter.x, y: slotCenter.y, z: last.z, feedRate });
+    points.push({ x: slotCenter.x, y: slotCenter.y, z: last.z, feedRate: travelFeedRate });
   }
-  points.push({ x: slotCenter.x, y: slotCenter.y, z: clearanceZ, rapid: true });
+  points.push({ x: slotCenter.x, y: slotCenter.y, z: clearanceZ, feedRate: travelFeedRate });
 }
 
 function lastPathPoint(points: ToolpathPoint[]): { x: number; y: number; z: number } | null {
@@ -532,7 +535,9 @@ function generateAdaptiveOutlinePath(
   const trochArcGuide = entryLayout.trochArcGuide;
   const slotHelixR = resolveSlotHelixRadius(roughSlot.slotClearance);
   const helixOpts = { stockTopZ: topZ, globals };
-  const helixFeed = settings.helixFeedRate;
+  const cutFeed = settings.feedRate;
+  const plungeFeed = settings.plungeRate;
+  const travelFeed = globals.travelFeedRate;
   const outwardCCW = isGuideOutwardCCW(loop);
   const points: ToolpathPoint[] = [];
 
@@ -545,6 +550,7 @@ function generateAdaptiveOutlinePath(
     ...helixOpts,
     taper: true,
     startAngle: boreHelixAngle,
+    feedRate: plungeFeed,
   });
   appendPoints(points, initialBore.points);
   boreHelixAngle = initialBore.endAngle;
@@ -571,6 +577,7 @@ function generateAdaptiveOutlinePath(
         ...helixOpts,
         taper: true,
         startAngle: boreHelixAngle,
+        feedRate: plungeFeed,
       });
       if (!appendPoints(points, layerBore.points)) {
         break;
@@ -591,17 +598,8 @@ function generateAdaptiveOutlinePath(
         trochoidStartS,
         entryLayout.guideTraverseSign,
         {
-          ...trochoidParams(
-            loop,
-            settings,
-            slotCenterGuide,
-            layerZ,
-            true,
-            globals,
-            helixFeed
-          ),
+          ...trochoidParams(loop, settings, slotCenterGuide, layerZ, true, globals, cutFeed),
           z: layerZ,
-          feedRate: helixFeed,
           arcGuide: trochArcGuide,
           trochoidRAtGuide: spurRadiusSampler,
         },
@@ -621,7 +619,7 @@ function generateAdaptiveOutlinePath(
           stepoverIncrement,
           rotDir,
           segmentsPerRev,
-          helixFeed,
+          plungeFeed,
           layerTroch[0]
         )
       ) {
@@ -639,8 +637,7 @@ function generateAdaptiveOutlinePath(
       layerZ,
       slotHelixR,
       settings,
-      helixOpts,
-      helixFeed
+      helixOpts
     );
 
     const layerTroch = generateAdaptiveTrochoidalPath(
@@ -666,7 +663,7 @@ function generateAdaptiveOutlinePath(
         stepoverIncrement,
         rotDir,
         segmentsPerRev,
-        helixFeed,
+        plungeFeed,
         layerTroch[0]
       )
     ) {
@@ -682,17 +679,17 @@ function generateAdaptiveOutlinePath(
       const at = lastPathPoint(points);
       if (at) {
         if (!appendClosedOutlinePath(points, finishPath, at)) {
-          appendRetractViaSlotCenter(points, slotJoinCenter, safeZ, helixFeed);
+          appendRetractViaSlotCenter(points, slotJoinCenter, safeZ, travelFeed);
           return points;
         }
       } else if (!appendPoints(points, finishPath)) {
-        appendRetractViaSlotCenter(points, slotJoinCenter, safeZ, helixFeed);
+        appendRetractViaSlotCenter(points, slotJoinCenter, safeZ, travelFeed);
         return points;
       }
     }
   }
 
-  appendRetractViaSlotCenter(points, slotJoinCenter, safeZ, helixFeed);
+  appendRetractViaSlotCenter(points, slotJoinCenter, safeZ, travelFeed);
   return points;
 }
 
@@ -932,6 +929,7 @@ export function generateToolpaths(
   globals: ToolpathGlobalOptions = {
     safeHeight: DEFAULT_SAFE_HEIGHT,
     resolution: DEFAULT_TOOLPATH_RESOLUTION,
+    travelFeedRate: DEFAULT_TRAVEL_FEED_RATE,
   }
 ): ToolpathGenerationResult {
   const ctx = createCutZContext(partBounds);

@@ -332,6 +332,14 @@ function StlMesh({
       const region = meshIndex.getRegion(faceIndex);
       if (!region) return;
 
+      setSelectionMode(false);
+
+      // Face already rests on the build plate — skip re-orienting to avoid vertex drift
+      // that breaks coplanar region detection for operations.
+      if (region.normal.z < -0.95) {
+        return;
+      }
+
       clearMeshIndexCache(processedGeometry);
 
       const normal = new THREE.Vector3(region.normal.x, region.normal.y, region.normal.z);
@@ -341,7 +349,6 @@ function StlMesh({
 
       onOrientationCommitted(newMesh.geometry);
       onMeshUpdate(newMesh);
-      setSelectionMode(false);
 
       useAppStore.setState({
         partRotationZ: 0,
@@ -604,6 +611,7 @@ function SceneContent({
   const safeHeight = useSettingsStore((s) => s.safeHeight);
   const updateOperation = useAppStore((s) => s.updateOperation);
   const toolpathResolution = useSettingsStore((s) => s.toolpathResolution);
+  const travelFeedRate = useSettingsStore((s) => s.travelFeedRate);
   const { camera } = useThree();
   const controlsRef = useRef<OrbitControlsImpl>(null);
 
@@ -647,7 +655,7 @@ function SceneContent({
 
   const adaptiveDebugGuides = useMemo(() => {
     if (!partBounds) return null;
-    const globals = { safeHeight, resolution: toolpathResolution };
+    const globals = { safeHeight, resolution: toolpathResolution, travelFeedRate };
     const adaptiveOps = operations.filter(
       (op) => op.visible && op.enabled && op.type === 'adaptive-outline' && op.geometry?.loops?.[0]
     );
@@ -662,6 +670,7 @@ function SceneContent({
     partBounds,
     safeHeight,
     toolpathResolution,
+    travelFeedRate,
   ]);
 
   const adaptiveEntry = useMemo(() => {
@@ -695,6 +704,7 @@ function SceneContent({
     const slotArcGuide = buildSlotCenterlineArcGuide(loop, op.settings, {
       safeHeight,
       resolution: toolpathResolution,
+      travelFeedRate,
     });
 
     return {
@@ -710,6 +720,7 @@ function SceneContent({
     partBounds,
     safeHeight,
     toolpathResolution,
+    travelFeedRate,
   ]);
 
   const handleToolStartChange = useCallback(
@@ -819,7 +830,7 @@ function SceneContent({
               }
         }
       />
-      <GizmoHelper alignment="top-right" margin={[12, 12]}>
+      <GizmoHelper alignment="top-right" margin={[56, 48]}>
         <GizmoViewport axisColors={['#ef4444', '#22c55e', '#3b82f6']} labelColor="white" />
       </GizmoHelper>
     </>

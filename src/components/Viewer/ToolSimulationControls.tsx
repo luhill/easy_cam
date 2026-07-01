@@ -144,8 +144,6 @@ export function ToolSimulationControls() {
 
   const stepBy = (delta: number) => {
     setSimulationPlaying(false);
-    scrubbingRef.current = false;
-    clearLiveSimulationDistance();
     const next = stepSimulationDistance(
       timeline,
       getEffectiveSimulationDistance(),
@@ -153,8 +151,11 @@ export function ToolSimulationControls() {
       windowStartDist,
       windowEndDist
     );
-    setSimulationDistance(next);
+    setLiveSimulationDistance(next);
     setDisplayDistance(next);
+    requestAnimationFrame(() => {
+      commitLiveSimulationDistance();
+    });
   };
 
   const handlePlayToggle = () => {

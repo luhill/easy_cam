@@ -1345,6 +1345,8 @@ export interface HelixBoreOptions {
   globals: ToolpathGlobalOptions;
   /** Continue rotation from a prior bore segment (radians). */
   startAngle?: number;
+  /** Override feed rate (e.g. plunge rate for adaptive bores). */
+  feedRate?: number;
 }
 
 export interface HelixBoreResult {
@@ -1379,7 +1381,7 @@ export function generateHelixBorePoints(
   targetZ: number,
   options: HelixBoreOptions
 ): HelixBoreResult {
-  const feedRate = settings.helixFeedRate;
+  const feedRate = options.feedRate ?? settings.helixFeedRate;
   const rotDir = resolveHelixRotationDir(settings.climbMilling);
   const segments = helixSegmentsPerRev(options.globals.resolution);
   const defaultHelixR = options.helixR ?? resolveHelixRadius(settings);

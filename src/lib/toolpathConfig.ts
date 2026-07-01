@@ -8,10 +8,13 @@ export interface ToolpathGlobalOptions {
   safeHeight: number;
   /** 1 = finest, 2 = default (2× coarser), higher = fewer points */
   resolution: number;
+  /** Feed rate for non-cutting repositioning (returns, retracts). */
+  travelFeedRate: number;
 }
 
 export const DEFAULT_TOOLPATH_RESOLUTION = 2;
 export const DEFAULT_SAFE_HEIGHT = 10;
+export const DEFAULT_TRAVEL_FEED_RATE = 2000;
 
 export function pathSampleSpacing(resolution: number): number {
   const factor = Math.max(resolution, 0.5);
