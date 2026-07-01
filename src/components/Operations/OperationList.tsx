@@ -37,7 +37,7 @@ export function OperationList() {
   if (operations.length === 0) {
     return (
       <div className="operation-list-empty">
-        <p>Add operations from the palette above</p>
+        <p>Add operations from the palette</p>
       </div>
     );
   }

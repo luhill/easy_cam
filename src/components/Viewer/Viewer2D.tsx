@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { PartBounds } from '../../lib/geometryProcessing';
 import type { ToolpathSegment } from '../../types/operations';
+import { SPUR_TOOLPATH_COLOR } from './ToolpathLines';
 
 interface Viewer2DProps {
   bounds: PartBounds | null;
@@ -95,16 +96,21 @@ function drawScene(
   }
 
   for (const segment of toolpaths) {
-    ctx.strokeStyle = segment.color;
     ctx.globalAlpha = 0.9;
     ctx.lineWidth = 1.25;
-    ctx.beginPath();
-    segment.points.forEach((point, index) => {
-      const [sx, sy] = worldToScreen(point.x, point.y, view);
-      if (index === 0) ctx.moveTo(sx, sy);
-      else ctx.lineTo(sx, sy);
-    });
-    ctx.stroke();
+
+    for (let i = 1; i < segment.points.length; i++) {
+      const a = segment.points[i - 1];
+      const b = segment.points[i];
+      ctx.strokeStyle = a.onSpur || b.onSpur ? SPUR_TOOLPATH_COLOR : segment.color;
+      ctx.beginPath();
+      const [ax, ay] = worldToScreen(a.x, a.y, view);
+      const [bx, by] = worldToScreen(b.x, b.y, view);
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+      ctx.stroke();
+    }
+
     ctx.globalAlpha = 1;
   }
 

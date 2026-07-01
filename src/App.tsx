@@ -1,41 +1,10 @@
 import { useEffect } from 'react';
 import { useAppStore } from './store/useAppStore';
-import { useSettingsStore } from './store/useSettingsStore';
 import { StlViewer } from './components/Viewer/StlViewer';
-import { FileUpload, OperationPalette } from './components/FileUpload';
-import { PartSetup } from './components/PartSetup';
-import { OperationList } from './components/Operations/OperationList';
-import { GcodeSettings } from './components/GcodeSettings';
-import { ToolOriginSettings } from './components/ToolOriginSettings';
-import { generateGcode, downloadGcode } from './lib/gcode';
+import { FileUpload } from './components/FileUpload';
+import { Sidebar } from './components/Sidebar';
+import { ToolpathStatus } from './components/ToolpathStatus';
 import './App.css';
-
-function GcodePanel() {
-  const operations = useAppStore((s) => s.operations);
-  const toolpaths = useAppStore((s) => s.toolpaths);
-  const gcodeTemplates = useSettingsStore((s) => s.gcodeTemplates);
-  const toolOrigin = useSettingsStore((s) => s.toolOrigin);
-  const partBounds = useAppStore((s) => s.partBounds);
-  const enabledCount = operations.filter((o) => o.enabled).length;
-
-  const handleExport = () => {
-    const stockTop = partBounds?.maxZ ?? 0;
-    const gcode = generateGcode(operations, toolpaths, gcodeTemplates, toolOrigin, stockTop);
-    downloadGcode(gcode);
-  };
-
-  return (
-    <div className="gcode-panel">
-      <button
-        className="btn btn-primary"
-        onClick={handleExport}
-        disabled={enabledCount === 0}
-      >
-        Export G-code ({enabledCount})
-      </button>
-    </div>
-  );
-}
 
 export default function App() {
   useEffect(() => {
@@ -51,19 +20,13 @@ export default function App() {
         </div>
         <div className="header-actions">
           <FileUpload />
-          <GcodePanel />
         </div>
       </header>
 
       <main className="app-main">
-        <aside className="sidebar">
-          <OperationPalette />
-          <PartSetup />
-          <OperationList />
-          <ToolOriginSettings />
-          <GcodeSettings />
-        </aside>
+        <Sidebar />
         <section className="viewer-panel">
+          <ToolpathStatus />
           <StlViewer />
         </section>
       </main>
