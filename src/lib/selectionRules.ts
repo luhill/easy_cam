@@ -30,6 +30,11 @@ export function isPhysicallyTopFace(
   return region.centroid.z >= midZ - 1e-4;
 }
 
+/** Upward-facing horizontal face — used for hole detection on pocket floors and bosses. */
+export function isUpwardFacingRegion(region: Pick<SelectionRegion, 'normal'>): boolean {
+  return region.normal.z >= HORIZONTAL_DOT;
+}
+
 export function isRegionSelectableForOperation(
   operationType: OperationType,
   region: SelectionRegion,
@@ -63,7 +68,7 @@ export function getSelectionHint(
     return 'Click the face that should sit on the build plate (Z=0)';
   }
   if (subMode === 'entry-point') {
-    return 'Click in stock to set helix entry point — right-drag to orbit';
+    return 'Drag amber cross = tool start, blue cross = slot join on centerline';
   }
   switch (operationType) {
     case 'outline':
@@ -72,7 +77,7 @@ export function getSelectionHint(
       return 'Select top-facing part outline, then set helix entry point in stock';
     case 'drill':
     case 'helix':
-      return 'Click holes to add or remove — multiple holes supported';
+      return 'Click holes to add or remove — includes holes in pockets and on bosses';
     case 'pocket':
       return 'Select a top-facing surface to pocket';
     case 'contour':

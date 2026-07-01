@@ -38,32 +38,84 @@ export function buildSimulationTimeline(segments: ToolpathSegment[]): Simulation
   return { samples, totalDistance: distance };
 }
 
+export function previewWindowDistances(
+  totalDistance: number,
+  windowStart: number,
+  windowEnd: number
+): { start: number; end: number; span: number } {
+  const start = windowStart * totalDistance;
+  const end = windowEnd * totalDistance;
+  return { start, end, span: Math.max(end - start, 0) };
+}
+
+export function clampDistanceToWindow(distance: number, start: number, end: number): number {
+  return Math.max(start, Math.min(end, distance));
+}
+
 export function sampleSimulationTimeline(
   timeline: SimulationTimeline,
   distance: number
 ): SimulationSample | null {
   const { samples, totalDistance } = timeline;
   if (samples.length === 0) return null;
-  if (distance <= 0) return samples[0];
-  if (distance >= totalDistance) return samples[samples.length - 1];
+  if (distance <= samples[0].distance) return { ...samples[0], distance };
+  if (distance >= totalDistance) return { ...samples[samples.length - 1], distance };
 
-  for (let i = 1; i < samples.length; i++) {
-    const b = samples[i];
-    if (b.distance >= distance) {
-      const a = samples[i - 1];
-      const span = b.distance - a.distance || 1;
-      const t = (distance - a.distance) / span;
-      return {
-        x: a.x + (b.x - a.x) * t,
-        y: a.y + (b.y - a.y) * t,
-        z: a.z + (b.z - a.z) * t,
-        rapid: a.rapid || b.rapid,
-        distance,
-      };
+  let lo = 0;
+  let hi = samples.length - 1;
+  while (lo < hi - 1) {
+    const mid = (lo + hi) >> 1;
+    if (samples[mid].distance <= distance) lo = mid;
+    else hi = mid;
+  }
+
+  const a = samples[lo];
+  const b = samples[hi];
+  const span = b.distance - a.distance || 1;
+  const t = (distance - a.distance) / span;
+  return {
+    x: a.x + (b.x - a.x) * t,
+    y: a.y + (b.y - a.y) * t,
+    z: a.z + (b.z - a.z) * t,
+    rapid: a.rapid || b.rapid,
+    distance,
+  };
+}
+
+/** Step simulation to the next or previous toolpath point (sample index). */
+export function stepSimulationDistance(
+  timeline: SimulationTimeline,
+  distance: number,
+  stepPoints: number,
+  windowStart = 0,
+  windowEnd?: number
+): number {
+  const { samples, totalDistance } = timeline;
+  const end = windowEnd ?? totalDistance;
+  if (samples.length === 0) return windowStart;
+  if (stepPoints === 0) {
+    return clampDistanceToWindow(
+      Math.max(0, Math.min(totalDistance, distance)),
+      windowStart,
+      end
+    );
+  }
+
+  let idx = 0;
+  let lo = 0;
+  let hi = samples.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (samples[mid].distance <= distance + 1e-6) {
+      idx = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
     }
   }
 
-  return samples[samples.length - 1];
+  const nextIdx = Math.max(0, Math.min(samples.length - 1, idx + stepPoints));
+  return clampDistanceToWindow(samples[nextIdx].distance, windowStart, end);
 }
 
 /** Default mm/min for rapid segments in preview (not exported G-code). */
@@ -88,4 +140,78 @@ export function flattenVisibleToolpathPoints(segments: ToolpathSegment[]): Toolp
     points.push(...segment.points);
   }
   return points;
+}
+
+function lerpPoint(a: ToolpathPoint, b: ToolpathPoint, t: number): ToolpathPoint {
+  return {
+    x: a.x + (b.x - a.x) * t,
+    y: a.y + (b.y - a.y) * t,
+    z: a.z + (b.z - a.z) * t,
+    rapid: a.rapid || b.rapid,
+    feedRate: b.feedRate ?? a.feedRate,
+  };
+}
+
+/** Extract toolpath segments visible within a cumulative distance window. */
+export function filterToolpathSegmentsByDistance(
+  segments: ToolpathSegment[],
+  startDistance: number,
+  endDistance: number
+): ToolpathSegment[] {
+  if (endDistance <= startDistance) return [];
+
+  let distance = 0;
+  const filtered: ToolpathSegment[] = [];
+
+  for (const segment of segments) {
+    const windowPoints: ToolpathPoint[] = [];
+
+    for (let i = 0; i < segment.points.length; i++) {
+      const point = segment.points[i];
+      const prev = i > 0 ? segment.points[i - 1] : null;
+      const segLen =
+        prev !== null
+          ? Math.hypot(point.x - prev.x, point.y - prev.y, point.z - prev.z)
+          : 0;
+      const pointDistance = i === 0 ? distance : distance + segLen;
+
+      if (prev && segLen > 1e-9) {
+        const prevDistance = distance;
+        const crossesStart =
+          prevDistance < startDistance && pointDistance > startDistance + 1e-6;
+        const crossesEnd =
+          prevDistance < endDistance && pointDistance > endDistance + 1e-6;
+
+        if (crossesStart && windowPoints.length === 0) {
+          const t = (startDistance - prevDistance) / segLen;
+          windowPoints.push(lerpPoint(prev, point, t));
+        }
+
+        const inWindow =
+          pointDistance >= startDistance - 1e-6 && pointDistance <= endDistance + 1e-6;
+        if (inWindow) {
+          if (windowPoints.length === 0 && prev && prevDistance >= startDistance - 1e-6) {
+            windowPoints.push(prev);
+          }
+          windowPoints.push(point);
+        }
+
+        if (crossesEnd) {
+          const t = (endDistance - prevDistance) / segLen;
+          windowPoints.push(lerpPoint(prev, point, t));
+          break;
+        }
+      } else if (pointDistance >= startDistance && pointDistance <= endDistance) {
+        windowPoints.push(point);
+      }
+
+      if (i > 0) distance = pointDistance;
+    }
+
+    if (windowPoints.length >= 2) {
+      filtered.push({ ...segment, points: windowPoints });
+    }
+  }
+
+  return filtered;
 }

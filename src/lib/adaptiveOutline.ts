@@ -1,8 +1,8 @@
-import type { LoopPoint } from '../types/operations';
-import type { OperationDefaults } from '../types/operations';
+import type { LoopPoint, OperationDefaults } from '../types/operations';
+import type { CornerSpurOptions } from './cornerSpurs';
 import { offsetLoop2DMinkowski, distanceToLoop2D, closestPointOnLoop2D } from './geometryProcessing';
 import { adaptiveForwardIncrement } from './trochoidalPath';
-import { ensureEntryOutsidePart, minimumEntryStandoff } from './entryPath';
+import { ensureEntryOutsidePart, resolveBoreOuterRadius } from './entryPath';
 
 export interface AdaptiveSlotGeometry {
   toolDiameter: number;
@@ -29,6 +29,23 @@ export const FINISHING_STOCK_ALLOWANCE = 0.1;
 export interface AdaptiveSlotOptions {
   /** When false, omit roughing stock allowance (used for finishing outline). */
   roughing?: boolean;
+}
+
+/**
+ * Corner spur options when roughing with finishing pass enabled.
+ * Spur tips stop at the rough inner miter (stock allowance), not the finish outline.
+ *
+ * Finishing pass adds FINISHING_STOCK_ALLOWANCE to radialOffset only — slot width is
+ * unchanged; the whole slot (inner wall, centerline, outer wall) shifts outward from the part.
+ */
+export function cornerSpurOptionsForRoughing(settings: OperationDefaults): CornerSpurOptions {
+  const base: CornerSpurOptions = { maxInternalAngleDeg: 130 };
+  if (!settings.finishingPass) return base;
+  const finish = resolveAdaptiveSlotGeometry(settings, { roughing: false });
+  return {
+    ...base,
+    roughTipInnerOffset: finish.innerCenterOffset + FINISHING_STOCK_ALLOWANCE,
+  };
 }
 
 export function resolveAdaptiveSlotGeometry(
@@ -65,7 +82,34 @@ export function resolveAdaptiveSlotGeometry(
   };
 }
 
-/** Default helix entry in stock outside the adaptive slot (when user has not picked one). */
+/**
+ * Largest tool-center radius from bore center during entry — derived from the
+ * greater of bore outer diameter and slot width so the widen spiral cannot
+ * cross the inner slot path.
+ */
+export function resolveMaxEntryHelixRadius(settings: OperationDefaults): number {
+  const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
+  const boreOuterD = 2 * resolveBoreOuterRadius(settings);
+  const effectiveDiameter = Math.max(boreOuterD, slot.slotWidth);
+  return Math.max(effectiveDiameter / 2 - slot.toolRadius, 0.05);
+}
+
+/**
+ * Minimum distance from part outline to bore center.
+ * Clears the inner slot path for the largest tool orbit during entry (bore
+ * helix or bottom widen spiral, whichever is greater).
+ */
+export function minimumEntryCenterDist(settings: OperationDefaults): number {
+  const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
+  return slot.minCenterDist + resolveMaxEntryHelixRadius(settings);
+}
+
+/** Outward offset from the inner slot guide to the bore center. */
+export function boreCenterOffsetFromInnerGuide(settings: OperationDefaults): number {
+  return resolveMaxEntryHelixRadius(settings);
+}
+
+/** Default helix entry: bore hugging inner slot path, as close to the part as allowed. */
 export function computeDefaultEntryPoint(
   partLoop: LoopPoint[],
   settings: OperationDefaults
@@ -73,28 +117,30 @@ export function computeDefaultEntryPoint(
   if (partLoop.length < 2) return { x: 0, y: 0 };
 
   const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
-  const guide = offsetLoop2DMinkowski(partLoop, slot.slotCenterOffset);
-  const minStandoff = minimumEntryStandoff(settings);
+  const guide = offsetLoop2DMinkowski(partLoop, slot.innerCenterOffset);
+  const centerDist = minimumEntryCenterDist(settings);
+  const innerDist = slot.minCenterDist;
+  const outwardOffset = boreCenterOffsetFromInnerGuide(settings);
 
   let bestGuide = guide[0];
-  let bestDist = -Infinity;
+  let bestScore = Infinity;
   for (const p of guide) {
     const d = distanceToLoop2D(p.x, p.y, partLoop);
-    if (d > bestDist) {
-      bestDist = d;
+    const score = Math.abs(d - innerDist);
+    if (score < bestScore) {
+      bestScore = score;
       bestGuide = p;
     }
   }
 
   const outward = closestPointOnLoop2D(bestGuide.x, bestGuide.y, partLoop);
-  const extra = Math.max(settings.clearance, 2);
   return ensureEntryOutsidePart(
     partLoop,
     {
-      x: bestGuide.x + outward.outX * extra,
-      y: bestGuide.y + outward.outY * extra,
+      x: bestGuide.x + outward.outX * outwardOffset,
+      y: bestGuide.y + outward.outY * outwardOffset,
     },
-    minStandoff
+    centerDist * 0.98
   );
 }
 
@@ -103,9 +149,9 @@ export function resolveAdaptiveEntryPoint(
   settings: OperationDefaults,
   entry?: { x: number; y: number } | null
 ): { x: number; y: number } {
-  const minStandoff = minimumEntryStandoff(settings);
+  const minDist = minimumEntryCenterDist(settings);
   if (entry) {
-    return ensureEntryOutsidePart(partLoop, entry, minStandoff);
+    return ensureEntryOutsidePart(partLoop, entry, minDist);
   }
   return computeDefaultEntryPoint(partLoop, settings);
 }
