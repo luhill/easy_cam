@@ -10,7 +10,7 @@ export interface HelixHoleValidation {
   reason?: HelixHoleInvalidReason;
 }
 
-const MIN_VIABLE_HELIX_RADIUS = 0.05;
+const CLEARANCE_EPS = 1e-3;
 
 export function validateHelixHole(
   holeRadius: number,
@@ -20,14 +20,14 @@ export function validateHelixHole(
   const toolDiameter = Math.max(settings.toolDiameter, 0.1);
   const holeDiameter = holeRadius * 2;
 
-  if (holeDiameter <= toolDiameter + 1e-6) {
+  if (holeDiameter <= toolDiameter + CLEARANCE_EPS) {
     return { valid: false, reason: 'hole-too-small' };
   }
 
   const toolR = toolDiameter / 2;
   const cutR = resolveInteriorHelixRadius(holeRadius, toolR, settings.radialOffset ?? 0);
 
-  if (cutR <= MIN_VIABLE_HELIX_RADIUS + 1e-6) {
+  if (cutR <= CLEARANCE_EPS) {
     return { valid: false, reason: 'hole-too-small' };
   }
 
@@ -35,10 +35,10 @@ export function validateHelixHole(
     const topZ = stockTopWorldZ(ctx);
     const finalZ = finalCutWorldZ(ctx, settings.depthOffset);
     const depthBelowTop = topZ - finalZ;
-    if (depthBelowTop > 1e-6) {
+    if (depthBelowTop > CLEARANCE_EPS) {
       const taperRad = (settings.boreTaperAngleDeg * Math.PI) / 180;
       const rawBottomR = cutR - depthBelowTop * Math.tan(taperRad);
-      if (rawBottomR <= MIN_VIABLE_HELIX_RADIUS + 1e-6) {
+      if (rawBottomR <= CLEARANCE_EPS) {
         return { valid: false, reason: 'taper-collapse' };
       }
     }
@@ -50,9 +50,9 @@ export function validateHelixHole(
 export function helixHoleInvalidLabel(reason: HelixHoleInvalidReason): string {
   switch (reason) {
     case 'hole-too-small':
-      return 'hole diameter must exceed tool diameter';
+      return 'hole diameter must exceed tool diameter with usable radial clearance';
     case 'taper-collapse':
-      return 'taper collapses helix radius before final depth';
+      return 'taper collapses helix radius to zero or below before final depth';
   }
 }
 

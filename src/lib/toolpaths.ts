@@ -32,6 +32,7 @@ import {
   adjustBoreRadiusToSlotWidth,
   closestPointIndexOnPath,
   generateBoreBottomToLeadInTransition,
+  generateFullRevolutionOrbit,
   generateHelixBorePoints,
   helixRadiusAtZ,
   helixRadiusTaperedFromStart,
@@ -832,10 +833,11 @@ function generateHelixPathForHole(
   if (targetZ < helixStartZ - 1e-4) {
     const helixBore = generateHelixBorePoints(center, settings, helixStartZ, targetZ, helixOpts);
     appendPoints(points, helixBore.points);
-    let boreAngle = helixBore.endAngle;
+    let finishAngle = helixBore.endAngle;
+    let finishR = interiorHelixRadiusAtZ(cutR, targetZ, topZ, settings.boreTaperAngleDeg);
 
     if (useTaper) {
-      const bottomR = interiorHelixRadiusAtZ(cutR, targetZ, topZ, settings.boreTaperAngleDeg);
+      const bottomR = finishR;
       if (bottomR + 1e-3 < cutR) {
         const spiralPoints = adjustBoreRadiusToSlotWidth(
           center,
@@ -845,12 +847,28 @@ function generateHelixPathForHole(
           radialStepPerRev,
           rotDir,
           segmentsPerRev,
-          boreAngle,
+          finishAngle,
           plungeFeed
         );
         appendPoints(points, spiralPoints);
+        finishR = cutR;
+        const spiralEnd = lastPathPoint(spiralPoints);
+        if (spiralEnd) {
+          finishAngle = Math.atan2(spiralEnd.y - cy, spiralEnd.x - cx);
+        }
       }
     }
+
+    const finishOrbit = generateFullRevolutionOrbit(
+      center,
+      finishR,
+      targetZ,
+      finishAngle,
+      rotDir,
+      segmentsPerRev,
+      plungeFeed
+    );
+    appendPoints(points, finishOrbit.points);
   }
 
   appendRetractViaSlotCenter(points, center, safeZ, globals.travelFeedRate);

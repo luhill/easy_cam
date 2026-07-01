@@ -86,13 +86,13 @@ export function resolveInteriorHelixRotationDir(climbMilling: boolean): number {
   return climbMilling ? 1 : -1;
 }
 
-/** Tool-center helix radius for finishing an interior hole. */
+/** Tool-center helix radius for finishing an interior hole (nominal, unclamped). */
 export function resolveInteriorHelixRadius(
   holeRadius: number,
   toolRadius: number,
   radialOffset: number
 ): number {
-  return Math.max(holeRadius - toolRadius - radialOffset, toolRadius * 0.25);
+  return holeRadius - toolRadius - radialOffset;
 }
 
 /** Tapered interior helix radius at depth (narrows with Z below stock top). */
@@ -105,7 +105,7 @@ export function interiorHelixRadiusAtZ(
   if (taperAngleDeg <= 0 || z >= stockTopZ - 1e-6) return cutRadius;
   const depthBelowTop = stockTopZ - z;
   const taperRad = (taperAngleDeg * Math.PI) / 180;
-  return Math.max(cutRadius - depthBelowTop * Math.tan(taperRad), 0.05);
+  return Math.max(cutRadius - depthBelowTop * Math.tan(taperRad), 0.01);
 }
 
 export function loopCentroid2D(loop: LoopPoint[]): { x: number; y: number } {
@@ -1356,6 +1356,34 @@ export function generateExpandingSpiral(
   }
 
   return points;
+}
+
+/** Exactly one full revolution at fixed Z and radius. */
+export function generateFullRevolutionOrbit(
+  center: { x: number; y: number },
+  radius: number,
+  z: number,
+  startAngle: number,
+  rotDir: number,
+  segmentsPerRev: number,
+  feedRate?: number
+): { points: ToolpathPoint[]; endAngle: number } {
+  const r = Math.max(radius, 0.01);
+  const segments = Math.max(8, segmentsPerRev);
+  const points: ToolpathPoint[] = [];
+  let angle = startAngle;
+
+  for (let i = 0; i < segments; i++) {
+    angle += rotDir * ((Math.PI * 2) / segments);
+    points.push({
+      x: center.x + Math.cos(angle) * r,
+      y: center.y + Math.sin(angle) * r,
+      z,
+      feedRate,
+    });
+  }
+
+  return { points, endAngle: angle };
 }
 
 export function isGuideOutwardCCW(partLoop: LoopPoint[]): boolean {
