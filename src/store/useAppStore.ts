@@ -17,7 +17,8 @@ import {
 import { clampOperationSettings } from '../lib/settingLimits';
 import { generateToolpaths } from '../lib/toolpaths';
 import type { ToolpathColorMode } from '../lib/toolpathColors';
-import { DEFAULT_DEV_STL_NAME, DEFAULT_DEV_STL_URL } from '../lib/defaultStl';
+import { DEFAULT_DEV_STL_NAME, getDefaultDevStlUrl } from '../lib/defaultStl';
+import { clearStlGeometryCache } from '../lib/stlLoader';
 import { useSettingsStore } from './useSettingsStore';
 
 function revokeStlUrl(url: string | null): void {
@@ -25,7 +26,7 @@ function revokeStlUrl(url: string | null): void {
 }
 
 const devDefaultStl = import.meta.env.DEV
-  ? { stlUrl: DEFAULT_DEV_STL_URL, stlFileName: DEFAULT_DEV_STL_NAME }
+  ? { stlUrl: getDefaultDevStlUrl('dev'), stlFileName: DEFAULT_DEV_STL_NAME }
   : { stlUrl: null as string | null, stlFileName: null as string | null };
 
 interface AppState {
@@ -123,9 +124,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   loadDefaultStl: () => {
     const prev = get().stlUrl;
     revokeStlUrl(prev);
+    clearStlGeometryCache();
+    const nextUrl = getDefaultDevStlUrl(Date.now());
     set({
       stlFile: null,
-      stlUrl: DEFAULT_DEV_STL_URL,
+      stlUrl: nextUrl,
       stlFileName: DEFAULT_DEV_STL_NAME,
       operations: [],
       toolpaths: [],
