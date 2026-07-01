@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { useAppStore } from '../../store/useAppStore';
+import { filterVisibleToolpathSegments } from '../../lib/toolpaths';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import {
   TOOLPATH_MOVE_COLORS,
@@ -24,10 +25,10 @@ export function ToolpathColorControls() {
   const setToolpathColorMode = useAppStore((s) => s.setToolpathColorMode);
   const travelFeedRate = useSettingsStore((s) => s.travelFeedRate);
 
-  const visiblePaths = useMemo(() => {
-    const visibleIds = new Set(operations.filter((o) => o.visible).map((o) => o.id));
-    return toolpaths.filter((tp) => visibleIds.has(tp.operationId));
-  }, [toolpaths, operations]);
+  const visiblePaths = useMemo(
+    () => filterVisibleToolpathSegments(toolpaths, operations),
+    [toolpaths, operations]
+  );
 
   const feedRange = useMemo(
     () => computeToolpathFeedRange(visiblePaths, operations, travelFeedRate),

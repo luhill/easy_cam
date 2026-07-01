@@ -42,6 +42,7 @@ const OUTLINE_FIELDS: typeof BASE_FIELDS = [
 
 const HELIX_FIELDS: typeof BASE_FIELDS = [
   { key: 'radialOffset', label: 'XY Offset', unit: 'mm', step: 0.1 },
+  { key: 'zStartOffset', label: 'Z Start Offset', unit: 'mm', step: 0.1 },
   { key: 'helixAngleDeg', label: 'Helix Pitch Angle', unit: '°', step: 0.1 },
   { key: 'boreTaperAngleDeg', label: 'Taper', unit: '°', step: 0.5 },
 ];
@@ -136,7 +137,9 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
                 ? DEPTH_HINT
                 : key === 'boreTaperAngleDeg' && operation.type === 'helix'
                   ? 'Set to 0 to disable. At each pass bottom the tool spirals outward to full diameter using stepover.'
-                  : undefined;
+                  : key === 'zStartOffset' && operation.type === 'helix'
+                    ? 'Helix ramp begins at the lower of this offset above stock top or the global safe height.'
+                    : undefined;
           return (
             <div className="setting-row" key={key}>
               <label>

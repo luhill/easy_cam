@@ -489,6 +489,46 @@ function appendRetractViaSlotCenter(
   points.push({ x: slotCenter.x, y: slotCenter.y, z: clearanceZ, feedRate: travelFeedRate });
 }
 
+function boreAngleAtPoint(
+  center: { x: number; y: number },
+  point: { x: number; y: number }
+): number {
+  return Math.atan2(point.y - center.y, point.x - center.x);
+}
+
+function helixStartWorldZ(
+  topZ: number,
+  safeHeight: number,
+  zStartOffset: number
+): number {
+  return topZ + Math.min(Math.max(safeHeight, 0), Math.max(zStartOffset, 0));
+}
+
+function buildInterOperationTravel(
+  from: ToolpathPoint,
+  to: ToolpathPoint
+): ToolpathPoint[] {
+  const xySpan = Math.hypot(from.x - to.x, from.y - to.y);
+  const zSpan = Math.abs(from.z - to.z);
+  if (xySpan < 0.05 && zSpan < 0.05) return [];
+
+  const travelZ = Math.max(from.z, to.z);
+  const points: ToolpathPoint[] = [{ ...from, rapid: true }];
+
+  if (xySpan >= 0.05) {
+    if (Math.abs(from.z - travelZ) > 0.05) {
+      points.push({ x: from.x, y: from.y, z: travelZ, rapid: true });
+    }
+    points.push({ x: to.x, y: to.y, z: travelZ, rapid: true });
+  }
+
+  if (Math.abs(to.z - travelZ) > 0.05) {
+    points.push({ x: to.x, y: to.y, z: to.z, rapid: true });
+  }
+
+  return points;
+}
+
 function lastPathPoint(points: ToolpathPoint[]): { x: number; y: number; z: number } | null {
   if (points.length === 0) return null;
   const p = points[points.length - 1];
@@ -762,7 +802,7 @@ function generateHelixPathForHole(
   ctx: CutZContext,
   safeZ: number,
   globals: ToolpathGlobalOptions,
-  isFirst: boolean
+  _isFirst: boolean
 ): ToolpathPoint[] {
   const topZ = stockTopWorldZ(ctx);
   const finalZ = finalCutWorldZ(ctx, settings.depthOffset);
@@ -774,6 +814,10 @@ function generateHelixPathForHole(
   const rotDir = resolveInteriorHelixRotationDir(settings.climbMilling);
   const segmentsPerRev = helixSegmentsPerRev(globals.resolution);
   const radialStepPerRev = settings.toolDiameter * (settings.stepover / 100);
+  const helixStartZ = helixStartWorldZ(topZ, globals.safeHeight, settings.zStartOffset);
+  const entryX = cx + cutR;
+  const entryY = cy;
+  const center = { x: cx, y: cy };
   const helixOpts = {
     stockTopZ: topZ,
     globals,
@@ -785,22 +829,19 @@ function generateHelixPathForHole(
   const points: ToolpathPoint[] = [];
   const zTargets = layers.length > 0 ? layers : [finalZ];
 
-  if (isFirst) {
-    points.push({ x: cx + cutR, y: cy, z: safeZ, rapid: true });
-    points.push({ x: cx + cutR, y: cy, z: topZ, feedRate: plungeFeed });
-  } else {
-    points.push({ x: cx, y: cy, z: safeZ, rapid: true });
-    points.push({ x: cx + cutR, y: cy, z: topZ, feedRate: plungeFeed });
+  points.push({ x: entryX, y: entryY, z: safeZ, rapid: true });
+  if (helixStartZ < safeZ - 1e-4) {
+    points.push({ x: entryX, y: entryY, z: helixStartZ, feedRate: plungeFeed });
   }
 
-  let currentZ = topZ;
+  let currentZ = helixStartZ;
   let boreAngle = 0;
 
   for (const layerZ of zTargets) {
     if (layerZ >= currentZ - 1e-4) continue;
 
     const layerBore = generateHelixBorePoints(
-      { x: cx, y: cy },
+      center,
       settings,
       currentZ,
       layerZ,
@@ -815,27 +856,29 @@ function generateHelixPathForHole(
     if (useTaper) {
       const bottomR = interiorHelixRadiusAtZ(cutR, layerZ, topZ, settings.boreTaperAngleDeg);
       if (bottomR + 1e-3 < cutR) {
-        appendPoints(
-          points,
-          adjustBoreRadiusToSlotWidth(
-            { x: cx, y: cy },
-            bottomR,
-            cutR,
-            layerZ,
-            radialStepPerRev,
-            rotDir,
-            segmentsPerRev,
-            boreAngle,
-            plungeFeed
-          )
+        const spiralPoints = adjustBoreRadiusToSlotWidth(
+          center,
+          bottomR,
+          cutR,
+          layerZ,
+          radialStepPerRev,
+          rotDir,
+          segmentsPerRev,
+          boreAngle,
+          plungeFeed
         );
-        boreAngle += rotDir * Math.PI * 2 * Math.max(1, Math.ceil((cutR - bottomR) / radialStepPerRev));
+        appendPoints(points, spiralPoints);
+        const spiralEnd = lastPathPoint(spiralPoints);
+        if (spiralEnd) {
+          boreAngle = boreAngleAtPoint(center, spiralEnd);
+        }
       }
     }
 
     currentZ = layerZ;
   }
 
+  appendRetractViaSlotCenter(points, center, safeZ, globals.travelFeedRate);
   return points;
 }
 
@@ -865,13 +908,8 @@ function generateHelixPath(
         index === 0
       )
     );
-    if (index < holes.length - 1) {
-      points.push({ x: hole.center.x, y: hole.center.y, z: safeZ, rapid: true });
-    }
   });
 
-  const last = holes[holes.length - 1];
-  points.push({ x: last.center.x, y: last.center.y, z: safeZ, rapid: true });
   return points;
 }
 
@@ -967,6 +1005,8 @@ function generatePathForOperation(
   }
 }
 
+export const INTER_OPERATION_TRAVEL_PREFIX = '__travel__';
+
 export function generateToolpaths(
   operations: Operation[],
   partBounds: PartBounds | null = null,
@@ -980,13 +1020,33 @@ export function generateToolpaths(
   const budget = { discarded: 0 };
   activePointBudget = budget;
 
-  const segments = operations
-    .filter((op) => op.enabled)
-    .map((op) => ({
+  const enabledOps = operations.filter((op) => op.enabled);
+  const segments: ToolpathSegment[] = [];
+  let prevLastPoint: ToolpathPoint | null = null;
+
+  for (let i = 0; i < enabledOps.length; i++) {
+    const op = enabledOps[i];
+    const points = generatePathForOperation(op, ctx, globals);
+    if (points.length === 0) continue;
+
+    if (prevLastPoint) {
+      const travelPoints = buildInterOperationTravel(prevLastPoint, points[0]);
+      if (travelPoints.length >= 2) {
+        segments.push({
+          operationId: `${INTER_OPERATION_TRAVEL_PREFIX}${i}`,
+          points: travelPoints,
+          color: '#f59e0b',
+        });
+      }
+    }
+
+    segments.push({
       operationId: op.id,
-      points: generatePathForOperation(op, ctx, globals),
+      points,
       color: OPERATION_COLORS[op.type],
-    }));
+    });
+    prevLastPoint = points[points.length - 1];
+  }
 
   activePointBudget = null;
 
@@ -1001,4 +1061,35 @@ export function generateToolpaths(
   }
 
   return { segments, warnings };
+}
+
+/** Keep visible operation segments plus travel links between adjacent visible ops. */
+export function filterVisibleToolpathSegments(
+  toolpaths: ToolpathSegment[],
+  operations: Operation[]
+): ToolpathSegment[] {
+  const visibleIds = new Set(operations.filter((o) => o.visible).map((o) => o.id));
+  const filtered: ToolpathSegment[] = [];
+
+  for (let i = 0; i < toolpaths.length; i++) {
+    const segment = toolpaths[i];
+    if (visibleIds.has(segment.operationId)) {
+      filtered.push(segment);
+      continue;
+    }
+    if (!segment.operationId.startsWith(INTER_OPERATION_TRAVEL_PREFIX)) continue;
+
+    const prev = toolpaths[i - 1];
+    const next = toolpaths[i + 1];
+    if (
+      prev &&
+      next &&
+      visibleIds.has(prev.operationId) &&
+      visibleIds.has(next.operationId)
+    ) {
+      filtered.push(segment);
+    }
+  }
+
+  return filtered;
 }

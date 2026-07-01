@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/useAppStore';
+import { filterVisibleToolpathSegments } from '../../lib/toolpaths';
 import {
   buildSimulationTimeline,
   clampDistanceToWindow,
@@ -45,10 +46,10 @@ export function ToolSimulationControls() {
   const stepCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastDisplayRef = useRef({ distance: 0, start: 0, end: 0 });
 
-  const visiblePaths = useMemo(() => {
-    const visibleIds = new Set(operations.filter((o) => o.visible).map((o) => o.id));
-    return toolpaths.filter((tp) => visibleIds.has(tp.operationId));
-  }, [toolpaths, operations]);
+  const visiblePaths = useMemo(
+    () => filterVisibleToolpathSegments(toolpaths, operations),
+    [toolpaths, operations]
+  );
 
   const timeline = useMemo(() => buildSimulationTimeline(visiblePaths), [visiblePaths]);
 

@@ -15,6 +15,8 @@ export interface OperationDefaults {
   spindleSpeed: number;
   /** Offset from part bottom for final cut (mm). + = above bottom, − = below. */
   depthOffset: number;
+  /** Helix: start helix ramp this far above stock top (mm); clamped to global safe height. */
+  zStartOffset: number;
   /** Additional radial stock offset beyond tool radius (mm); negative allows finishing inside the line */
   radialOffset: number;
   /** Adaptive outline: slot width as % of tool diameter (125–200%) */
@@ -151,6 +153,7 @@ export const DEFAULT_SETTINGS: OperationDefaults = {
   stepover: 7,
   spindleSpeed: 10000,
   depthOffset: 0,
+  zStartOffset: 1,
   radialOffset: 0,
   slotWidthPercent: 150,
   liftAmount: 0,

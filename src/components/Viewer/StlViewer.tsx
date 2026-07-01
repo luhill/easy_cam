@@ -68,6 +68,7 @@ import { WebGLFallback } from './WebGLFallback';
 import { Viewer2D } from './Viewer2D';
 import { useProcessedStl } from '../../hooks/useProcessedStl';
 import { getEffectiveSimulationWindow } from '../../lib/simulationLiveBridge';
+import { filterVisibleToolpathSegments } from '../../lib/toolpaths';
 import { ToolpathColorControls } from './ToolpathColorControls';
 
 function ViewportCameraSync({
@@ -682,12 +683,10 @@ function SceneContent({
   const toolpathColorMode = useAppStore((s) => s.toolpathColorMode);
   const controlsRef = useRef<OrbitControlsImpl>(null);
 
-  const visiblePaths = useMemo(() => {
-    const visibleIds = new Set(
-      operations.filter((o) => o.visible).map((o) => o.id)
-    );
-    return toolpaths.filter((tp) => visibleIds.has(tp.operationId));
-  }, [toolpaths, operations]);
+  const visiblePaths = useMemo(
+    () => filterVisibleToolpathSegments(toolpaths, operations),
+    [toolpaths, operations]
+  );
 
   const simulationTimeline = useMemo(
     () => buildSimulationTimeline(visiblePaths),
@@ -903,10 +902,10 @@ export function StlViewer() {
   const { processedMesh, meshKey, loading, loadError, updateMesh, commitOrientationSource } =
     useProcessedStl(stlUrl);
 
-  const visiblePaths = useMemo(() => {
-    const visibleIds = new Set(operations.filter((o) => o.visible).map((o) => o.id));
-    return toolpaths.filter((tp) => visibleIds.has(tp.operationId));
-  }, [toolpaths, operations]);
+  const visiblePaths = useMemo(
+    () => filterVisibleToolpathSegments(toolpaths, operations),
+    [toolpaths, operations]
+  );
 
   const [indexStatus, setIndexStatus] = useState<{ ready: boolean; regions?: number }>({
     ready: false,

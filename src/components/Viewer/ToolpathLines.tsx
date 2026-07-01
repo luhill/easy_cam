@@ -80,9 +80,9 @@ export function ToolpathLines({
 
   return (
     <group>
-      {segments.map((seg) => (
+      {segments.map((seg, index) => (
         <PathLine
-          key={seg.operationId}
+          key={`${seg.operationId}-${index}`}
           segment={seg}
           colorMode={colorMode}
           op={opById.get(seg.operationId)}

@@ -17,6 +17,7 @@ export const SETTING_LIMITS: Record<
   stepover: { min: 1, max: 100 },
   spindleSpeed: { min: 100, max: 30000 },
   depthOffset: { min: -50, max: 50 },
+  zStartOffset: { min: 0, max: 50 },
   radialOffset: { min: -50, max: 50 },
   slotWidthPercent: { min: 125, max: 200 },
   liftAmount: { min: 0, max: 20 },
