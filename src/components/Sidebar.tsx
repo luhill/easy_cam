@@ -37,28 +37,30 @@ export function Sidebar() {
       </nav>
 
       <div className="sidebar-panel">
-        {activeTab === 'part' && (
-          <div className="sidebar-tab-content">
-            <PartSetup />
-          </div>
-        )}
+        <div className="sidebar-panel-body">
+          {activeTab === 'part' && (
+            <div className="sidebar-tab-content">
+              <PartSetup />
+            </div>
+          )}
 
-        {activeTab === 'operations' && (
-          <div className="sidebar-tab-content sidebar-tab-content--operations">
-            <OperationPalette />
-            <OperationList />
-            <OperationsTabFooter />
-          </div>
-        )}
+          {activeTab === 'operations' && (
+            <div className="sidebar-tab-content sidebar-tab-content--operations">
+              <OperationPalette />
+              <OperationList />
+            </div>
+          )}
 
-        {activeTab === 'settings' && (
-          <div className="sidebar-tab-content sidebar-tab-content--settings">
-            <ToolOriginSettings />
-            <GlobalCamSettings />
-            <ViewportSettings />
-            <GcodeSettings />
-          </div>
-        )}
+          {activeTab === 'settings' && (
+            <div className="sidebar-tab-content sidebar-tab-content--settings">
+              <ToolOriginSettings />
+              <GlobalCamSettings />
+              <ViewportSettings />
+              <GcodeSettings />
+            </div>
+          )}
+        </div>
+        <OperationsTabFooter />
       </div>
     </aside>
   );

@@ -12,8 +12,6 @@ export function OperationTimeEstimate() {
     [operations, toolpaths]
   );
 
-  if (operations.length === 0) return null;
-
   return (
     <div className="operation-time-estimate">
       <span className="operation-time-label">
@@ -21,7 +19,7 @@ export function OperationTimeEstimate() {
         <HintTooltip text="Rough estimate from toolpath length and feed rates (cut, plunge, and rapid moves). Does not include spindle ramp or tool-change delays." />
       </span>
       <span className="operation-time-value">
-        {estimate.enabledOperationCount === 0
+        {operations.length === 0 || estimate.enabledOperationCount === 0
           ? '—'
           : formatDuration(estimate.totalSeconds)}
       </span>

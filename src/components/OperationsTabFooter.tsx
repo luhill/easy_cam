@@ -8,6 +8,27 @@ import {
 } from '../lib/gcode';
 import { OperationTimeEstimate } from './OperationTimeEstimate';
 
+function DownloadIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="gcode-download-icon"
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M12 3v12" />
+      <path d="m7 11 5 5 5-5" />
+      <path d="M5 21h14" />
+    </svg>
+  );
+}
+
 export function OperationsTabFooter() {
   const operations = useAppStore((s) => s.operations);
   const toolpaths = useAppStore((s) => s.toolpaths);
@@ -42,7 +63,7 @@ export function OperationsTabFooter() {
     stlFileName,
   ]);
 
-  if (operations.length === 0) return null;
+  const canDownload = operations.length > 0 && enabledCount > 0;
 
   return (
     <div className="operations-tab-footer">
@@ -51,15 +72,17 @@ export function OperationsTabFooter() {
         type="button"
         className="btn btn-small btn-primary gcode-download-btn"
         onClick={() => void handleDownload()}
-        disabled={enabledCount === 0}
+        disabled={!canDownload}
         aria-label="Download G-code"
         title={
-          enabledCount === 0
-            ? 'Enable at least one operation to export G-code'
-            : `Download ${defaultGcodeFilename(stlFileName)}`
+          operations.length === 0
+            ? 'Add at least one operation to export G-code'
+            : enabledCount === 0
+              ? 'Enable at least one operation to export G-code'
+              : `Download ${defaultGcodeFilename(stlFileName)}`
         }
       >
-        ↓
+        <DownloadIcon />
       </button>
     </div>
   );

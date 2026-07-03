@@ -136,6 +136,14 @@ body {
   overflow: hidden;
 }
 
+.sidebar-panel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .sidebar-tab-content {
   flex: 1;
   min-height: 0;
@@ -726,12 +734,17 @@ body {
 
 .gcode-download-btn {
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 34px;
   min-width: 34px;
+  height: 34px;
   padding: 0;
-  font-size: 18px;
-  line-height: 1;
-  font-weight: 700;
+}
+
+.gcode-download-icon {
+  display: block;
 }
 
 .gcode-format-row select {

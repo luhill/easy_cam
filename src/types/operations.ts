@@ -175,6 +175,7 @@ export const DEFAULT_SETTINGS: OperationDefaults = {
 };
 
 const ADAPTIVE_OUTLINE_DEFAULT_OVERRIDES: Partial<OperationDefaults> = {
+  feedRate: 500,
   stepDown: 6,
   stepover: 5,
   plungeRate: 120,
@@ -182,9 +183,17 @@ const ADAPTIVE_OUTLINE_DEFAULT_OVERRIDES: Partial<OperationDefaults> = {
   finishingPass: true,
 };
 
+const HELIX_DEFAULT_OVERRIDES: Partial<OperationDefaults> = {
+  plungeRate: 120,
+  stepover: 5,
+};
+
 export function defaultSettingsForOperation(type: OperationType): OperationDefaults {
   if (type === 'adaptive-outline') {
     return { ...DEFAULT_SETTINGS, ...ADAPTIVE_OUTLINE_DEFAULT_OVERRIDES };
+  }
+  if (type === 'helix') {
+    return { ...DEFAULT_SETTINGS, ...HELIX_DEFAULT_OVERRIDES };
   }
   return { ...DEFAULT_SETTINGS };
 }
