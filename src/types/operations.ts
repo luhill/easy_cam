@@ -174,6 +174,21 @@ export const DEFAULT_SETTINGS: OperationDefaults = {
   climbMilling: true,
 };
 
+const ADAPTIVE_OUTLINE_DEFAULT_OVERRIDES: Partial<OperationDefaults> = {
+  stepDown: 6,
+  stepover: 5,
+  plungeRate: 120,
+  liftAmount: 0.5,
+  finishingPass: true,
+};
+
+export function defaultSettingsForOperation(type: OperationType): OperationDefaults {
+  if (type === 'adaptive-outline') {
+    return { ...DEFAULT_SETTINGS, ...ADAPTIVE_OUTLINE_DEFAULT_OVERRIDES };
+  }
+  return { ...DEFAULT_SETTINGS };
+}
+
 export type SelectionSubMode = 'geometry' | 'entry-point' | 'bottom-face';
 
 export const OPERATION_COLORS: Record<OperationType, string> = {

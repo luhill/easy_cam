@@ -8,10 +8,10 @@ import {
   DEFAULT_TRAVEL_FEED_RATE,
 } from '../lib/toolpathConfig';
 
-export type GcodeOutputFormat = 'marlin';
+export type GcodeOutputFormat = 'fluidnc';
 
 export const GCODE_OUTPUT_FORMATS: { id: GcodeOutputFormat; label: string }[] = [
-  { id: 'marlin', label: 'Marlin' },
+  { id: 'fluidnc', label: 'FluidNC' },
 ];
 
 export interface GcodeTemplates {
@@ -21,24 +21,22 @@ export interface GcodeTemplates {
 }
 
 export const DEFAULT_GCODE_TEMPLATES: GcodeTemplates = {
-  startGcode: `; Start G-code
-G21 ; millimeters
-G90 ; absolute positioning
-G17 ; XY plane
-G0 Z10 ; safe height
+  startGcode: `; Start gcode
+G90 ; Absolute positioning mode
+G21 ; Set units to millimeters
+G10 L20 P1 X0 Y0 Z0 ; Work Zero (G54)
+;M3 S10000 ; Turn on spindle/router
+;G4 P2 ; Pause 2 seconds for spindle spin-up
 `,
   endGcode: `; End G-code
-G0 Z10 ; retract to safe height
 M5 ; spindle off
-M30 ; program end
+G90 ; ensure absolute
+G0 Z0 ; retract to safe height
+G0 X0 Y0; back to start
+M2 ; end of program
 `,
-  toolChangeGcode: `; Tool change
-M5 ; spindle off
-G0 Z10 ; safe height
-; Insert manual tool change here
-; T{toolNumber} M6
-; G43 H{toolNumber}
-M3 S{spindleSpeed} ; spindle on
+  toolChangeGcode: `; Tool Change gcode
+M6; make sure M6 macro is setup in your machine
 `,
 };
 
@@ -64,7 +62,7 @@ export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
       gcodeTemplates: DEFAULT_GCODE_TEMPLATES,
-      gcodeOutputFormat: 'marlin',
+      gcodeOutputFormat: 'fluidnc',
       toolOrigin: { x: 0, y: 0, z: DEFAULT_WCS_Z_ABOVE_STOCK },
       safeHeight: DEFAULT_SAFE_HEIGHT,
       toolpathResolution: DEFAULT_TOOLPATH_RESOLUTION,
@@ -99,6 +97,12 @@ export const useSettingsStore = create<SettingsState>()(
         }),
       setIsometricProjection: (enabled) => set({ isometricProjection: !!enabled }),
     }),
-    { name: 'easy-cam-gcode-settings' }
+    { name: 'easy-cam-gcode-settings', version: 1, migrate: (persisted) => {
+      const state = persisted as Record<string, unknown>;
+      if (state.gcodeOutputFormat === 'marlin') {
+        state.gcodeOutputFormat = 'fluidnc';
+      }
+      return state;
+    } }
   )
 );

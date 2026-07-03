@@ -128,7 +128,7 @@ function formatModalMove(
   };
 }
 
-function generateMarlinGcode(options: GcodeExportOptions): string {
+function generateFluidNcGcode(options: GcodeExportOptions): string {
   const {
     operations,
     toolpaths,
@@ -145,7 +145,7 @@ function generateMarlinGcode(options: GcodeExportOptions): string {
 
   const lines: string[] = [
     '; Easy CAM G-code',
-    '; Output format: Marlin',
+    '; Output format: FluidNC',
     `; Generated ${new Date().toISOString()}`,
     '',
     ...applyGcodeTemplate(templates.startGcode, { safeHeight }),
@@ -262,12 +262,7 @@ function generateMarlinGcode(options: GcodeExportOptions): string {
 }
 
 export function generateGcode(options: GcodeExportOptions): string {
-  const format = options.format ?? 'marlin';
-  switch (format) {
-    case 'marlin':
-    default:
-      return generateMarlinGcode(options);
-  }
+  return generateFluidNcGcode(options);
 }
 
 export function downloadGcode(content: string, filename = 'program.g') {

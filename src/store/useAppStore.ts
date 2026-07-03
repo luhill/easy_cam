@@ -11,7 +11,7 @@ import type { PartBounds } from '../lib/geometryProcessing';
 import { partBoundsEqual, rotateSelectedGeometry, snapRotationDegrees } from '../lib/geometryProcessing';
 import { getPartTransformBridge } from '../lib/partTransformBridge';
 import {
-  DEFAULT_SETTINGS,
+  defaultSettingsForOperation,
   getOperationLabel,
 } from '../types/operations';
 import { clampOperationSettings } from '../lib/settingLimits';
@@ -170,7 +170,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       enabled: true,
       visible: true,
       collapsed: false,
-      settings: clampOperationSettings({ ...DEFAULT_SETTINGS }),
+      settings: clampOperationSettings(defaultSettingsForOperation(type)),
       geometry: null,
       ...(type === 'custom-gcode'
         ? { customGcode: '; Custom G-code\n; Insert Marlin commands below\n' }
@@ -210,7 +210,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         o.id === id
           ? {
               ...o,
-              settings: clampOperationSettings({ ...DEFAULT_SETTINGS, ...o.settings, ...settings }),
+              settings: clampOperationSettings({
+                ...defaultSettingsForOperation(o.type),
+                ...o.settings,
+                ...settings,
+              }),
             }
           : o
       ),
