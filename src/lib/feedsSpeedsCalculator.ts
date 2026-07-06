@@ -8,139 +8,157 @@ export type MaterialId =
 
 export type RecommendedMilling = 'climb' | 'conventional';
 
-export interface MaterialProfile {
+/** Primary feeds/speeds defaults loaded when a material is selected. */
+export interface MaterialDefaults {
+  name: string;
+  chipLoad: number;
+  stepoverPercentage: number;
+  rampAngle: number;
+  plungeRatio: number;
+}
+
+export const MATERIAL_DEFAULTS: Record<MaterialId, MaterialDefaults> = {
+  'mild-steel': {
+    name: 'Mild Steel',
+    chipLoad: 0.015,
+    stepoverPercentage: 5,
+    rampAngle: 1.0,
+    plungeRatio: 0.25,
+  },
+  'solid-aluminium': {
+    name: 'Aluminum (6061)',
+    chipLoad: 0.03,
+    stepoverPercentage: 10,
+    rampAngle: 1.5,
+    plungeRatio: 0.3,
+  },
+  'aluminium-composite': {
+    name: 'Aluminum Composite Panel (ACP)',
+    chipLoad: 0.06,
+    stepoverPercentage: 40,
+    rampAngle: 2.5,
+    plungeRatio: 0.4,
+  },
+  hardwood: {
+    name: 'Hardwood',
+    chipLoad: 0.04,
+    stepoverPercentage: 40,
+    rampAngle: 3.0,
+    plungeRatio: 0.5,
+  },
+  'softwood-plywood': {
+    name: 'Softwood / Plywood',
+    chipLoad: 0.05,
+    stepoverPercentage: 45,
+    rampAngle: 3.0,
+    plungeRatio: 0.5,
+  },
+  'plastics-acrylic': {
+    name: 'Plastics / Acrylic',
+    chipLoad: 0.05,
+    stepoverPercentage: 25,
+    rampAngle: 2.0,
+    plungeRatio: 0.4,
+  },
+};
+
+export interface MaterialProfile extends MaterialDefaults {
   id: MaterialId;
-  label: string;
-  /** Target chip load per tooth (mm). */
-  defaultChipLoadMm: number;
-  stepoverMinPct: number;
-  stepoverMaxPct: number;
   adaptiveDocMinRatio: number;
   adaptiveDocMaxRatio: number;
   pocketDocMinRatio: number;
   pocketDocMaxRatio: number;
-  helixRampMinDeg: number;
-  helixRampMaxDeg: number;
-  plungeFeedMinPct: number;
-  plungeFeedMaxPct: number;
   isHard: boolean;
   recommendedMilling: RecommendedMilling;
   millingNote?: string;
 }
 
-export const MATERIAL_PROFILES: MaterialProfile[] = [
-  {
-    id: 'mild-steel',
-    label: 'Mild Steel',
-    defaultChipLoadMm: 0.018,
-    stepoverMinPct: 5,
-    stepoverMaxPct: 10,
+const MATERIAL_DOC_AND_MILLING: Record<
+  MaterialId,
+  Pick<
+    MaterialProfile,
+    | 'adaptiveDocMinRatio'
+    | 'adaptiveDocMaxRatio'
+    | 'pocketDocMinRatio'
+    | 'pocketDocMaxRatio'
+    | 'isHard'
+    | 'recommendedMilling'
+    | 'millingNote'
+  >
+> = {
+  'mild-steel': {
     adaptiveDocMinRatio: 0.5,
     adaptiveDocMaxRatio: 1.0,
     pocketDocMinRatio: 0.25,
     pocketDocMaxRatio: 0.5,
-    helixRampMinDeg: 1,
-    helixRampMaxDeg: 1.5,
-    plungeFeedMinPct: 20,
-    plungeFeedMaxPct: 30,
     isHard: true,
     recommendedMilling: 'climb',
     millingNote: 'Keeps constant engagement in adaptive/trochoidal paths.',
   },
-  {
-    id: 'solid-aluminium',
-    label: 'Solid Aluminium',
-    defaultChipLoadMm: 0.032,
-    stepoverMinPct: 8,
-    stepoverMaxPct: 15,
+  'solid-aluminium': {
     adaptiveDocMinRatio: 0.75,
     adaptiveDocMaxRatio: 1.5,
     pocketDocMinRatio: 0.4,
     pocketDocMaxRatio: 0.8,
-    helixRampMinDeg: 1,
-    helixRampMaxDeg: 1.5,
-    plungeFeedMinPct: 20,
-    plungeFeedMaxPct: 30,
     isHard: true,
     recommendedMilling: 'climb',
     millingNote: 'Improves chip evacuation and reduces rubbing/work hardening.',
   },
-  {
-    id: 'aluminium-composite',
-    label: 'Aluminium Composite Panel',
-    defaultChipLoadMm: 0.045,
-    stepoverMinPct: 25,
-    stepoverMaxPct: 40,
+  'aluminium-composite': {
     adaptiveDocMinRatio: 0.4,
     adaptiveDocMaxRatio: 0.9,
     pocketDocMinRatio: 0.25,
     pocketDocMaxRatio: 0.55,
-    helixRampMinDeg: 1.5,
-    helixRampMaxDeg: 2,
-    plungeFeedMinPct: 25,
-    plungeFeedMaxPct: 35,
     isHard: true,
     recommendedMilling: 'climb',
     millingNote: 'Cleaner skin finish; use sharp tooling and support sheet well.',
   },
-  {
-    id: 'hardwood',
-    label: 'Hardwood',
-    defaultChipLoadMm: 0.055,
-    stepoverMinPct: 40,
-    stepoverMaxPct: 50,
+  hardwood: {
     adaptiveDocMinRatio: 1.0,
     adaptiveDocMaxRatio: 2.0,
     pocketDocMinRatio: 0.5,
     pocketDocMaxRatio: 1.0,
-    helixRampMinDeg: 2,
-    helixRampMaxDeg: 3,
-    plungeFeedMinPct: 40,
-    plungeFeedMaxPct: 50,
     isHard: false,
     recommendedMilling: 'climb',
     millingNote: 'Standard CNC router practice for most contour and adaptive cuts.',
   },
-  {
-    id: 'softwood-plywood',
-    label: 'Softwood / Plywood',
-    defaultChipLoadMm: 0.09,
-    stepoverMinPct: 40,
-    stepoverMaxPct: 50,
+  'softwood-plywood': {
     adaptiveDocMinRatio: 1.5,
     adaptiveDocMaxRatio: 2.5,
     pocketDocMinRatio: 0.75,
     pocketDocMaxRatio: 1.5,
-    helixRampMinDeg: 2,
-    helixRampMaxDeg: 3,
-    plungeFeedMinPct: 40,
-    plungeFeedMaxPct: 50,
     isHard: false,
     recommendedMilling: 'climb',
     millingNote: 'Try conventional on thin plywood if climb lifts veneer at exit.',
   },
-  {
-    id: 'plastics-acrylic',
-    label: 'Plastics / Acrylic',
-    defaultChipLoadMm: 0.06,
-    stepoverMinPct: 40,
-    stepoverMaxPct: 50,
+  'plastics-acrylic': {
     adaptiveDocMinRatio: 0.75,
     adaptiveDocMaxRatio: 1.5,
     pocketDocMinRatio: 0.4,
     pocketDocMaxRatio: 0.8,
-    helixRampMinDeg: 2,
-    helixRampMaxDeg: 2.5,
-    plungeFeedMinPct: 30,
-    plungeFeedMaxPct: 40,
     isHard: false,
     recommendedMilling: 'climb',
     millingNote: 'Reduces heat buildup and melted swarf re-welding to the part.',
   },
-];
+};
+
+export const MATERIAL_PROFILES: MaterialProfile[] = (Object.keys(MATERIAL_DEFAULTS) as MaterialId[]).map(
+  (id) => ({
+    id,
+    ...MATERIAL_DEFAULTS[id],
+    ...MATERIAL_DOC_AND_MILLING[id],
+  })
+);
+
+export function getMaterialDefaults(id: MaterialId): MaterialDefaults {
+  return MATERIAL_DEFAULTS[id] ?? MATERIAL_DEFAULTS['mild-steel'];
+}
 
 export function getMaterialProfile(id: MaterialId): MaterialProfile {
-  return MATERIAL_PROFILES.find((m) => m.id === id) ?? MATERIAL_PROFILES[0];
+  return (
+    MATERIAL_PROFILES.find((m) => m.id === id) ??
+    MATERIAL_PROFILES[0]
+  );
 }
 
 /** Cutting feedrate (mm/min) = RPM × flutes × chip load (mm/tooth). */
@@ -170,10 +188,6 @@ export function stepoverMmFromPercent(toolDiameterMm: number, stepoverPct: numbe
   return Math.max(toolDiameterMm, 0.01) * (Math.max(stepoverPct, 0) / 100);
 }
 
-export function recommendedStepoverMidPct(profile: MaterialProfile): number {
-  return (profile.stepoverMinPct + profile.stepoverMaxPct) / 2;
-}
-
 export interface FeedsSpeedsInputs {
   materialId: MaterialId;
   toolDiameterMm: number;
@@ -195,8 +209,7 @@ export interface FeedsSpeedsResults {
   pocketDocLabel: string;
   helixRampLabel: string;
   plungeFeedLabel: string;
-  plungeFeedMin: number;
-  plungeFeedMax: number;
+  plungeFeedMmMin: number;
   millingDirectionLabel: string;
   millingNote?: string;
   lowRpmWarning: boolean;
@@ -209,29 +222,26 @@ export function calculateFeedsSpeeds(inputs: FeedsSpeedsInputs): FeedsSpeedsResu
   const rpm = Math.max(inputs.rpm, 0);
   const chipLoad = Math.max(inputs.chipLoadMm, 0.001);
   const stepoverPct =
-    inputs.stepoverPct > 0 ? inputs.stepoverPct : recommendedStepoverMidPct(profile);
+    inputs.stepoverPct > 0 ? inputs.stepoverPct : profile.stepoverPercentage;
   const stepoverMm = stepoverMmFromPercent(toolD, stepoverPct);
 
   const cuttingFeedMmMin = cuttingFeedrateMmMin(rpm, flutes, chipLoad);
   const chipThinningFactor = chipThinningFeedMultiplier(toolD, stepoverMm);
   const adjustedFeedMmMin = cuttingFeedMmMin * chipThinningFactor;
-
-  const plungeMin = cuttingFeedMmMin * (profile.plungeFeedMinPct / 100);
-  const plungeMax = cuttingFeedMmMin * (profile.plungeFeedMaxPct / 100);
+  const plungeFeedMmMin = cuttingFeedMmMin * profile.plungeRatio;
 
   return {
     profile,
     cuttingFeedMmMin,
     chipThinningFactor,
     adjustedFeedMmMin,
-    stepoverRangeLabel: `${profile.stepoverMinPct}–${profile.stepoverMaxPct}% of tool Ø`,
+    stepoverRangeLabel: `${profile.stepoverPercentage}% of tool Ø`,
     stepoverMm,
     adaptiveDocLabel: `${(profile.adaptiveDocMinRatio * toolD).toFixed(2)}–${(profile.adaptiveDocMaxRatio * toolD).toFixed(2)} mm`,
     pocketDocLabel: `${(profile.pocketDocMinRatio * toolD).toFixed(2)}–${(profile.pocketDocMaxRatio * toolD).toFixed(2)} mm`,
-    helixRampLabel: `${profile.helixRampMinDeg}°–${profile.helixRampMaxDeg}°`,
-    plungeFeedLabel: `${Math.round(plungeMin)}–${Math.round(plungeMax)} mm/min`,
-    plungeFeedMin: plungeMin,
-    plungeFeedMax: plungeMax,
+    helixRampLabel: `${profile.rampAngle.toFixed(1)}°`,
+    plungeFeedLabel: `${Math.round(plungeFeedMmMin)} mm/min (${Math.round(profile.plungeRatio * 100)}% of cut feed)`,
+    plungeFeedMmMin,
     millingDirectionLabel:
       profile.recommendedMilling === 'climb' ? 'Climb milling' : 'Conventional milling',
     millingNote: profile.millingNote,
