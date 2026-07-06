@@ -20,8 +20,10 @@ import {
 import { resolveAdaptiveSlotGeometry, cornerSpurOptionsForRoughing, finishingStockAllowance } from './adaptiveOutline';
 import {
   generateContourLinearRamp,
+  outlineApproachWorldZ,
   outlineRampLengthMm,
   resolveStandardHelixEntryLayout,
+  resolveStandardOutlineEntryStart,
 } from './outlineEntry';
 import {
   adaptiveEntryOverridesFromGeometry,
@@ -158,39 +160,82 @@ function contourTraverse(
   return reverse ? [...toolLoop].reverse() : toolLoop;
 }
 
-function appendContourLoopAtZ(
+function appendContourLoopFromPoint(
   points: ToolpathPoint[],
   traverse: LoopPoint[],
   layerZ: number,
-  feedRate: number
+  feedRate: number,
+  from: { x: number; y: number }
 ): boolean {
-  for (const p of traverse) {
+  if (traverse.length === 0) return true;
+
+  const asPath = traverse.map((p) => ({ x: p.x, y: p.y, z: layerZ }));
+  const startIdx = closestPointIndexOnPath(asPath, from);
+
+  for (let i = 0; i < traverse.length; i++) {
+    const p = traverse[(startIdx + i) % traverse.length];
     if (!appendPoints(points, [{ x: p.x, y: p.y, z: layerZ, feedRate }])) {
       return false;
     }
   }
+
   return appendPoints(points, [
-    { x: traverse[0].x, y: traverse[0].y, z: layerZ, feedRate },
+    { x: traverse[startIdx].x, y: traverse[startIdx].y, z: layerZ, feedRate },
   ]);
 }
 
-function generateStraightOutlineEntry(
+function appendMoveToEntryStart(
   points: ToolpathPoint[],
-  start: { x: number; y: number },
+  entryStart: { x: number; y: number },
+  z: number,
+  feedRate: number
+): boolean {
+  const last = lastPathPoint(points);
+  if (!last) return true;
+  if (Math.hypot(last.x - entryStart.x, last.y - entryStart.y) < 0.05) {
+    if (Math.abs(last.z - z) > 1e-4) {
+      return appendPoints(points, [{ x: entryStart.x, y: entryStart.y, z, feedRate }]);
+    }
+    return true;
+  }
+  return appendPoints(points, [{ x: entryStart.x, y: entryStart.y, z, feedRate }]);
+}
+
+function appendOutlineApproachToStart(
+  points: ToolpathPoint[],
+  entryStart: { x: number; y: number },
+  safeZ: number,
+  approachZ: number,
+  plungeRate: number
+): void {
+  points.push({ x: entryStart.x, y: entryStart.y, z: safeZ, rapid: true });
+  if (approachZ < safeZ - 1e-4) {
+    points.push({
+      x: entryStart.x,
+      y: entryStart.y,
+      z: approachZ,
+      feedRate: plungeRate,
+    });
+  }
+}
+
+function appendStraightOutlineEntry(
+  points: ToolpathPoint[],
+  entryStart: { x: number; y: number },
   fromZ: number,
   layerZ: number,
   plungeRate: number,
-  isFirstLayer: boolean
+  atEntryStart: boolean
 ): boolean {
-  if (isFirstLayer) {
-    return appendPoints(points, [{ x: start.x, y: start.y, z: fromZ, feedRate: plungeRate }]);
+  if (!atEntryStart) {
+    if (!appendMoveToEntryStart(points, entryStart, fromZ, plungeRate)) return false;
   }
   if (Math.abs(fromZ - layerZ) < 1e-5) {
-    return appendPoints(points, [{ x: start.x, y: start.y, z: layerZ }]);
+    return appendPoints(points, [{ x: entryStart.x, y: entryStart.y, z: layerZ, feedRate: plungeRate }]);
   }
   return appendPoints(points, [
-    { x: start.x, y: start.y, z: fromZ },
-    { x: start.x, y: start.y, z: layerZ, feedRate: plungeRate },
+    { x: entryStart.x, y: entryStart.y, z: fromZ, feedRate: plungeRate },
+    { x: entryStart.x, y: entryStart.y, z: layerZ, feedRate: plungeRate },
   ]);
 }
 
@@ -217,7 +262,8 @@ function generateStandardHelixOutlinePath(
     return generateStandardOutlinePath(loop, settings, ctx, globals, geometry, 'straight');
   }
 
-  const { toolStart, joinPoint } = entryLayout;
+  const { toolStart, joinPoint, entryStart } = entryLayout;
+  const approachZ = outlineApproachWorldZ(topZ, globals.safeHeight, settings.zStartOffset);
   const helixR = resolveHelixRadius(settings);
   const helixOpts = { stockTopZ: topZ, globals };
   const plungeFeed = settings.plungeRate;
@@ -232,16 +278,17 @@ function generateStandardHelixOutlinePath(
     feedRate: cutFeed,
   };
 
-  points.push({ x: toolStart.x, y: toolStart.y, z: safeZ, rapid: true });
+  appendOutlineApproachToStart(points, entryStart, safeZ, approachZ, plungeFeed);
 
   let boreHelixAngle = 0;
+  const boreStartZ = approachZ;
 
   for (let li = 0; li < layers.length; li++) {
     const layerZ = layers[li];
-    const layerPrevZ = li > 0 ? layers[li - 1] : safeZ;
+    const layerPrevZ = li > 0 ? layers[li - 1] : boreStartZ;
 
     if (li === 0) {
-      const initialBore = generateHelixBorePoints(toolStart, settings, safeZ, layerZ, {
+      const initialBore = generateHelixBorePoints(toolStart, settings, boreStartZ, layerZ, {
         ...helixOpts,
         taper: true,
         startAngle: boreHelixAngle,
@@ -296,7 +343,7 @@ function generateStandardHelixOutlinePath(
       }
     }
 
-    if (!appendContourLoopAtZ(points, traverse, layerZ, cutFeed)) break;
+    if (!appendContourLoopFromPoint(points, traverse, layerZ, cutFeed, joinPoint)) break;
   }
 
   if (settings.finishingPass) {
@@ -324,8 +371,7 @@ function generateStandardHelixOutlinePath(
     }
   }
 
-  const start = traverse[0];
-  points.push({ x: start.x, y: start.y, z: safeZ, rapid: true });
+  points.push({ x: entryStart.x, y: entryStart.y, z: safeZ, rapid: true });
   return points;
 }
 
@@ -354,24 +400,40 @@ function generateStandardOutlinePath(
   const traverse = contourTraverse(loop, settings, stockAllowance);
   if (traverse.length === 0) return points;
 
-  const start = traverse[0];
+  const entryStart = resolveStandardOutlineEntryStart(loop, settings, stockAllowance, geometry);
+  const approachZ = outlineApproachWorldZ(topZ, globals.safeHeight, settings.zStartOffset);
   const rampSampleSpacing = pathSampleSpacing(globals.resolution);
   const rampLength = outlineRampLengthMm(settings);
 
-  points.push({ x: start.x, y: start.y, z: safeZ, rapid: true });
+  appendOutlineApproachToStart(points, entryStart, safeZ, approachZ, settings.plungeRate);
 
   for (let li = 0; li < layers.length; li++) {
     const layerZ = layers[li];
-    const fromZ = li === 0 ? topZ : layers[li - 1];
+    const fromZ = li === 0 ? approachZ : layers[li - 1];
+
+    if (li > 0) {
+      if (!appendMoveToEntryStart(points, entryStart, fromZ, settings.feedRate)) break;
+    }
+
+    let loopStart = entryStart;
 
     if (entryType === 'straight') {
-      if (!generateStraightOutlineEntry(points, start, fromZ, layerZ, settings.plungeRate, li === 0)) {
+      if (
+        !appendStraightOutlineEntry(
+          points,
+          entryStart,
+          fromZ,
+          layerZ,
+          settings.plungeRate,
+          li === 0
+        )
+      ) {
         break;
       }
     } else {
       const ramp = generateContourLinearRamp(
         traverse,
-        start,
+        entryStart,
         fromZ,
         layerZ,
         rampLength,
@@ -380,10 +442,13 @@ function generateStandardOutlinePath(
         rampSampleSpacing,
         true
       );
-      if (!appendPoints(points, ramp)) break;
+      if (!appendPoints(points, ramp.points)) break;
+      loopStart = ramp.endPoint;
     }
 
-    if (!appendContourLoopAtZ(points, traverse, layerZ, settings.feedRate)) break;
+    if (!appendContourLoopFromPoint(points, traverse, layerZ, settings.feedRate, loopStart)) {
+      break;
+    }
   }
 
   if (settings.finishingPass) {
@@ -411,7 +476,7 @@ function generateStandardOutlinePath(
     }
   }
 
-  points.push({ x: start.x, y: start.y, z: safeZ, rapid: true });
+  points.push({ x: entryStart.x, y: entryStart.y, z: safeZ, rapid: true });
   return points;
 }
 
@@ -747,7 +812,7 @@ function helixStartWorldZ(
   safeHeight: number,
   zStartOffset: number
 ): number {
-  return topZ + Math.min(Math.max(safeHeight, 0), Math.max(zStartOffset, 0));
+  return outlineApproachWorldZ(topZ, safeHeight, zStartOffset);
 }
 
 function buildInterOperationTravel(
@@ -837,13 +902,17 @@ function generateAdaptiveOutlinePath(
   const travelFeed = globals.travelFeedRate;
   const outwardCCW = isGuideOutwardCCW(loop);
   const points: ToolpathPoint[] = [];
+  const approachZ = outlineApproachWorldZ(topZ, globals.safeHeight, settings.zStartOffset);
 
   points.push({ x: toolStart.x, y: toolStart.y, z: safeZ, rapid: true });
+  if (approachZ < safeZ - 1e-4) {
+    points.push({ x: toolStart.x, y: toolStart.y, z: approachZ, feedRate: plungeFeed });
+  }
 
   const helixTarget = layers.length > 0 ? layers[0] : finalZ;
   let boreHelixAngle = 0;
 
-  const initialBore = generateHelixBorePoints(toolStart, settings, safeZ, helixTarget, {
+  const initialBore = generateHelixBorePoints(toolStart, settings, approachZ, helixTarget, {
     ...helixOpts,
     taper: true,
     startAngle: boreHelixAngle,

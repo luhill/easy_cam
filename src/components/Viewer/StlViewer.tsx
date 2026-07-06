@@ -11,6 +11,7 @@ import {
   isAdaptiveOutlineOperation,
   isOutlineHelixEntryOperation,
   isOutlineOperation,
+  isStandardOutlineEntryEditable,
 } from '../../types/operations';
 import type { LoopPoint, OperationType, ToolpathSegment, Operation } from '../../types/operations';
 import {
@@ -58,9 +59,13 @@ import {
   resolveAdaptiveEntryLayout,
   adaptiveEntryOverridesFromGeometry,
 } from '../../lib/adaptiveGuides';
-import { minkowskiSegmentLen, trochoidSampleSpacing } from '../../lib/toolpathConfig';
+import { minkowskiSegmentLen, pathSampleSpacing, trochoidSampleSpacing } from '../../lib/toolpathConfig';
 import { resolveAdaptiveSlotGeometry, finishingStockAllowance } from '../../lib/adaptiveOutline';
-import { resolveStandardHelixEntryLayout } from '../../lib/outlineEntry';
+import {
+  buildOutlineEntryArcGuide,
+  resolveStandardOutlineEntryStart,
+  snapStandardOutlineEntryPoint,
+} from '../../lib/outlineEntry';
 import { createViewerRenderer, detectWebGLSupport } from '../../lib/webglSupport';
 import { registerViewerCameraBridge, goHomeWithCamera, goToViewerHome } from '../../lib/viewerCamera';
 import {
@@ -816,7 +821,7 @@ function SceneContent({
     const op = operations.find(
       (o) =>
         o.id === activeOperationId &&
-        isOutlineHelixEntryOperation(o) &&
+        (isOutlineHelixEntryOperation(o) || isStandardOutlineEntryEditable(o)) &&
         o.geometry?.loops?.[0]
     );
     if (!op?.geometry?.loops?.[0]) return null;
@@ -852,6 +857,7 @@ function SceneContent({
         op,
         layout,
         slotArcGuide,
+        toolStartArcGuide: undefined,
         showSlotJoin: true,
         toolStartManual: !!(op.geometry.toolStartPoint ?? op.geometry.entryPoint),
         slotJoinManual: !!op.geometry.slotJoinPoint,
@@ -859,18 +865,24 @@ function SceneContent({
     }
 
     const stockAllowance = finishingStockAllowance(op.settings);
-    const layout = resolveStandardHelixEntryLayout(
+    const entryStart = resolveStandardOutlineEntryStart(
       loop,
       op.settings,
       stockAllowance,
       op.geometry
     );
-    if (!layout) return null;
+    const toolStartArcGuide = buildOutlineEntryArcGuide(
+      loop,
+      op.settings,
+      stockAllowance,
+      pathSampleSpacing(toolpathResolution)
+    );
 
     return {
       op,
-      layout: { toolStart: layout.toolStart, slotJoin: layout.joinPoint },
+      layout: { toolStart: entryStart, slotJoin: entryStart },
       slotArcGuide: undefined,
+      toolStartArcGuide,
       showSlotJoin: false,
       toolStartManual: !!(op.geometry.toolStartPoint ?? op.geometry.entryPoint),
       slotJoinManual: false,
@@ -887,15 +899,26 @@ function SceneContent({
   const handleToolStartChange = useCallback(
     (point: { x: number; y: number }) => {
       if (!adaptiveEntry?.op.geometry) return;
+      const loop = adaptiveEntry.op.geometry.loops?.[0];
+      let next = point;
+      if (loop && isStandardOutlineEntryEditable(adaptiveEntry.op)) {
+        next = snapStandardOutlineEntryPoint(
+          loop,
+          adaptiveEntry.op.settings,
+          finishingStockAllowance(adaptiveEntry.op.settings),
+          point,
+          pathSampleSpacing(toolpathResolution)
+        );
+      }
       updateOperation(adaptiveEntry.op.id, {
         geometry: {
           ...adaptiveEntry.op.geometry,
-          toolStartPoint: point,
+          toolStartPoint: next,
           entryPoint: undefined,
         },
       });
     },
-    [adaptiveEntry, updateOperation]
+    [adaptiveEntry, updateOperation, toolpathResolution]
   );
 
   const handleSlotJoinChange = useCallback(
@@ -960,6 +983,7 @@ function SceneContent({
           toolStart={adaptiveEntry.layout.toolStart}
           slotJoin={adaptiveEntry.layout.slotJoin}
           slotArcGuide={adaptiveEntry.slotArcGuide}
+          toolStartArcGuide={adaptiveEntry.toolStartArcGuide}
           topZ={partBounds.maxZ}
           toolStartManual={adaptiveEntry.toolStartManual}
           slotJoinManual={adaptiveEntry.slotJoinManual}

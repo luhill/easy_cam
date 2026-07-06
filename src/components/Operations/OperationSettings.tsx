@@ -45,6 +45,7 @@ const HELIX_BASE_FIELDS: FieldDef[] = [
 
 const OUTLINE_COMMON_FIELDS: FieldDef[] = [
   { key: 'radialOffset', label: 'Additional Offset', unit: 'mm', step: 0.1 },
+  { key: 'zStartOffset', label: 'Z Start Offset', unit: 'mm', step: 0.1 },
 ];
 
 const LINEAR_ENTRY_FIELDS: FieldDef[] = [
@@ -120,6 +121,9 @@ function fieldHint(operation: Operation, key: NumericSettingKey): string | undef
   }
   if (key === 'boreTaperAngleDeg' && operation.type === 'helix') {
     return 'Set to 0 to disable. At each pass bottom the tool spirals outward to full diameter using stepover.';
+  }
+  if (key === 'zStartOffset' && isOutlineOperation(operation)) {
+    return 'Entry ramp, helix bore, or straight plunge begins at min(global safe height, this offset above stock top).';
   }
   if (key === 'zStartOffset' && operation.type === 'helix') {
     return 'Helix ramp begins at the lower of this offset above stock top or the global safe height.';

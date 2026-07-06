@@ -3,12 +3,14 @@ import { Line } from '@react-three/drei';
 import { useThree, type ThreeEvent } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { ArcLengthGuide } from '../../lib/trochoidalPath';
+import { findClosestSOnGuide, sampleGuideAtS } from '../../lib/trochoidalPath';
 import { snapPointToSlotCenterline } from '../../lib/adaptiveEntryLayout';
 
 interface AdaptiveEntryHandlesProps {
   toolStart: { x: number; y: number };
   slotJoin?: { x: number; y: number };
   slotArcGuide?: ArcLengthGuide;
+  toolStartArcGuide?: ArcLengthGuide;
   topZ: number;
   toolStartManual: boolean;
   slotJoinManual?: boolean;
@@ -117,6 +119,7 @@ export function AdaptiveEntryHandles({
   toolStart,
   slotJoin,
   slotArcGuide,
+  toolStartArcGuide,
   topZ,
   toolStartManual,
   slotJoinManual = false,
@@ -127,6 +130,19 @@ export function AdaptiveEntryHandles({
   const dragPlane = useMemo(
     () => new THREE.Plane(new THREE.Vector3(0, 0, 1), -topZ),
     [topZ]
+  );
+
+  const handleToolStartCommit = useCallback(
+    (x: number, y: number) => {
+      if (toolStartArcGuide) {
+        const hit = findClosestSOnGuide(toolStartArcGuide, { x, y });
+        const frame = sampleGuideAtS(toolStartArcGuide, hit.s);
+        onToolStartChange({ x: frame.x, y: frame.y });
+        return;
+      }
+      onToolStartChange({ x, y });
+    },
+    [onToolStartChange, toolStartArcGuide]
   );
 
   const handleSlotJoinCommit = useCallback(
@@ -148,7 +164,7 @@ export function AdaptiveEntryHandles({
         point={toolStart}
         topZ={topZ}
         color={toolStartManual ? '#f59e0b' : '#94a3b8'}
-        onCommit={(x, y) => onToolStartChange({ x, y })}
+        onCommit={handleToolStartCommit}
         dragPlane={dragPlane}
       />
       {showSlotJoin && slotJoin && (

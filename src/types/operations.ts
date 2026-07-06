@@ -238,6 +238,11 @@ export function isOutlineHelixEntryOperation(op: Pick<Operation, 'type' | 'setti
   );
 }
 
+/** Standard outline (non-adaptive) — draggable entry start on the tool centerline. */
+export function isStandardOutlineEntryEditable(op: Pick<Operation, 'type' | 'settings'>): boolean {
+  return isOutlineOperation(op) && !isAdaptiveOutlineOperation(op);
+}
+
 /** Migrate legacy adaptive-outline ops to unified outline + adaptiveMode. */
 export function normalizeOperation(op: Operation): Operation {
   if (op.type !== 'adaptive-outline') return op;
