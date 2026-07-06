@@ -1,3 +1,5 @@
+import { clampOperationSettings } from '../lib/settingLimits';
+
 export type OperationType =
   | 'outline'
   | 'adaptive-outline'
@@ -20,20 +22,24 @@ export interface OperationDefaults {
   zStartOffset: number;
   /** Additional radial stock offset beyond tool radius (mm); negative allows finishing inside the line */
   radialOffset: number;
-  /** Adaptive outline: slot width as % of tool diameter (125–200%) */
+  /** Outline: trochoidal adaptive slot clearing around the contour */
+  adaptiveMode: boolean;
+  /** Slot width as % of tool diameter (125–200%) — adaptive mode only */
   slotWidthPercent: number;
-  /** Adaptive outline: micro-retract / Z lift between trochoid passes (mm); 0 = no lift */
+  /** Micro-retract / Z lift between trochoid passes (mm); 0 = no lift — adaptive mode only */
   liftAmount: number;
-  /** Adaptive outline: outside bore diameter as % of tool diameter (150% ≈ former 50% helix ⌀) */
+  /** Outside bore diameter as % of tool diameter — adaptive mode only */
   boreDiameterPercent: number;
-  /** Adaptive outline: helix ramp pitch angle (degrees) */
-  helixAngleDeg: number;
-  /** Adaptive outline: bore wall taper below stock top (degrees); widens toward Z=0 */
+  /** Helical (adaptive) or linear (standard outline) entry ramp angle (degrees) */
+  rampAngleDeg: number;
+  /** Bore wall taper below stock top (degrees) — adaptive mode only */
   boreTaperAngleDeg: number;
-  /** Adaptive outline: feed rate for helix bore and toroidal lead-in (mm/min) */
+  /** Feed rate for helix bore and toroidal lead-in (mm/min) — adaptive mode only */
   helixFeedRate: number;
-  /** Adaptive outline: leave 0.1 mm on walls then run a final outline pass */
+  /** Leave stock on walls then run a final outline pass */
   finishingPass: boolean;
+  /** Finishing stock left on walls as % of tool diameter */
+  finishingStockPercent: number;
   /** External cuts: climb (clockwise) vs conventional (counter-clockwise) */
   climbMilling: boolean;
 }
@@ -113,14 +119,8 @@ export const OPERATION_TEMPLATES: OperationTemplate[] = [
   {
     type: 'outline',
     label: 'Outline',
-    description: '2D contour around selected geometry',
+    description: '2D contour with optional adaptive trochoidal clearing',
     icon: '◻',
-  },
-  {
-    type: 'adaptive-outline',
-    label: 'Adaptive Outline',
-    description: 'Helix bore entry then trochoidal channel around outline',
-    icon: '◎',
   },
   {
     type: 'drill',
@@ -164,23 +164,16 @@ export const DEFAULT_SETTINGS: OperationDefaults = {
   depthOffset: 0,
   zStartOffset: 1,
   radialOffset: 0,
+  adaptiveMode: false,
   slotWidthPercent: 150,
   liftAmount: 0,
   boreDiameterPercent: 150,
-  helixAngleDeg: 1.5,
+  rampAngleDeg: 1.5,
   boreTaperAngleDeg: 2,
   helixFeedRate: 350,
   finishingPass: false,
+  finishingStockPercent: 7,
   climbMilling: true,
-};
-
-const ADAPTIVE_OUTLINE_DEFAULT_OVERRIDES: Partial<OperationDefaults> = {
-  feedRate: 500,
-  stepDown: 6,
-  stepover: 5,
-  plungeRate: 120,
-  liftAmount: 0.5,
-  finishingPass: true,
 };
 
 const HELIX_DEFAULT_OVERRIDES: Partial<OperationDefaults> = {
@@ -189,11 +182,20 @@ const HELIX_DEFAULT_OVERRIDES: Partial<OperationDefaults> = {
 };
 
 export function defaultSettingsForOperation(type: OperationType): OperationDefaults {
-  if (type === 'adaptive-outline') {
-    return { ...DEFAULT_SETTINGS, ...ADAPTIVE_OUTLINE_DEFAULT_OVERRIDES };
-  }
   if (type === 'helix') {
     return { ...DEFAULT_SETTINGS, ...HELIX_DEFAULT_OVERRIDES };
+  }
+  if (type === 'adaptive-outline') {
+    return {
+      ...DEFAULT_SETTINGS,
+      adaptiveMode: true,
+      feedRate: 500,
+      stepDown: 6,
+      stepover: 5,
+      plungeRate: 120,
+      liftAmount: 0.5,
+      finishingPass: true,
+    };
   }
   return { ...DEFAULT_SETTINGS };
 }
@@ -209,6 +211,26 @@ export const OPERATION_COLORS: Record<OperationType, string> = {
   contour: '#06b6d4',
   'custom-gcode': '#64748b',
 };
+
+export function isOutlineOperation(op: Pick<Operation, 'type' | 'settings'>): boolean {
+  return op.type === 'outline' || op.type === 'adaptive-outline';
+}
+
+export function isAdaptiveOutlineOperation(op: Pick<Operation, 'type' | 'settings'>): boolean {
+  return (
+    (op.type === 'outline' && op.settings.adaptiveMode) || op.type === 'adaptive-outline'
+  );
+}
+
+/** Migrate legacy adaptive-outline ops to unified outline + adaptiveMode. */
+export function normalizeOperation(op: Operation): Operation {
+  if (op.type !== 'adaptive-outline') return op;
+  return {
+    ...op,
+    type: 'outline',
+    settings: clampOperationSettings({ ...op.settings, adaptiveMode: true }),
+  };
+}
 
 export function getSelectionStrategy(type: OperationType): SelectionStrategy {
   switch (type) {

@@ -5,7 +5,12 @@ import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import * as THREE from 'three';
 import { useAppStore } from '../../store/useAppStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
-import { OPERATION_COLORS, getSelectedHoles } from '../../types/operations';
+import {
+  OPERATION_COLORS,
+  getSelectedHoles,
+  isAdaptiveOutlineOperation,
+  isOutlineOperation,
+} from '../../types/operations';
 import type { LoopPoint, OperationType, ToolpathSegment, Operation } from '../../types/operations';
 import {
   createFaceColorAttribute,
@@ -576,7 +581,7 @@ function StlMesh({
 
       const faceIndices = [...new Set([...(existing?.faceIndices ?? []), ...group.faceIndices])];
       const loops =
-        operationType === 'outline' || operationType === 'adaptive-outline'
+        op && isOutlineOperation(op)
           ? mergeLoops(existing?.loops, group.loops)
           : existing?.loops;
       const vertexIndices = collectVertexIndices(meshIndexRef.current, faceIndices);
@@ -788,7 +793,7 @@ function SceneContent({
     if (!partBounds) return null;
     const globals = { safeHeight, resolution: toolpathResolution, travelFeedRate };
     const adaptiveOps = operations.filter(
-      (op) => op.visible && op.enabled && op.type === 'adaptive-outline' && op.geometry?.loops?.[0]
+      (op) => op.visible && op.enabled && isAdaptiveOutlineOperation(op) && op.geometry?.loops?.[0]
     );
     if (adaptiveOps.length === 0) return null;
 
@@ -809,7 +814,7 @@ function SceneContent({
     const op = operations.find(
       (o) =>
         o.id === activeOperationId &&
-        o.type === 'adaptive-outline' &&
+        isAdaptiveOutlineOperation(o) &&
         o.geometry?.loops?.[0]
     );
     if (!op?.geometry?.loops?.[0]) return null;

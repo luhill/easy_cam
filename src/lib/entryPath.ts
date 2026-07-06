@@ -68,7 +68,50 @@ export function helixPitchForRadius(helixR: number, angleDeg: number): number {
 
 /** One revolution Z drop from helix lead angle (degrees). */
 export function helixPitchFromAngle(settings: OperationDefaults): number {
-  return helixPitchForRadius(resolveHelixRadius(settings), settings.helixAngleDeg);
+  return helixPitchForRadius(resolveHelixRadius(settings), settings.rampAngleDeg);
+}
+
+/**
+ * Linear entry ramp along the approach direction into a contour start point.
+ * Ramp ends at (endX, endY, toZ); starts upstream at rampAngleDeg above horizontal.
+ */
+export function generateLinearEntryRamp(
+  endX: number,
+  endY: number,
+  approachTx: number,
+  approachTy: number,
+  fromZ: number,
+  toZ: number,
+  rampAngleDeg: number,
+  feedRate?: number,
+  steps = 16
+): ToolpathPoint[] {
+  if (Math.abs(fromZ - toZ) < 1e-5) {
+    return [{ x: endX, y: endY, z: toZ, feedRate }];
+  }
+
+  const angleRad = (Math.max(rampAngleDeg, 0.5) * Math.PI) / 180;
+  const dz = toZ - fromZ;
+  const horizontalLen = Math.abs(dz) / Math.tan(angleRad);
+  const tlen = Math.hypot(approachTx, approachTy) || 1;
+  const tx = approachTx / tlen;
+  const ty = approachTy / tlen;
+  const startX = endX - tx * horizontalLen;
+  const startY = endY - ty * horizontalLen;
+  const segs = Math.max(4, steps);
+  const points: ToolpathPoint[] = [];
+
+  for (let i = 0; i <= segs; i++) {
+    const t = i / segs;
+    points.push({
+      x: startX + (endX - startX) * t,
+      y: startY + (endY - startY) * t,
+      z: fromZ + dz * t,
+      feedRate,
+    });
+  }
+
+  return points;
 }
 
 /** Layer-step helix radius — bore diameter equals slot width (slot clearance). */
@@ -1466,7 +1509,7 @@ export function generateHelixBorePoints(
       options,
       defaultHelixR
     );
-    const pitch = helixPitchForRadius(helixR, settings.helixAngleDeg);
+    const pitch = helixPitchForRadius(helixR, settings.rampAngleDeg);
 
     for (let i = 0; i < segments; i++) {
       angle += rotDir * ((Math.PI * 2) / segments);

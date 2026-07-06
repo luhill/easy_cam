@@ -10,14 +10,14 @@ import {
   offsetLoop2DMinkowski,
   signedLoopArea2D,
 } from './geometryProcessing';
-import { OPERATION_COLORS, getSelectedHoles } from '../types/operations';
+import { OPERATION_COLORS, getSelectedHoles, normalizeOperation } from '../types/operations';
 import { clampOperationSettings } from './settingLimits';
 import {
   buildSlotCenterGuideWithCornerSpurs,
   mapSpurRangesToArcGuide,
   buildGuideRadiusSampler,
 } from './cornerSpurs';
-import { resolveAdaptiveSlotGeometry, cornerSpurOptionsForRoughing } from './adaptiveOutline';
+import { resolveAdaptiveSlotGeometry, cornerSpurOptionsForRoughing, finishingStockAllowance } from './adaptiveOutline';
 import {
   adaptiveEntryOverridesFromGeometry,
   resolveAdaptiveEntryLayout,
@@ -36,6 +36,7 @@ import {
   generateBoreBottomToLeadInTransition,
   generateFullRevolutionOrbit,
   generateHelixBorePoints,
+  generateLinearEntryRamp,
   helixRadiusAtZ,
   helixRadiusTaperedFromStart,
   interiorHelixRadiusAtZ,
@@ -83,10 +84,6 @@ let activePointBudget: { discarded: number } | null = null;
 
 function toolRadius(settings: Operation['settings']): number {
   return Math.max(settings.toolDiameter, 0.1) / 2;
-}
-
-function toolCenterlineOffset(settings: Operation['settings']): number {
-  return toolRadius(settings) + (settings.radialOffset ?? 0);
 }
 
 function getBounds(geometry: Operation['geometry']): {
@@ -143,7 +140,19 @@ function appendPoints(target: ToolpathPoint[], points: ToolpathPoint[]): boolean
   return false;
 }
 
-function loopToToolpathPoints(
+function contourTraverse(
+  loop: LoopPoint[],
+  settings: Operation['settings'],
+  extraRadialStock = 0
+): LoopPoint[] {
+  const offset = toolRadius(settings) + (settings.radialOffset ?? 0) + extraRadialStock;
+  const toolLoop = offsetLoop2D(loop, offset);
+  const ccw = signedLoopArea2D(loop) >= 0;
+  const reverse = settings.climbMilling ? ccw : !ccw;
+  return reverse ? [...toolLoop].reverse() : toolLoop;
+}
+
+function generateStandardOutlinePath(
   loop: LoopPoint[],
   settings: Operation['settings'],
   ctx: CutZContext,
@@ -154,22 +163,67 @@ function loopToToolpathPoints(
   const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
   const points: ToolpathPoint[] = [];
 
-  if (loop.length === 0) return points;
+  if (loop.length === 0 || layers.length === 0) return points;
 
-  const toolLoop = offsetLoop2D(loop, toolCenterlineOffset(settings));
-  const ccw = signedLoopArea2D(loop) >= 0;
-  const reverse = settings.climbMilling ? ccw : !ccw;
-  const traverse = reverse ? [...toolLoop].reverse() : toolLoop;
+  const stockAllowance = finishingStockAllowance(settings);
+  const traverse = contourTraverse(loop, settings, stockAllowance);
+  if (traverse.length === 0) return points;
 
   const start = traverse[0];
-  points.push({ x: start.x, y: start.y, z: safeZ, rapid: true });
-  points.push({ x: start.x, y: start.y, z: topZ });
+  const next = traverse[1] ?? start;
+  const approachTx = start.x - next.x;
+  const approachTy = start.y - next.y;
 
-  for (const layerZ of layers) {
+  points.push({ x: start.x, y: start.y, z: safeZ, rapid: true });
+
+  for (let li = 0; li < layers.length; li++) {
+    const layerZ = layers[li];
+    const fromZ = li === 0 ? topZ : layers[li - 1];
+    const ramp = generateLinearEntryRamp(
+      start.x,
+      start.y,
+      approachTx,
+      approachTy,
+      fromZ,
+      layerZ,
+      settings.rampAngleDeg,
+      settings.plungeRate
+    );
+    if (!appendPoints(points, ramp)) break;
+
     for (const p of traverse) {
-      points.push({ x: p.x, y: p.y, z: layerZ });
+      if (!appendPoints(points, [{ x: p.x, y: p.y, z: layerZ, feedRate: settings.feedRate }])) {
+        break;
+      }
     }
-    points.push({ x: traverse[0].x, y: traverse[0].y, z: layerZ });
+    appendPoints(points, [
+      { x: traverse[0].x, y: traverse[0].y, z: layerZ, feedRate: settings.feedRate },
+    ]);
+  }
+
+  if (settings.finishingPass) {
+    const finishZ = layers[layers.length - 1];
+    const finishTraverse = contourTraverse(loop, settings, 0);
+    if (finishTraverse.length > 0) {
+      const finishPts: ToolpathPoint[] = finishTraverse.map((p) => ({
+        x: p.x,
+        y: p.y,
+        z: finishZ,
+        feedRate: settings.feedRate,
+      }));
+      finishPts.push({
+        x: finishTraverse[0].x,
+        y: finishTraverse[0].y,
+        z: finishZ,
+        feedRate: settings.feedRate,
+      });
+      const at = lastPathPoint(points);
+      if (at) {
+        appendClosedOutlinePath(points, finishPts, at);
+      } else {
+        appendPoints(points, finishPts);
+      }
+    }
   }
 
   points.push({ x: start.x, y: start.y, z: safeZ, rapid: true });
@@ -182,10 +236,15 @@ function generateOutlinePath(
   globals: ToolpathGlobalOptions
 ): ToolpathPoint[] {
   const { settings, geometry } = op;
+
+  if (settings.adaptiveMode) {
+    return generateAdaptiveOutlinePath(op, ctx, globals);
+  }
+
   const topZ = stockTopWorldZ(ctx);
 
   if (geometry?.loops && geometry.loops.length > 0) {
-    return loopToToolpathPoints(geometry.loops[0], settings, ctx, globals);
+    return generateStandardOutlinePath(geometry.loops[0], settings, ctx, globals);
   }
 
   const { minX, maxX, minY, maxY } = getBounds(geometry);
@@ -195,7 +254,7 @@ function generateOutlinePath(
     { x: maxX, y: maxY, z: topZ },
     { x: minX, y: maxY, z: topZ },
   ];
-  return loopToToolpathPoints(fallbackLoop, settings, ctx, globals);
+  return generateStandardOutlinePath(fallbackLoop, settings, ctx, globals);
 }
 
 function trochoidParams(
@@ -546,7 +605,15 @@ function generateAdaptiveOutlinePath(
   const loop = geometry?.loops?.[0];
 
   if (!loop) {
-    return generateOutlinePath(op, ctx, globals);
+    const topZ = stockTopWorldZ(ctx);
+    const { minX, maxX, minY, maxY } = getBounds(geometry);
+    const fallbackLoop: LoopPoint[] = [
+      { x: minX, y: minY, z: topZ },
+      { x: maxX, y: minY, z: topZ },
+      { x: maxX, y: maxY, z: topZ },
+      { x: minX, y: maxY, z: topZ },
+    ];
+    return generateStandardOutlinePath(fallbackLoop, settings, ctx, globals);
   }
 
   const topZ = stockTopWorldZ(ctx);
@@ -571,7 +638,7 @@ function generateAdaptiveOutlinePath(
     globals.resolution
   );
   if (!entryLayout) {
-    return generateOutlinePath(op, ctx, globals);
+    return generateStandardOutlinePath(loop, settings, ctx, globals);
   }
 
   const toolStart = entryLayout.toolStart;
@@ -991,14 +1058,14 @@ function generatePathForOperation(
   globals: ToolpathGlobalOptions,
   warnings: string[] = []
 ): ToolpathPoint[] {
-  const settings = normalizedSettings(op.settings);
-  const operation = { ...op, settings };
+  const normalizedOp = normalizeOperation(op);
+  const settings = normalizedSettings(normalizedOp.settings);
+  const operation = { ...normalizedOp, settings };
 
   switch (operation.type) {
     case 'outline':
-      return generateOutlinePath(operation, ctx, globals);
     case 'adaptive-outline':
-      return generateAdaptiveOutlinePath(operation, ctx, globals);
+      return generateOutlinePath(operation, ctx, globals);
     case 'drill':
       return generateDrillPath(operation, ctx, globals);
     case 'helix':

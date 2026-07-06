@@ -4,6 +4,8 @@ import {
   getSelectionStrategy,
   getSelectedHoles,
   DEFAULT_SETTINGS,
+  isAdaptiveOutlineOperation,
+  isOutlineOperation,
 } from '../../types/operations';
 import { createCutZContext, type CutZContext } from '../../lib/cutDepth';
 import { validateHelixHole } from '../../lib/helixValidation';
@@ -49,7 +51,7 @@ function formatGeometrySummary(operation: Operation, cutZContext: CutZContext): 
     return `${holes.length} holes`;
   }
 
-  if (operation.type === 'adaptive-outline') {
+  if (isAdaptiveOutlineOperation(operation)) {
     const hasOutline = geo.loops && geo.loops.length > 0;
     if (!hasOutline) return 'None selected';
     const parts: string[] = ['outline'];
@@ -106,7 +108,7 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
   const isActive = activeOperationId === operation.id;
   const geometrySummary = formatGeometrySummary(operation, cutZContext);
   const hasOutlineLoop =
-    operation.type === 'adaptive-outline' &&
+    isAdaptiveOutlineOperation(operation) &&
     !!operation.geometry?.loops &&
     operation.geometry.loops.length > 0;
   const hasGeometry =
@@ -175,8 +177,7 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
 
   const supportsModelSelection =
     operation.type !== 'custom-gcode' &&
-    (operation.type === 'outline' ||
-    operation.type === 'adaptive-outline' ||
+    (isOutlineOperation(operation) ||
     operation.type === 'drill' ||
     operation.type === 'helix' ||
     operation.type === 'pocket' ||
@@ -191,7 +192,7 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
     if (isActive && hasOutlineLoop && !isEditingEntry) {
       return 'Use Edit Entry Points to drag tool start and slot join without rotating the view. Lead-in is a spline tangent to the outline in climb/conventional direction.';
     }
-    if (isSelectingGeometry && operation.type === 'adaptive-outline') {
+    if (isSelectingGeometry && isOutlineOperation(operation)) {
       return 'Select top-facing part outline';
     }
     if (isActive && selectionMode && (operation.type === 'drill' || operation.type === 'helix')) {
