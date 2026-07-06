@@ -16,8 +16,8 @@ import {
   adaptiveEntryOverridesFromGeometry,
   resolveAdaptiveEntryLayout,
 } from '../../lib/adaptiveGuides';
-import { minkowskiSegmentLen, trochoidSampleSpacing } from '../../lib/toolpathConfig';
-import { resolveStandardOutlineEntryStart } from '../../lib/outlineEntry';
+import { minkowskiSegmentLen, pathSampleSpacing, trochoidSampleSpacing } from '../../lib/toolpathConfig';
+import { resolveStandardEntryLayout } from '../../lib/outlineEntry';
 import { finishingStockAllowance, resolveAdaptiveSlotGeometry } from '../../lib/adaptiveOutline';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { useAppStore } from '../../store/useAppStore';
@@ -58,18 +58,27 @@ function formatGeometrySummary(operation: Operation, cutZContext: CutZContext): 
     const hasOutline = geo.loops && geo.loops.length > 0;
     if (!hasOutline) return 'None selected';
     const loop = geo.loops![0];
+    const resolution = useSettingsStore.getState().toolpathResolution;
     const stockAllowance = finishingStockAllowance(operation.settings);
     const toolOrigin = useSettingsStore.getState().toolOrigin;
-    const entryStart = resolveStandardOutlineEntryStart(
+    const layout = resolveStandardEntryLayout(
       loop,
       operation.settings,
       stockAllowance,
       geo,
+      pathSampleSpacing(resolution),
+      minkowskiSegmentLen(resolution),
       toolOrigin
     );
+    if (!layout) return 'outline';
     const entryLabel =
       operation.settings.outlineEntryType === 'helix' ? 'entry' : 'start';
-    return `outline, ${entryLabel} (${entryStart.x.toFixed(1)}, ${entryStart.y.toFixed(1)})`;
+    const parts = [
+      'outline',
+      `${entryLabel} (${layout.toolStart.x.toFixed(1)}, ${layout.toolStart.y.toFixed(1)})`,
+      `join (${layout.contourJoin.x.toFixed(1)}, ${layout.contourJoin.y.toFixed(1)})`,
+    ];
+    return parts.join(', ');
   }
 
   if (isAdaptiveOutlineOperation(operation)) {
@@ -135,6 +144,8 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
     !!operation.geometry?.loops &&
     operation.geometry.loops.length > 0;
   const hasAdaptiveEntry = hasEditableEntry && isAdaptiveOutlineOperation(operation);
+  const hasStandardTwoPointEntry = hasEditableEntry && isStandardOutlineEntryEditable(operation);
+  const hasTwoPointEntry = hasAdaptiveEntry || hasStandardTwoPointEntry;
   const hasGeometry =
     !!operation.geometry &&
     (operation.geometry.faceIndices.length > 0 ||
@@ -171,28 +182,32 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
       );
     }
     const stockAllowance = finishingStockAllowance(operation.settings);
-    const entryStart = resolveStandardOutlineEntryStart(
+    const resolution = useSettingsStore.getState().toolpathResolution;
+    return resolveStandardEntryLayout(
       loop,
       operation.settings,
       stockAllowance,
       operation.geometry,
+      pathSampleSpacing(resolution),
+      minkowskiSegmentLen(resolution),
       toolOrigin
     );
-    return { entryStart };
   }, [hasEditableEntry, operation, toolOrigin]);
 
-  const toolStartX =
-    operation.geometry?.toolStartPoint?.x ??
-    (entryLayout && 'toolStart' in entryLayout
-      ? entryLayout.toolStart.x
-      : entryLayout?.entryStart?.x) ??
-    0;
-  const toolStartY =
-    operation.geometry?.toolStartPoint?.y ??
-    (entryLayout && 'toolStart' in entryLayout
-      ? entryLayout.toolStart.y
-      : entryLayout?.entryStart?.y) ??
-    0;
+  const resolvedToolStart = entryLayout
+    ? entryLayout.toolStart
+    : { x: 0, y: 0 };
+  const resolvedJoin =
+    entryLayout && 'slotJoin' in entryLayout
+      ? entryLayout.slotJoin
+      : entryLayout && 'contourJoin' in entryLayout
+        ? entryLayout.contourJoin
+        : { x: 0, y: 0 };
+
+  const toolStartX = operation.geometry?.toolStartPoint?.x ?? resolvedToolStart.x;
+  const toolStartY = operation.geometry?.toolStartPoint?.y ?? resolvedToolStart.y;
+  const slotJoinX = operation.geometry?.slotJoinPoint?.x ?? resolvedJoin.x;
+  const slotJoinY = operation.geometry?.slotJoinPoint?.y ?? resolvedJoin.y;
 
   const handleSelectGeometry = () => {
     setActiveOperation(operation.id);
@@ -212,17 +227,25 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
     if (!operation.geometry) return;
     const value = parseFloat(raw);
     if (!Number.isFinite(value)) return;
-    const current =
-      operation.geometry.toolStartPoint ??
-      (entryLayout && 'toolStart' in entryLayout
-        ? entryLayout.toolStart
-        : entryLayout?.entryStart) ??
-      { x: 0, y: 0 };
+    const current = operation.geometry.toolStartPoint ?? resolvedToolStart;
     updateOperation(operation.id, {
       geometry: {
         ...operation.geometry,
         toolStartPoint: { ...current, [axis]: value },
         entryPoint: undefined,
+      },
+    });
+  };
+
+  const handleSlotJoinCoordinateChange = (axis: 'x' | 'y', raw: string) => {
+    if (!operation.geometry) return;
+    const value = parseFloat(raw);
+    if (!Number.isFinite(value)) return;
+    const current = operation.geometry.slotJoinPoint ?? resolvedJoin;
+    updateOperation(operation.id, {
+      geometry: {
+        ...operation.geometry,
+        slotJoinPoint: { ...current, [axis]: value },
       },
     });
   };
@@ -239,13 +262,17 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
 
   const geometryHint = (() => {
     if (isEditingEntry) {
-      return hasAdaptiveEntry
-        ? 'Drag amber cross = tool start, blue cross = slot join on centerline (orange guide). Right-drag to orbit the view.'
+      return hasTwoPointEntry
+        ? hasAdaptiveEntry
+          ? 'Drag amber cross = tool start, blue cross = slot join on centerline (orange guide). Right-drag to orbit the view.'
+          : 'Drag amber cross = entry start, blue cross = outline join on tool path. Right-drag to orbit the view.'
         : 'Drag amber cross = outline entry start on the tool path. Right-drag to orbit the view.';
     }
     if (isActive && hasEditableEntry && !isEditingEntry) {
-      return hasAdaptiveEntry
-        ? 'Use Edit Entry Points to drag tool start and slot join without rotating the view. Lead-in is a spline tangent to the outline in climb/conventional direction.'
+      return hasTwoPointEntry
+        ? hasAdaptiveEntry
+          ? 'Use Edit Entry Points to drag tool start and slot join without rotating the view. Lead-in is a spline tangent to the outline in climb/conventional direction.'
+          : 'Use Edit Entry Points to drag entry start and outline join. Lead-in uses a tangent spline when entry is offset from the join.'
         : 'Use Edit Entry Points to set where the ramp, helix tangent, or straight plunge begins on the outline.';
     }
     if (isSelectingGeometry && isOutlineOperation(operation)) {
@@ -323,6 +350,32 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
               onChange={(e) => handleToolStartCoordinateChange('y', e.target.value)}
             />
           </div>
+          {hasTwoPointEntry && (
+            <>
+              <div className="setting-row">
+                <label>
+                  Outline join X <span className="unit">(mm)</span>
+                </label>
+                <input
+                  type="number"
+                  value={Number.isFinite(slotJoinX) ? slotJoinX : 0}
+                  step={0.1}
+                  onChange={(e) => handleSlotJoinCoordinateChange('x', e.target.value)}
+                />
+              </div>
+              <div className="setting-row">
+                <label>
+                  Outline join Y <span className="unit">(mm)</span>
+                </label>
+                <input
+                  type="number"
+                  value={Number.isFinite(slotJoinY) ? slotJoinY : 0}
+                  step={0.1}
+                  onChange={(e) => handleSlotJoinCoordinateChange('y', e.target.value)}
+                />
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

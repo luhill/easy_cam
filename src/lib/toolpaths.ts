@@ -18,12 +18,15 @@ import {
 } from './cornerSpurs';
 import { resolveAdaptiveSlotGeometry, cornerSpurOptionsForRoughing, finishingStockAllowance } from './adaptiveOutline';
 import {
+  buildStandardSplineLeadIn,
   generateContourLinearRamp,
+  generateOpenPolylineLinearRamp,
   outlineApproachWorldZ,
   outlineRampLengthMm,
+  resolveStandardEntryLayout,
   resolveStandardHelixEntryLayout,
-  resolveStandardOutlineEntryStart,
   sampleContourLoopFromArcS,
+  standardEntryNeedsLeadIn,
   stationOnContour,
 } from './outlineEntry';
 import {
@@ -54,8 +57,6 @@ import {
 } from './entryPath';
 import {
   adaptiveForwardIncrement,
-  buildArcLengthGuide,
-  guideArcLengthBetween,
   sampleGuideAtS,
 } from './trochoidalPath';
 import {
@@ -406,38 +407,54 @@ function generateStandardOutlinePath(
   if (loop.length === 0 || layers.length === 0) return points;
 
   const stockAllowance = finishingStockAllowance(settings);
-  const traverse = contourTraverse(loop, settings, stockAllowance, globals.resolution);
-  if (traverse.length === 0) return points;
+  const rampSampleSpacing = pathSampleSpacing(globals.resolution);
+  const rampLength = outlineRampLengthMm(settings);
+  const segLen = minkowskiSegmentLen(globals.resolution);
 
-  const entryStart = resolveStandardOutlineEntryStart(
+  const layout = resolveStandardEntryLayout(
     loop,
     settings,
     stockAllowance,
     geometry,
+    rampSampleSpacing,
+    segLen,
     globals.toolOrigin
   );
+  if (!layout) return points;
+
+  const { toolStart, contourJoin, traverse, arcGuide } = layout;
+  const traverseLength = arcGuide.totalLength;
+  const needsLeadIn = standardEntryNeedsLeadIn(layout);
   const approachZ = outlineApproachWorldZ(topZ, globals.safeHeight, settings.zStartOffset);
-  const rampSampleSpacing = pathSampleSpacing(globals.resolution);
-  const rampLength = outlineRampLengthMm(settings);
-  const traverseGuide = buildArcLengthGuide(traverse, Math.max(rampSampleSpacing, 0.25));
-  const traverseLength = traverseGuide.totalLength;
-
-  appendOutlineApproachToStart(points, entryStart, safeZ, approachZ, settings.plungeRate);
-
   const climbForward = true;
+
+  appendOutlineApproachToStart(points, toolStart, safeZ, approachZ, settings.plungeRate);
 
   for (let li = 0; li < layers.length; li++) {
     const layerZ = layers[li];
     const fromZ = li === 0 ? approachZ : layers[li - 1];
-    const entryStartS = stationOnContour(traverse, entryStart, rampSampleSpacing);
-    let loopStartS = entryStartS;
-    let loopArcLength = traverseLength;
+    const lastBeforeLayer = lastPathPoint(points);
+    let loopStartS = layout.contourJoinS;
+    let loopSkipNear: { x: number; y: number; z: number } | undefined;
 
     if (entryType === 'straight') {
+      if (li === 0 && needsLeadIn) {
+        const leadIn = buildStandardSplineLeadIn(layout, approachZ, rampSampleSpacing).map((p) => ({
+          ...p,
+          feedRate: settings.feedRate,
+        }));
+        if (!appendPoints(points, leadIn)) break;
+      }
+      const plungeAt =
+        li === 0
+          ? needsLeadIn
+            ? contourJoin
+            : toolStart
+          : (lastBeforeLayer ?? contourJoin);
       if (
         !appendStraightOutlineEntry(
           points,
-          entryStart,
+          plungeAt,
           fromZ,
           layerZ,
           settings.plungeRate,
@@ -446,27 +463,44 @@ function generateStandardOutlinePath(
       ) {
         break;
       }
+      loopStartS = stationOnContour(traverse, contourJoin, rampSampleSpacing);
     } else {
-      const ramp = generateContourLinearRamp(
-        traverse,
-        entryStart,
-        fromZ,
-        layerZ,
-        rampLength,
-        settings.rampAngleDeg,
-        settings.plungeRate,
-        rampSampleSpacing,
-        climbForward
-      );
+      const rampStart =
+        li === 0
+          ? needsLeadIn
+            ? toolStart
+            : contourJoin
+          : lastBeforeLayer ?? contourJoin;
+
+      let ramp: ReturnType<typeof generateContourLinearRamp>;
+      if (li === 0 && needsLeadIn) {
+        const entryPath = buildStandardSplineLeadIn(layout, approachZ, rampSampleSpacing);
+        ramp = generateOpenPolylineLinearRamp(
+          entryPath,
+          fromZ,
+          layerZ,
+          rampLength,
+          settings.rampAngleDeg,
+          settings.plungeRate,
+          rampSampleSpacing
+        );
+      } else {
+        ramp = generateContourLinearRamp(
+          traverse,
+          rampStart,
+          fromZ,
+          layerZ,
+          rampLength,
+          settings.rampAngleDeg,
+          settings.plungeRate,
+          rampSampleSpacing,
+          climbForward
+        );
+      }
+
       if (!appendPoints(points, ramp.points)) break;
-      loopStartS = ramp.endS;
-      const coveredArc = guideArcLengthBetween(
-        traverseLength,
-        entryStartS,
-        ramp.endS,
-        climbForward
-      );
-      loopArcLength = Math.max(traverseLength - coveredArc, 0);
+      loopStartS = stationOnContour(traverse, ramp.endPoint, rampSampleSpacing);
+      loopSkipNear = lastPathPoint(points) ?? undefined;
     }
 
     if (
@@ -478,8 +512,8 @@ function generateStandardOutlinePath(
         loopStartS,
         rampSampleSpacing,
         climbForward,
-        undefined,
-        loopArcLength
+        loopSkipNear,
+        traverseLength
       )
     ) {
       break;

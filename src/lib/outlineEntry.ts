@@ -8,11 +8,15 @@ import {
 import {
   advanceGuideArcLength,
   buildArcLengthGuide,
+  buildOpenArcLengthGuide,
   findClosestSOnGuide,
+  guideArcLengthBetween,
   sampleGuideAtS,
+  sampleOpenGuideAtS,
   type ArcLengthGuide,
 } from './trochoidalPath';
 import {
+  buildSplineEntryGuide,
   ensureEntryOutsidePart,
   resolveHelixRadius,
 } from './entryPath';
@@ -91,19 +95,19 @@ export function resolveStandardOutlineEntryStart(
   geometry: SelectedGeometry | null | undefined,
   toolOrigin?: ToolOriginXY | null
 ): { x: number; y: number } {
+  const layout = resolveStandardEntryLayout(
+    partLoop,
+    settings,
+    stockAllowance,
+    geometry,
+    0.25,
+    0.3,
+    toolOrigin
+  );
+  if (layout) return layout.contourJoin;
+
   const traverse = buildOutlineToolCenterline(partLoop, settings, stockAllowance);
   if (traverse.length === 0) return { x: toolOrigin?.x ?? 0, y: toolOrigin?.y ?? 0 };
-
-  const override = geometry?.toolStartPoint ?? geometry?.entryPoint ?? null;
-  if (override) {
-    const hit = closestPointOnLoop2D(override.x, override.y, traverse);
-    return { x: hit.x, y: hit.y };
-  }
-
-  if (toolOrigin) {
-    return closestPointOnLoopToOrigin(traverse, toolOrigin);
-  }
-
   return { x: traverse[0].x, y: traverse[0].y };
 }
 
@@ -118,6 +122,107 @@ export function snapStandardOutlineEntryPoint(
   const hit = findClosestSOnGuide(guide, point);
   const frame = sampleGuideAtS(guide, hit.s);
   return { x: frame.x, y: frame.y };
+}
+
+/** Snap an XY pick to the nearest point on the outline tool centerline guide. */
+export function snapPointToOutlineCenterline(
+  arcGuide: ArcLengthGuide,
+  point: { x: number; y: number }
+): { x: number; y: number; s: number } {
+  const hit = findClosestSOnGuide(arcGuide, point);
+  const frame = sampleGuideAtS(arcGuide, hit.s);
+  return { x: frame.x, y: frame.y, s: hit.s };
+}
+
+export interface StandardEntryOverrides {
+  toolStartPoint?: { x: number; y: number } | null;
+  slotJoinPoint?: { x: number; y: number } | null;
+  /** @deprecated maps to toolStartPoint */
+  entryPoint?: { x: number; y: number } | null;
+}
+
+export interface StandardEntryLayout {
+  toolStart: { x: number; y: number };
+  contourJoin: { x: number; y: number };
+  contourJoinS: number;
+  traverseTangent: { x: number; y: number };
+  arcGuide: ArcLengthGuide;
+  traverse: LoopPoint[];
+}
+
+/** Resolve bore/entry start, contour join, and tangent for standard outline entry. */
+export function resolveStandardEntryLayout(
+  partLoop: LoopPoint[],
+  settings: OperationDefaults,
+  stockAllowance: number,
+  geometry: SelectedGeometry | null | undefined,
+  sampleSpacing: number,
+  maxSegmentLen = 0.3,
+  toolOrigin?: ToolOriginXY | null
+): StandardEntryLayout | null {
+  if (partLoop.length < 2) return null;
+
+  const traverse = buildOutlineToolCenterline(partLoop, settings, stockAllowance, maxSegmentLen);
+  if (traverse.length < 3) return null;
+
+  const arcGuide = buildArcLengthGuide(traverse, Math.max(sampleSpacing, 0.25));
+  if (arcGuide.totalLength <= 0) return null;
+
+  const ccw = signedLoopArea2D(traverse) >= 0;
+  const climbForward = settings.climbMilling ? ccw : !ccw;
+  const tangentSign = climbForward ? 1 : -1;
+
+  const joinSnap = geometry?.slotJoinPoint
+    ? findClosestSOnGuide(arcGuide, geometry.slotJoinPoint)
+    : toolOrigin
+      ? findClosestSOnGuide(arcGuide, toolOrigin)
+      : { s: 0 };
+  const contourJoinS = joinSnap.s;
+  const joinFrame = sampleGuideAtS(arcGuide, contourJoinS);
+  const contourJoin = { x: joinFrame.x, y: joinFrame.y };
+  const tLen = Math.hypot(joinFrame.tx, joinFrame.ty) || 1;
+  const traverseTangent = {
+    x: (joinFrame.tx * tangentSign) / tLen,
+    y: (joinFrame.ty * tangentSign) / tLen,
+  };
+
+  const toolStartOverride = geometry?.toolStartPoint ?? geometry?.entryPoint ?? null;
+  const toolStart = toolStartOverride
+    ? { x: toolStartOverride.x, y: toolStartOverride.y }
+    : contourJoin;
+
+  return {
+    toolStart,
+    contourJoin,
+    contourJoinS,
+    traverseTangent,
+    arcGuide,
+    traverse,
+  };
+}
+
+export function standardEntryNeedsLeadIn(layout: StandardEntryLayout): boolean {
+  return (
+    Math.hypot(
+      layout.toolStart.x - layout.contourJoin.x,
+      layout.toolStart.y - layout.contourJoin.y
+    ) > 0.5
+  );
+}
+
+export function buildStandardSplineLeadIn(
+  layout: StandardEntryLayout,
+  z: number,
+  sampleSpacing: number
+): ToolpathPoint[] {
+  const spline = buildSplineEntryGuide(
+    layout.toolStart,
+    layout.contourJoin,
+    layout.traverseTangent,
+    sampleSpacing,
+    z
+  );
+  return spline.map((p) => ({ x: p.x, y: p.y, z }));
 }
 
 /** Minimum bore-center distance from part outline for standard helix entry. */
@@ -143,7 +248,16 @@ export function resolveStandardHelixEntryLayout(
 ): StandardHelixEntryLayout | null {
   if (partLoop.length < 2) return null;
 
-  const entryStart = resolveStandardOutlineEntryStart(
+  const layout = resolveStandardEntryLayout(
+    partLoop,
+    settings,
+    stockAllowance,
+    geometry,
+    0.25,
+    0.3,
+    toolOrigin
+  );
+  const entryStart = layout?.contourJoin ?? resolveStandardOutlineEntryStart(
     partLoop,
     settings,
     stockAllowance,
@@ -183,6 +297,70 @@ export function stationOnContour(
   return findClosestSOnGuide(guide, point).s;
 }
 
+function collectVertexAnchorStations(
+  guide: ArcLengthGuide,
+  traverse: LoopPoint[],
+  startS: number,
+  cutLength: number,
+  forward: boolean
+): number[] {
+  const total = guide.totalLength;
+  if (total <= 0) return [];
+
+  const seen = new Set<number>();
+  const anchors: number[] = [];
+
+  for (const pt of traverse) {
+    const s = findClosestSOnGuide(guide, pt).s;
+    const key = Math.round(s * 1000);
+    if (seen.has(key)) continue;
+    const delta = guideArcLengthBetween(total, startS, s, forward);
+    if (delta > 1e-4 && delta <= cutLength + 1e-4) {
+      seen.add(key);
+      anchors.push(s);
+    }
+  }
+
+  return anchors;
+}
+
+function mergeLoopSampleStations(
+  guide: ArcLengthGuide,
+  startS: number,
+  cutLength: number,
+  forward: boolean,
+  uniformSteps: number,
+  anchorStations: number[]
+): number[] {
+  const total = guide.totalLength;
+  const seen = new Set<number>();
+  const ordered: { delta: number; s: number }[] = [];
+
+  const pushStation = (s: number) => {
+    const delta = guideArcLengthBetween(total, startS, s, forward);
+    if (delta <= 1e-6 || delta > cutLength + 1e-4) return;
+    const key = Math.round(delta * 1000);
+    if (seen.has(key)) return;
+    seen.add(key);
+    ordered.push({ delta, s });
+  };
+
+  for (let i = 1; i <= uniformSteps; i++) {
+    const delta = (i / uniformSteps) * cutLength;
+    const s = forward
+      ? advanceGuideArcLength(guide, startS, delta, true)
+      : advanceGuideArcLength(guide, startS, delta, false);
+    pushStation(s);
+  }
+
+  for (const s of anchorStations) {
+    pushStation(s);
+  }
+
+  ordered.sort((a, b) => a.delta - b.delta);
+  return ordered.map((entry) => entry.s);
+}
+
 /** One contour loop sampled by arc length, starting at startS for up to arcLengthToCut. */
 export function sampleContourLoopFromArcS(
   traverse: LoopPoint[],
@@ -201,7 +379,23 @@ export function sampleContourLoopFromArcS(
   const cutLength = Math.min(Math.max(arcLengthToCut ?? total, 0), total);
   if (cutLength <= 1e-6) return [];
 
-  const steps = Math.max(8, Math.ceil(cutLength / sampleSpacing));
+  const uniformSteps = Math.max(8, Math.ceil(cutLength / sampleSpacing));
+  const anchorStations = collectVertexAnchorStations(
+    guide,
+    traverse,
+    startS,
+    cutLength,
+    forward
+  );
+  const sampleStations = mergeLoopSampleStations(
+    guide,
+    startS,
+    cutLength,
+    forward,
+    uniformSteps,
+    anchorStations
+  );
+
   const points: ToolpathPoint[] = [];
   const startFrame = sampleGuideAtS(guide, startS);
 
@@ -220,11 +414,7 @@ export function sampleContourLoopFromArcS(
     });
   }
 
-  for (let i = 1; i <= steps; i++) {
-    const delta = (i / steps) * cutLength;
-    const s = forward
-      ? advanceGuideArcLength(guide, startS, delta, true)
-      : advanceGuideArcLength(guide, startS, delta, false);
+  for (const s of sampleStations) {
     const frame = sampleGuideAtS(guide, s);
     points.push({ x: frame.x, y: frame.y, z: layerZ, feedRate });
   }
@@ -359,6 +549,106 @@ export function generateContourLinearRamp(
   }
 
   const endFrame = sampleGuideAtS(guide, currentS);
+  const endPoint = { x: endFrame.x, y: endFrame.y };
+  const last = points[points.length - 1];
+  if (
+    !last ||
+    Math.hypot(last.x - endPoint.x, last.y - endPoint.y) > 1e-4 ||
+    Math.abs(last.z - toZ) > 1e-4
+  ) {
+    points.push({ x: endPoint.x, y: endPoint.y, z: toZ, feedRate });
+  }
+
+  return { points, endPoint, endS: currentS };
+}
+
+/**
+ * Zigzag linear ramp along an open polyline until target Z is reached.
+ * Reverses at polyline ends — used for first-layer entry-path ramping.
+ */
+export function generateOpenPolylineLinearRamp(
+  polyline: LoopPoint[],
+  fromZ: number,
+  toZ: number,
+  rampLengthMm: number,
+  rampAngleDeg: number,
+  feedRate: number | undefined,
+  sampleSpacing: number
+): ContourRampResult {
+  if (polyline.length < 2 || Math.abs(fromZ - toZ) < 1e-5) {
+    const end = polyline[polyline.length - 1] ?? polyline[0] ?? { x: 0, y: 0 };
+    return {
+      points: [{ x: end.x, y: end.y, z: toZ, feedRate }],
+      endPoint: { x: end.x, y: end.y },
+      endS: 0,
+    };
+  }
+
+  const guide = buildOpenArcLengthGuide(polyline, Math.max(sampleSpacing, 0.25), true);
+  const total = guide.totalLength;
+  if (total <= 0) {
+    const end = polyline[polyline.length - 1];
+    return {
+      points: [{ x: end.x, y: end.y, z: toZ, feedRate }],
+      endPoint: { x: end.x, y: end.y },
+      endS: 0,
+    };
+  }
+
+  const angleRad = (Math.max(rampAngleDeg, 0.5) * Math.PI) / 180;
+  const dzPerLeg = rampLengthMm * Math.tan(angleRad);
+  if (dzPerLeg < 1e-6) {
+    const end = polyline[polyline.length - 1];
+    return {
+      points: [{ x: end.x, y: end.y, z: toZ, feedRate }],
+      endPoint: { x: end.x, y: end.y },
+      endS: total,
+    };
+  }
+
+  const points: ToolpathPoint[] = [];
+  let currentZ = fromZ;
+  let currentS = 0;
+  let forward = true;
+  let iterations = 0;
+  const maxIterations = 5000;
+
+  while (currentZ > toZ + 1e-5 && iterations < maxIterations) {
+    const legDz = Math.min(dzPerLeg, currentZ - toZ);
+    let legLen = legDz / Math.tan(angleRad);
+    const remaining = forward ? total - currentS : currentS;
+    legLen = Math.min(legLen, Math.max(remaining, 0));
+    if (legLen < 1e-6) {
+      forward = !forward;
+      continue;
+    }
+
+    const legEndZ = currentZ - legDz;
+    const steps = Math.max(1, Math.ceil(legLen / sampleSpacing));
+
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const dist = t * legLen;
+      const s = forward ? currentS + dist : currentS - dist;
+      const frame = sampleOpenGuideAtS(guide, s);
+      points.push({
+        x: frame.x,
+        y: frame.y,
+        z: currentZ - legDz * t,
+        feedRate,
+      });
+      iterations++;
+    }
+
+    currentZ = legEndZ;
+    currentS = forward ? currentS + legLen : currentS - legLen;
+
+    if (currentZ <= toZ + 1e-5) break;
+    if (forward && currentS >= total - 1e-5) forward = false;
+    else if (!forward && currentS <= 1e-5) forward = true;
+  }
+
+  const endFrame = sampleOpenGuideAtS(guide, currentS);
   const endPoint = { x: endFrame.x, y: endFrame.y };
   const last = points[points.length - 1];
   if (
