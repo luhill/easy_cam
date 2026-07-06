@@ -4,7 +4,8 @@ export type OperationType =
   | 'drill'
   | 'helix'
   | 'pocket'
-  | 'contour';
+  | 'contour'
+  | 'custom-gcode';
 
 export interface OperationDefaults {
   toolDiameter: number;
@@ -13,19 +14,22 @@ export interface OperationDefaults {
   stepDown: number;
   stepover: number;
   spindleSpeed: number;
-  clearance: number;
   /** Offset from part bottom for final cut (mm). + = above bottom, − = below. */
   depthOffset: number;
+  /** Helix: start helix ramp this far above stock top (mm); clamped to global safe height. */
+  zStartOffset: number;
   /** Additional radial stock offset beyond tool radius (mm); negative allows finishing inside the line */
   radialOffset: number;
   /** Adaptive outline: slot width as % of tool diameter (125–200%) */
   slotWidthPercent: number;
   /** Adaptive outline: micro-retract / Z lift between trochoid passes (mm); 0 = no lift */
   liftAmount: number;
-  /** Adaptive outline: helix / lead-in circle diameter as % of tool diameter */
-  helixDiameterPercent: number;
-  /** Adaptive outline: helix ramp angle (degrees) */
+  /** Adaptive outline: outside bore diameter as % of tool diameter (150% ≈ former 50% helix ⌀) */
+  boreDiameterPercent: number;
+  /** Adaptive outline: helix ramp pitch angle (degrees) */
   helixAngleDeg: number;
+  /** Adaptive outline: bore wall taper below stock top (degrees); widens toward Z=0 */
+  boreTaperAngleDeg: number;
   /** Adaptive outline: feed rate for helix bore and toroidal lead-in (mm/min) */
   helixFeedRate: number;
   /** Adaptive outline: leave 0.1 mm on walls then run a final outline pass */
@@ -60,7 +64,11 @@ export interface SelectedGeometry {
   holeRadius?: number;
   /** @deprecated use holes[].holeId */
   holeId?: number;
-  /** Adaptive outline helix entry in stock (XY at top of part, Z=0) */
+  /** Adaptive: helix bore center in stock XY */
+  toolStartPoint?: { x: number; y: number };
+  /** Adaptive: slot join on the centerline (draggable along the orange guide) */
+  slotJoinPoint?: { x: number; y: number };
+  /** @deprecated Legacy bore-center override — use toolStartPoint */
   entryPoint?: { x: number; y: number };
 }
 
@@ -73,6 +81,8 @@ export interface Operation {
   collapsed: boolean;
   settings: OperationDefaults;
   geometry: SelectedGeometry | null;
+  /** Raw G-code block inserted verbatim when this operation runs. */
+  customGcode?: string;
 }
 
 export interface OperationTemplate {
@@ -89,6 +99,8 @@ export interface ToolpathPoint {
   rapid?: boolean;
   /** Override feed for this segment (mm/min). */
   feedRate?: number;
+  /** Debug: trochoid sample classified as on-spur (adaptive outline). */
+  onSpur?: boolean;
 }
 
 export interface ToolpathSegment {
@@ -134,6 +146,12 @@ export const OPERATION_TEMPLATES: OperationTemplate[] = [
     description: '3D contour following surface',
     icon: '〜',
   },
+  {
+    type: 'custom-gcode',
+    label: 'Custom G-code',
+    description: 'Insert custom G-code into the program',
+    icon: '⌨',
+  },
 ];
 
 export const DEFAULT_SETTINGS: OperationDefaults = {
@@ -143,17 +161,42 @@ export const DEFAULT_SETTINGS: OperationDefaults = {
   stepDown: 2,
   stepover: 7,
   spindleSpeed: 10000,
-  clearance: 5,
   depthOffset: 0,
+  zStartOffset: 1,
   radialOffset: 0,
   slotWidthPercent: 150,
   liftAmount: 0,
-  helixDiameterPercent: 50,
+  boreDiameterPercent: 150,
   helixAngleDeg: 1.5,
+  boreTaperAngleDeg: 2,
   helixFeedRate: 350,
   finishingPass: false,
   climbMilling: true,
 };
+
+const ADAPTIVE_OUTLINE_DEFAULT_OVERRIDES: Partial<OperationDefaults> = {
+  feedRate: 500,
+  stepDown: 6,
+  stepover: 5,
+  plungeRate: 120,
+  liftAmount: 0.5,
+  finishingPass: true,
+};
+
+const HELIX_DEFAULT_OVERRIDES: Partial<OperationDefaults> = {
+  plungeRate: 120,
+  stepover: 5,
+};
+
+export function defaultSettingsForOperation(type: OperationType): OperationDefaults {
+  if (type === 'adaptive-outline') {
+    return { ...DEFAULT_SETTINGS, ...ADAPTIVE_OUTLINE_DEFAULT_OVERRIDES };
+  }
+  if (type === 'helix') {
+    return { ...DEFAULT_SETTINGS, ...HELIX_DEFAULT_OVERRIDES };
+  }
+  return { ...DEFAULT_SETTINGS };
+}
 
 export type SelectionSubMode = 'geometry' | 'entry-point' | 'bottom-face';
 
@@ -164,6 +207,7 @@ export const OPERATION_COLORS: Record<OperationType, string> = {
   helix: '#f59e0b',
   pocket: '#10b981',
   contour: '#06b6d4',
+  'custom-gcode': '#64748b',
 };
 
 export function getSelectionStrategy(type: OperationType): SelectionStrategy {
@@ -174,6 +218,8 @@ export function getSelectionStrategy(type: OperationType): SelectionStrategy {
     case 'drill':
     case 'helix':
       return 'point';
+    case 'custom-gcode':
+      return 'region';
     default:
       return 'region';
   }

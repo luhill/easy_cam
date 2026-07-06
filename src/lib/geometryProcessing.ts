@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import type { LoopPoint } from '../types/operations';
+import { mergeVertices } from 'three-stdlib';
+import type { LoopPoint, SelectedGeometry } from '../types/operations';
 
 export interface PartBounds {
   minX: number;
@@ -37,7 +38,9 @@ export function boundsFromGeometry(geometry: THREE.BufferGeometry): PartBounds {
 
 /** Center XY footprint and place bottom of part at Z = 0. */
 export function finalizePartPlacement(geometry: THREE.BufferGeometry): ProcessedMesh {
-  const geo = geometry;
+  const welded = mergeVertices(geometry, 1e-4);
+  welded.computeVertexNormals();
+  const geo = welded;
   geo.computeBoundingBox();
   const box = geo.boundingBox!;
   const center = new THREE.Vector3();
@@ -126,6 +129,72 @@ export function orientFaceToBottom(
   return geo;
 }
 
+/** Snap rotation to fixed degree intervals (default 30°). */
+export function snapRotationDegrees(deg: number, step = 30): number {
+  const wrapped = ((deg % 360) + 360) % 360;
+  const snapped = Math.round(wrapped / step) * step;
+  return snapped >= 360 ? 0 : snapped;
+}
+
+/** Rotate all vertices around the Z axis (degrees). Mutates geometry in place. */
+export function rotateGeometryAroundZ(geometry: THREE.BufferGeometry, angleDeg: number): void {
+  if (Math.abs(angleDeg) < 1e-9) return;
+  const rad = (angleDeg * Math.PI) / 180;
+  const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), rad);
+  const positions = geometry.getAttribute('position') as THREE.BufferAttribute;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < positions.count; i++) {
+    v.fromBufferAttribute(positions, i);
+    v.applyQuaternion(q);
+    positions.setXYZ(i, v.x, v.y, v.z);
+  }
+  positions.needsUpdate = true;
+  geometry.computeVertexNormals();
+}
+
+export function rotatePoint2D(x: number, y: number, angleDeg: number): { x: number; y: number } {
+  const rad = (angleDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return { x: x * cos - y * sin, y: x * sin + y * cos };
+}
+
+export function rotateLoopPoints(points: LoopPoint[], angleDeg: number): LoopPoint[] {
+  return points.map((p) => {
+    const { x, y } = rotatePoint2D(p.x, p.y, angleDeg);
+    return { x, y, z: p.z };
+  });
+}
+
+/** Rotate stored operation geometry to match a part Z rotation. Face indices are cleared. */
+export function rotateSelectedGeometry(
+  geometry: SelectedGeometry,
+  angleDeg: number
+): SelectedGeometry {
+  const rot = (p: { x: number; y: number }) => rotatePoint2D(p.x, p.y, angleDeg);
+
+  return {
+    ...geometry,
+    faceIndices: [],
+    vertexIndices: [],
+    loops: geometry.loops?.map((loop) => rotateLoopPoints(loop, angleDeg)),
+    holes: geometry.holes?.map((hole) => ({
+      ...hole,
+      center: { ...hole.center, ...rot(hole.center) },
+      loop: hole.loop ? rotateLoopPoints(hole.loop, angleDeg) : undefined,
+    })),
+    toolStartPoint: geometry.toolStartPoint
+      ? { ...geometry.toolStartPoint, ...rot(geometry.toolStartPoint) }
+      : undefined,
+    slotJoinPoint: geometry.slotJoinPoint
+      ? { ...geometry.slotJoinPoint, ...rot(geometry.slotJoinPoint) }
+      : undefined,
+    entryPoint: geometry.entryPoint
+      ? { ...geometry.entryPoint, ...rot(geometry.entryPoint) }
+      : undefined,
+  };
+}
+
 export function loopCentroid(loop: LoopPoint[]): LoopPoint {
   if (loop.length === 0) return { x: 0, y: 0, z: 0 };
   let x = 0;
@@ -193,6 +262,21 @@ export function offsetLoop2D(loop: LoopPoint[], offset: number): LoopPoint[] {
   return result;
 }
 
+/** Outward miter point for one loop vertex at a given tool-center offset. */
+export function offsetVertexMiter(
+  loop: LoopPoint[],
+  vertexIndex: number,
+  offset: number
+): LoopPoint {
+  const n = loop.length;
+  const prev = loop[(vertexIndex - 1 + n) % n];
+  const curr = loop[vertexIndex];
+  const next = loop[(vertexIndex + 1) % n];
+  const ccw = signedLoopArea2D(loop) >= 0;
+  const side = ccw ? 1 : -1;
+  return offsetMiterVertex(prev, curr, next, offset, side);
+}
+
 function offsetMiterVertex(
   prev: LoopPoint,
   curr: LoopPoint,
@@ -234,7 +318,7 @@ function offsetMiterVertex(
   };
 }
 
-function outwardEdgeNormal2D(
+export function outwardEdgeNormal2D(
   ax: number,
   ay: number,
   bx: number,

@@ -1,4 +1,6 @@
 import type { Operation, ToolpathPoint, ToolpathSegment } from '../types/operations';
+import type { ToolOrigin } from './geometryProcessing';
+import { prependToolOriginApproach } from './toolOriginProgram';
 import type { LoopPoint } from '../types/operations';
 import { DEFAULT_SETTINGS } from '../types/operations';
 import type { PartBounds } from './geometryProcessing';
@@ -10,35 +12,74 @@ import {
 } from './geometryProcessing';
 import { OPERATION_COLORS, getSelectedHoles } from '../types/operations';
 import { clampOperationSettings } from './settingLimits';
-import { resolveAdaptiveEntryPoint, resolveAdaptiveSlotGeometry } from './adaptiveOutline';
+import {
+  buildSlotCenterGuideWithCornerSpurs,
+  mapSpurRangesToArcGuide,
+  buildGuideRadiusSampler,
+} from './cornerSpurs';
+import { resolveAdaptiveSlotGeometry, cornerSpurOptionsForRoughing } from './adaptiveOutline';
+import {
+  adaptiveEntryOverridesFromGeometry,
+  resolveAdaptiveEntryLayout,
+} from './adaptiveEntryLayout';
 import {
   generateFourZoneAdaptivePath,
-  generateOpenTrochoidPath,
+  generateContinuousEntryTrochoidPath,
   resolveGuideTraverseSign,
   resolveOrbitRotSign,
   wrapPathFromIndex,
 } from './adaptiveFourZone';
 import {
-  buildEntryConnectorGuide,
+  buildSplineEntryGuide,
+  adjustBoreRadiusToSlotWidth,
   closestPointIndexOnPath,
-  helixPitchForRadius,
+  generateBoreBottomToLeadInTransition,
+  generateFullRevolutionOrbit,
+  generateHelixBorePoints,
+  helixRadiusAtZ,
+  helixRadiusTaperedFromStart,
+  interiorHelixRadiusAtZ,
   isGuideOutwardCCW,
-  resolveHelixRadius,
   resolveHelixRotationDir,
+  resolveInteriorHelixRadius,
+  resolveInteriorHelixRotationDir,
   resolveSlotHelixRadius,
 } from './entryPath';
-import { buildArcLengthGuide, findClosestSOnGuide, sampleGuideAtS } from './trochoidalPath';
 import {
-  clearanceWorldZ,
+  adaptiveForwardIncrement,
+  sampleGuideAtS,
+} from './trochoidalPath';
+import {
   createCutZContext,
   cutLayersWorldZ,
   finalCutWorldZ,
   stockTopWorldZ,
   type CutZContext,
 } from './cutDepth';
+import {
+  helixHoleInvalidLabel,
+  validateHelixHole,
+} from './helixValidation';
+import {
+  contourSteps,
+  helixSegmentsPerRev,
+  minkowskiSegmentLen,
+  safeHeightWorldZ,
+  trochoidSampleSpacing,
+  type ToolpathGlobalOptions,
+  DEFAULT_SAFE_HEIGHT,
+  DEFAULT_TOOLPATH_RESOLUTION,
+  DEFAULT_TRAVEL_FEED_RATE,
+} from './toolpathConfig';
 
-const MAX_Z_LAYERS = 500;
-const MAX_TOOLPATH_POINTS = 500_000;
+export const MAX_TOOLPATH_POINTS = 500_000;
+
+export interface ToolpathGenerationResult {
+  segments: ToolpathSegment[];
+  warnings: string[];
+}
+
+let activePointBudget: { discarded: number } | null = null;
 
 function toolRadius(settings: Operation['settings']): number {
   return Math.max(settings.toolDiameter, 0.1) / 2;
@@ -88,21 +129,28 @@ function getBounds(geometry: Operation['geometry']): {
 }
 
 function appendPoints(target: ToolpathPoint[], points: ToolpathPoint[]): boolean {
-  if (target.length + points.length > MAX_TOOLPATH_POINTS) {
-    target.push(...points.slice(0, MAX_TOOLPATH_POINTS - target.length));
+  const room = MAX_TOOLPATH_POINTS - target.length;
+  if (room <= 0) {
+    if (activePointBudget) activePointBudget.discarded += points.length;
     return false;
   }
-  target.push(...points);
-  return true;
+  if (points.length <= room) {
+    target.push(...points);
+    return true;
+  }
+  target.push(...points.slice(0, room));
+  if (activePointBudget) activePointBudget.discarded += points.length - room;
+  return false;
 }
 
 function loopToToolpathPoints(
   loop: LoopPoint[],
   settings: Operation['settings'],
-  ctx: CutZContext
+  ctx: CutZContext,
+  globals: ToolpathGlobalOptions
 ): ToolpathPoint[] {
   const topZ = stockTopWorldZ(ctx);
-  const clearance = clearanceWorldZ(ctx, settings.clearance);
+  const safeZ = safeHeightWorldZ(ctx, globals.safeHeight);
   const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
   const points: ToolpathPoint[] = [];
 
@@ -114,7 +162,7 @@ function loopToToolpathPoints(
   const traverse = reverse ? [...toolLoop].reverse() : toolLoop;
 
   const start = traverse[0];
-  points.push({ x: start.x, y: start.y, z: clearance, rapid: true });
+  points.push({ x: start.x, y: start.y, z: safeZ, rapid: true });
   points.push({ x: start.x, y: start.y, z: topZ });
 
   for (const layerZ of layers) {
@@ -124,16 +172,20 @@ function loopToToolpathPoints(
     points.push({ x: traverse[0].x, y: traverse[0].y, z: layerZ });
   }
 
-  points.push({ x: start.x, y: start.y, z: clearance, rapid: true });
+  points.push({ x: start.x, y: start.y, z: safeZ, rapid: true });
   return points;
 }
 
-function generateOutlinePath(op: Operation, ctx: CutZContext): ToolpathPoint[] {
+function generateOutlinePath(
+  op: Operation,
+  ctx: CutZContext,
+  globals: ToolpathGlobalOptions
+): ToolpathPoint[] {
   const { settings, geometry } = op;
   const topZ = stockTopWorldZ(ctx);
 
   if (geometry?.loops && geometry.loops.length > 0) {
-    return loopToToolpathPoints(geometry.loops[0], settings, ctx);
+    return loopToToolpathPoints(geometry.loops[0], settings, ctx, globals);
   }
 
   const { minX, maxX, minY, maxY } = getBounds(geometry);
@@ -143,57 +195,7 @@ function generateOutlinePath(op: Operation, ctx: CutZContext): ToolpathPoint[] {
     { x: maxX, y: maxY, z: topZ },
     { x: minX, y: maxY, z: topZ },
   ];
-  return loopToToolpathPoints(fallbackLoop, settings, ctx);
-}
-
-function generateHelixBoreAt(
-  center: { x: number; y: number },
-  settings: Operation['settings'],
-  startZ: number,
-  targetZ: number,
-  helixR: number
-): ToolpathPoint[] {
-  const pitch = helixPitchForRadius(helixR, settings.helixAngleDeg);
-  const feedRate = settings.helixFeedRate;
-  const rotDir = resolveHelixRotationDir(settings.climbMilling);
-  const segments = 24;
-  const points: ToolpathPoint[] = [];
-
-  let z = startZ;
-  let angle = 0;
-  let iterations = 0;
-  const maxIterations = MAX_Z_LAYERS * segments;
-
-  while (z > targetZ + 1e-6 && iterations < maxIterations) {
-    for (let i = 0; i < segments; i++) {
-      angle += rotDir * ((Math.PI * 2) / segments);
-      z = Math.max(z - pitch / segments, targetZ);
-      points.push({
-        x: center.x + Math.cos(angle) * helixR,
-        y: center.y + Math.sin(angle) * helixR,
-        z,
-        feedRate,
-      });
-      iterations++;
-    }
-  }
-
-  return points;
-}
-
-function generateHelixBore(
-  entry: { x: number; y: number },
-  settings: Operation['settings'],
-  startZ: number,
-  targetZ: number
-): ToolpathPoint[] {
-  return generateHelixBoreAt(
-    entry,
-    settings,
-    startZ,
-    targetZ,
-    resolveHelixRadius(settings)
-  );
+  return loopToToolpathPoints(fallbackLoop, settings, ctx, globals);
 }
 
 function trochoidParams(
@@ -202,7 +204,8 @@ function trochoidParams(
   slotCenterGuide: LoopPoint[],
   z: number,
   roughing: boolean,
-  feedRate?: number
+  globals: ToolpathGlobalOptions,
+  cutFeedRate?: number
 ) {
   const slot = resolveAdaptiveSlotGeometry(settings, { roughing });
   const guideSign = resolveGuideTraverseSign(slotCenterGuide, settings.climbMilling);
@@ -215,7 +218,14 @@ function trochoidParams(
     minCenterDist: slot.minCenterDist,
     rotSign: resolveOrbitRotSign(slotCenterGuide, settings.climbMilling),
     guideSign,
-    feedRate,
+    feedRate: cutFeedRate ?? settings.feedRate,
+    travelFeedRate: globals.travelFeedRate,
+    sampleSpacing: trochoidSampleSpacing(
+      slot.forwardIncrement,
+      slot.trochoidRadius,
+      globals.resolution
+    ),
+    orbitStepsPerRev: helixSegmentsPerRev(globals.resolution),
   };
 }
 
@@ -223,15 +233,51 @@ function generateAdaptiveTrochoidalPath(
   partLoop: LoopPoint[],
   settings: Operation['settings'],
   z: number,
+  globals: ToolpathGlobalOptions,
   roughing = true,
   startS?: number,
-  skipArcLength?: number
+  skipArcLength?: number,
+  omitFirstOrbitSample?: boolean
 ): ToolpathPoint[] {
-  const slot = resolveAdaptiveSlotGeometry(settings, { roughing });
-  const slotCenterGuide = offsetLoop2DMinkowski(partLoop, slot.slotCenterOffset);
+  const roughSlot = resolveAdaptiveSlotGeometry(settings, { roughing });
+  const finishSlot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
+  const segLen = minkowskiSegmentLen(globals.resolution);
+  const sampleSpacing = trochoidSampleSpacing(
+    roughSlot.forwardIncrement,
+    roughSlot.trochoidRadius,
+    globals.resolution
+  );
+  const { guide: slotCenterGuide, spurMarkers } = buildSlotCenterGuideWithCornerSpurs(
+    partLoop,
+    roughSlot.slotCenterOffset,
+    finishSlot.innerCenterOffset,
+    segLen,
+    cornerSpurOptionsForRoughing(settings)
+  );
+  const { arcGuide, spurRanges } = mapSpurRangesToArcGuide(
+    slotCenterGuide,
+    spurMarkers,
+    sampleSpacing,
+    { trochoidR: roughSlot.trochoidRadius, resolution: globals.resolution }
+  );
   return generateFourZoneAdaptivePath(
     slotCenterGuide,
-    { ...trochoidParams(partLoop, settings, slotCenterGuide, z, roughing), startS, skipArcLength }
+    {
+      ...trochoidParams(partLoop, settings, slotCenterGuide, z, roughing, globals),
+      startS,
+      skipArcLength,
+      omitFirstOrbitSample,
+      arcGuide,
+      trochoidRAtGuide:
+        spurRanges.length > 0
+          ? buildGuideRadiusSampler(
+              roughSlot.trochoidRadius,
+              arcGuide.totalLength,
+              spurRanges
+            )
+          : undefined,
+    },
+    spurRanges
   );
 }
 
@@ -241,8 +287,10 @@ function appendGeneratedPath(
 ): boolean {
   if (generated.length === 0) return true;
   const last = target[target.length - 1];
-  const start =
-    last && Math.hypot(generated[0].x - last.x, generated[0].y - last.y) < 0.12 ? 1 : 0;
+  const first = generated[0];
+  const dist = last ? Math.hypot(first.x - last.x, first.y - last.y) : Infinity;
+  const sameZ = last ? Math.abs((first.z ?? 0) - (last.z ?? 0)) < 1e-4 : false;
+  const start = last && dist < 0.02 && sameZ ? 1 : 0;
   return appendPoints(target, generated.slice(start));
 }
 
@@ -296,12 +344,20 @@ function sampleFinishPoint(
 function generateFinishingOutline(
   partLoop: LoopPoint[],
   settings: Operation['settings'],
-  layerZ: number
+  layerZ: number,
+  globals: ToolpathGlobalOptions
 ): ToolpathPoint[] {
   const roughSlot = resolveAdaptiveSlotGeometry(settings, { roughing: true });
   const finishSlot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
-  const finishGuide = offsetLoop2DMinkowski(partLoop, finishSlot.innerCenterOffset);
-  const roughCenterGuide = offsetLoop2DMinkowski(partLoop, roughSlot.slotCenterOffset);
+  const segLen = minkowskiSegmentLen(globals.resolution);
+  const finishGuide = offsetLoop2DMinkowski(partLoop, finishSlot.innerCenterOffset, segLen);
+  const { guide: roughCenterGuide } = buildSlotCenterGuideWithCornerSpurs(
+    partLoop,
+    roughSlot.slotCenterOffset,
+    finishSlot.innerCenterOffset,
+    segLen,
+    cornerSpurOptionsForRoughing(settings)
+  );
   if (finishGuide.length < 3) return [];
 
   const ccw = signedLoopArea2D(finishGuide) >= 0;
@@ -333,27 +389,146 @@ function generateFinishingOutline(
   return pts;
 }
 
-function appendReturnToSlotCenter(
+function appendFreshSlotWidthBore(
   target: ToolpathPoint[],
-  guide: ReturnType<typeof buildArcLengthGuide>,
-  joinS: number,
-  z: number
-): boolean {
-  const center = sampleGuideAtS(guide, joinS);
+  boreCenter: { x: number; y: number },
+  startZ: number,
+  targetZ: number,
+  slotHelixR: number,
+  settings: Operation['settings'],
+  helixOpts: { stockTopZ: number; globals: ToolpathGlobalOptions }
+): void {
+  const travelFeed = helixOpts.globals.travelFeedRate;
   const last = lastPathPoint(target);
-  if (!last) return true;
-  if (Math.hypot(last.x - center.x, last.y - center.y) < 0.08) return true;
-  return appendPoints(target, [{ x: center.x, y: center.y, z, rapid: true }]);
+  const startAngle = 0;
+  const boreStartX = boreCenter.x + Math.cos(startAngle) * slotHelixR;
+  const boreStartY = boreCenter.y + Math.sin(startAngle) * slotHelixR;
+
+  let at = last;
+  if (at) {
+    if (Math.abs(at.z - startZ) > 1e-4) {
+      target.push({ x: at.x, y: at.y, z: startZ, feedRate: travelFeed });
+      at = { x: at.x, y: at.y, z: startZ };
+    }
+    if (Math.hypot(at.x - boreStartX, at.y - boreStartY) > 0.12) {
+      target.push({ x: boreStartX, y: boreStartY, z: startZ, feedRate: travelFeed });
+    }
+  }
+
+  const bore = generateHelixBorePoints(boreCenter, settings, startZ, targetZ, {
+    ...helixOpts,
+    taper: true,
+    helixR: slotHelixR,
+    taperFromStart: true,
+    startAngle,
+    rotDir: resolveHelixRotationDir(settings.climbMilling),
+    feedRate: settings.plungeRate,
+  });
+  appendPoints(target, bore.points);
 }
 
-function appendVerticalRetract(
+function appendBoreBottomWidenAndLeadIn(
+  target: ToolpathPoint[],
+  boreCenter: { x: number; y: number },
+  layerZ: number,
+  slotHelixR: number,
+  bottomHelixR: number,
+  stepoverIncrement: number,
+  rotDir: number,
+  segmentsPerRev: number,
+  plungeFeed: number,
+  firstLeadIn: ToolpathPoint
+): boolean {
+  const boreBottom = lastPathPoint(target);
+  if (!boreBottom) return true;
+
+  const boreStartAngle = Math.atan2(
+    boreBottom.y - boreCenter.y,
+    boreBottom.x - boreCenter.x
+  );
+
+  if (
+    !appendPoints(
+      target,
+      adjustBoreRadiusToSlotWidth(
+        boreCenter,
+        bottomHelixR,
+        slotHelixR,
+        layerZ,
+        stepoverIncrement,
+        rotDir,
+        segmentsPerRev,
+        boreStartAngle,
+        plungeFeed
+      )
+    )
+  ) {
+    return false;
+  }
+
+  const afterRadius = lastPathPoint(target) ?? boreBottom;
+  return appendPoints(
+    target,
+    generateBoreBottomToLeadInTransition(
+      boreCenter,
+      afterRadius,
+      firstLeadIn,
+      layerZ,
+      stepoverIncrement,
+      rotDir,
+      segmentsPerRev,
+      plungeFeed
+    )
+  );
+}
+
+function appendRetractViaSlotCenter(
   points: ToolpathPoint[],
-  clearanceZ: number
+  slotCenter: { x: number; y: number },
+  clearanceZ: number,
+  travelFeedRate: number
 ): void {
   const last = lastPathPoint(points);
-  if (last) {
-    points.push({ x: last.x, y: last.y, z: clearanceZ, rapid: true });
+  if (!last) return;
+
+  if (Math.hypot(last.x - slotCenter.x, last.y - slotCenter.y) > 0.12) {
+    points.push({ x: slotCenter.x, y: slotCenter.y, z: last.z, feedRate: travelFeedRate });
   }
+  points.push({ x: slotCenter.x, y: slotCenter.y, z: clearanceZ, feedRate: travelFeedRate });
+}
+
+
+function helixStartWorldZ(
+  topZ: number,
+  safeHeight: number,
+  zStartOffset: number
+): number {
+  return topZ + Math.min(Math.max(safeHeight, 0), Math.max(zStartOffset, 0));
+}
+
+function buildInterOperationTravel(
+  from: ToolpathPoint,
+  to: ToolpathPoint
+): ToolpathPoint[] {
+  const xySpan = Math.hypot(from.x - to.x, from.y - to.y);
+  const zSpan = Math.abs(from.z - to.z);
+  if (xySpan < 0.05 && zSpan < 0.05) return [];
+
+  const travelZ = Math.max(from.z, to.z);
+  const points: ToolpathPoint[] = [{ ...from, rapid: true }];
+
+  if (xySpan >= 0.05) {
+    if (Math.abs(from.z - travelZ) > 0.05) {
+      points.push({ x: from.x, y: from.y, z: travelZ, rapid: true });
+    }
+    points.push({ x: to.x, y: to.y, z: travelZ, rapid: true });
+  }
+
+  if (Math.abs(to.z - travelZ) > 0.05) {
+    points.push({ x: to.x, y: to.y, z: to.z, rapid: true });
+  }
+
+  return points;
 }
 
 function lastPathPoint(points: ToolpathPoint[]): { x: number; y: number; z: number } | null {
@@ -362,113 +537,206 @@ function lastPathPoint(points: ToolpathPoint[]): { x: number; y: number; z: numb
   return { x: p.x, y: p.y, z: p.z };
 }
 
-function generateAdaptiveOutlinePath(op: Operation, ctx: CutZContext): ToolpathPoint[] {
+function generateAdaptiveOutlinePath(
+  op: Operation,
+  ctx: CutZContext,
+  globals: ToolpathGlobalOptions
+): ToolpathPoint[] {
   const { settings, geometry } = op;
   const loop = geometry?.loops?.[0];
 
   if (!loop) {
-    return generateOutlinePath(op, ctx);
+    return generateOutlinePath(op, ctx, globals);
   }
 
   const topZ = stockTopWorldZ(ctx);
-  const clearance = clearanceWorldZ(ctx, settings.clearance);
+  const safeZ = safeHeightWorldZ(ctx, globals.safeHeight);
   const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
   const finalZ = finalCutWorldZ(ctx, settings.depthOffset);
 
-  const entry = resolveAdaptiveEntryPoint(loop, settings, geometry?.entryPoint);
-  const points: ToolpathPoint[] = [];
-  const helixFeed = settings.helixFeedRate;
   const roughSlot = resolveAdaptiveSlotGeometry(settings, { roughing: true });
-  const slotCenterGuide = offsetLoop2DMinkowski(loop, roughSlot.slotCenterOffset);
-  const arcGuide = buildArcLengthGuide(slotCenterGuide, 0.4);
-  const join = findClosestSOnGuide(arcGuide, entry);
-  const guideTraverseSign = resolveGuideTraverseSign(slotCenterGuide, settings.climbMilling);
-  const connectorGuide = buildEntryConnectorGuide(
-    entry,
-    slotCenterGuide,
-    join.s,
-    guideTraverseSign
+  const segLen = minkowskiSegmentLen(globals.resolution);
+  const trochSampleSpacing = trochoidSampleSpacing(
+    roughSlot.forwardIncrement,
+    roughSlot.trochoidRadius,
+    globals.resolution
   );
-  const outwardCCW = isGuideOutwardCCW(loop);
-  const rotParams = trochoidParams(loop, settings, slotCenterGuide, 0, true, helixFeed);
-  const slotHelixR = resolveSlotHelixRadius(roughSlot.slotClearance);
 
-  points.push({ x: entry.x, y: entry.y, z: clearance, rapid: true });
-  points.push({ x: entry.x, y: entry.y, z: topZ });
+  const entryLayout = resolveAdaptiveEntryLayout(
+    loop,
+    settings,
+    adaptiveEntryOverridesFromGeometry(geometry),
+    segLen,
+    trochSampleSpacing,
+    globals.resolution
+  );
+  if (!entryLayout) {
+    return generateOutlinePath(op, ctx, globals);
+  }
+
+  const toolStart = entryLayout.toolStart;
+  const trochoidStartS = entryLayout.trochoidStartS;
+  const slotCenterGuide = entryLayout.slotCenterGuide;
+  const trochArcGuide = entryLayout.trochArcGuide;
+  const slotHelixR = resolveSlotHelixRadius(roughSlot.slotClearance);
+  const helixOpts = { stockTopZ: topZ, globals };
+  const cutFeed = settings.feedRate;
+  const plungeFeed = settings.plungeRate;
+  const travelFeed = globals.travelFeedRate;
+  const outwardCCW = isGuideOutwardCCW(loop);
+  const points: ToolpathPoint[] = [];
+
+  points.push({ x: toolStart.x, y: toolStart.y, z: safeZ, rapid: true });
 
   const helixTarget = layers.length > 0 ? layers[0] : finalZ;
-  appendPoints(points, generateHelixBore(entry, settings, topZ, helixTarget));
+  let boreHelixAngle = 0;
+
+  const initialBore = generateHelixBorePoints(toolStart, settings, safeZ, helixTarget, {
+    ...helixOpts,
+    taper: true,
+    startAngle: boreHelixAngle,
+    rotDir: resolveHelixRotationDir(settings.climbMilling),
+    feedRate: plungeFeed,
+  });
+  appendPoints(points, initialBore.points);
+  boreHelixAngle = initialBore.endAngle;
+
+  const stepoverIncrement = adaptiveForwardIncrement(settings.toolDiameter, settings.stepover);
+  const segmentsPerRev = helixSegmentsPerRev(globals.resolution);
+  const rotDir = resolveHelixRotationDir(settings.climbMilling);
+  const slotJoinCenter = sampleGuideAtS(trochArcGuide, trochoidStartS);
+  const spurRadiusSampler =
+    entryLayout.cornerSpurRanges.length > 0
+      ? buildGuideRadiusSampler(
+          roughSlot.trochoidRadius,
+          trochArcGuide.totalLength,
+          entryLayout.cornerSpurRanges
+        )
+      : undefined;
 
   for (let li = 0; li < layers.length; li++) {
     const layerZ = layers[li];
     const prevZ = li > 0 ? layers[li - 1] : helixTarget;
 
-    if (li > 0) {
-      if (!appendReturnToSlotCenter(points, arcGuide, join.s, prevZ)) break;
-      const slotCenter = sampleGuideAtS(arcGuide, join.s);
-      if (
-        !appendPoints(
-          points,
-          generateHelixBoreAt(slotCenter, settings, prevZ, layerZ, slotHelixR)
-        )
-      ) {
+    if (li === 0 && Math.abs(layerZ - helixTarget) > 1e-4) {
+      const layerBore = generateHelixBorePoints(toolStart, settings, helixTarget, layerZ, {
+        ...helixOpts,
+        taper: true,
+        startAngle: boreHelixAngle,
+        rotDir: resolveHelixRotationDir(settings.climbMilling),
+        feedRate: plungeFeed,
+      });
+      if (!appendPoints(points, layerBore.points)) {
         break;
       }
-    } else if (Math.abs(layerZ - helixTarget) > 1e-4) {
-      if (
-        !appendPoints(
-          points,
-          generateHelixBoreAt(entry, settings, helixTarget, layerZ, resolveHelixRadius(settings))
-        )
-      ) {
-        break;
-      }
+      boreHelixAngle = layerBore.endAngle;
     }
 
     if (li === 0) {
-      const connectorTroch = generateOpenTrochoidPath(
-        connectorGuide,
-        { ...rotParams, z: layerZ, liftAmount: 0 },
-        outwardCCW
+      const layerTroch = generateContinuousEntryTrochoidPath(
+        buildSplineEntryGuide(
+          toolStart,
+          entryLayout.slotJoin,
+          entryLayout.traverseTangent,
+          trochSampleSpacing,
+          layerZ
+        ),
+        trochArcGuide,
+        trochoidStartS,
+        entryLayout.guideTraverseSign,
+        {
+          ...trochoidParams(loop, settings, slotCenterGuide, layerZ, true, globals, cutFeed),
+          z: layerZ,
+          arcGuide: trochArcGuide,
+          trochoidRAtGuide: spurRadiusSampler,
+        },
+        outwardCCW,
+        entryLayout.cornerSpurRanges
       );
-      if (connectorTroch.length > 0) {
-        if (!appendGeneratedPath(points, connectorTroch)) break;
+
+      if (layerTroch.length === 0) continue;
+
+      if (
+        !appendBoreBottomWidenAndLeadIn(
+          points,
+          toolStart,
+          layerZ,
+          slotHelixR,
+          helixRadiusAtZ(settings, layerZ, topZ),
+          stepoverIncrement,
+          rotDir,
+          segmentsPerRev,
+          plungeFeed,
+          layerTroch[0]
+        )
+      ) {
+        break;
       }
+      if (!appendGeneratedPath(points, layerTroch)) break;
+      continue;
     }
 
-    const startS = join.s;
-    const skipArc = li === 0 ? roughSlot.forwardIncrement : 0;
-    const troch = generateAdaptiveTrochoidalPath(
+    const slotBoreCenter = { x: slotJoinCenter.x, y: slotJoinCenter.y };
+    appendFreshSlotWidthBore(
+      points,
+      slotBoreCenter,
+      prevZ,
+      layerZ,
+      slotHelixR,
+      settings,
+      helixOpts
+    );
+
+    const layerTroch = generateAdaptiveTrochoidalPath(
       loop,
       settings,
       layerZ,
+      globals,
       true,
-      startS,
-      skipArc
+      trochoidStartS,
+      0,
+      false
     );
-    if (troch.length === 0) continue;
 
-    if (!appendGeneratedPath(points, troch)) break;
+    if (layerTroch.length === 0) continue;
+
+    if (
+      !appendBoreBottomWidenAndLeadIn(
+        points,
+        slotBoreCenter,
+        layerZ,
+        slotHelixR,
+        helixRadiusTaperedFromStart(settings, layerZ, prevZ, slotHelixR),
+        stepoverIncrement,
+        rotDir,
+        segmentsPerRev,
+        plungeFeed,
+        layerTroch[0]
+      )
+    ) {
+      break;
+    }
+    if (!appendGeneratedPath(points, layerTroch)) break;
   }
 
   if (settings.finishingPass) {
     const finishZ = layers.length > 0 ? layers[layers.length - 1] : finalZ;
-    const finishPath = generateFinishingOutline(loop, settings, finishZ);
+    const finishPath = generateFinishingOutline(loop, settings, finishZ, globals);
     if (finishPath.length > 0) {
       const at = lastPathPoint(points);
       if (at) {
         if (!appendClosedOutlinePath(points, finishPath, at)) {
-          appendVerticalRetract(points, clearance);
+          appendRetractViaSlotCenter(points, slotJoinCenter, safeZ, travelFeed);
           return points;
         }
       } else if (!appendPoints(points, finishPath)) {
-        appendVerticalRetract(points, clearance);
+        appendRetractViaSlotCenter(points, slotJoinCenter, safeZ, travelFeed);
         return points;
       }
     }
   }
 
-  appendVerticalRetract(points, clearance);
+  appendRetractViaSlotCenter(points, slotJoinCenter, safeZ, travelFeed);
   return points;
 }
 
@@ -477,7 +745,7 @@ function generateDrillPathForHole(
   cy: number,
   settings: Operation['settings'],
   ctx: CutZContext,
-  clearance: number,
+  safeZ: number,
   isFirst: boolean
 ): ToolpathPoint[] {
   const topZ = stockTopWorldZ(ctx);
@@ -485,26 +753,30 @@ function generateDrillPathForHole(
   const points: ToolpathPoint[] = [];
 
   if (isFirst) {
-    points.push({ x: cx, y: cy, z: clearance, rapid: true });
+    points.push({ x: cx, y: cy, z: safeZ, rapid: true });
   } else {
-    points.push({ x: cx, y: cy, z: clearance, rapid: true });
+    points.push({ x: cx, y: cy, z: safeZ, rapid: true });
   }
   points.push({ x: cx, y: cy, z: topZ });
 
   for (const layerZ of layers) {
     points.push({ x: cx, y: cy, z: layerZ });
-    points.push({ x: cx, y: cy, z: topZ, rapid: true });
+    points.push({ x: cx, y: cy, z: safeZ, rapid: true });
   }
 
   return points;
 }
 
-function generateDrillPath(op: Operation, ctx: CutZContext): ToolpathPoint[] {
+function generateDrillPath(
+  op: Operation,
+  ctx: CutZContext,
+  globals: ToolpathGlobalOptions
+): ToolpathPoint[] {
   const { settings, geometry } = op;
   const holes = getSelectedHoles(geometry);
   if (holes.length === 0) return [];
 
-  const clearance = clearanceWorldZ(ctx, settings.clearance);
+  const safeZ = safeHeightWorldZ(ctx, globals.safeHeight);
   const points: ToolpathPoint[] = [];
 
   holes.forEach((hole, index) => {
@@ -515,14 +787,14 @@ function generateDrillPath(op: Operation, ctx: CutZContext): ToolpathPoint[] {
         hole.center.y,
         settings,
         ctx,
-        clearance,
+        safeZ,
         index === 0
       )
     );
   });
 
   const last = holes[holes.length - 1];
-  points.push({ x: last.center.x, y: last.center.y, z: clearance, rapid: true });
+  points.push({ x: last.center.x, y: last.center.y, z: safeZ, rapid: true });
   return points;
 }
 
@@ -532,55 +804,104 @@ function generateHelixPathForHole(
   holeR: number,
   settings: Operation['settings'],
   ctx: CutZContext,
-  clearance: number,
-  isFirst: boolean
+  safeZ: number,
+  globals: ToolpathGlobalOptions
 ): ToolpathPoint[] {
   const topZ = stockTopWorldZ(ctx);
-  const finalZ = finalCutWorldZ(ctx, settings.depthOffset);
-  const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
-  const cutR = Math.max(holeR - toolRadius(settings), toolRadius(settings) * 0.25);
+  const targetZ = finalCutWorldZ(ctx, settings.depthOffset);
+  const toolR = toolRadius(settings);
+  const cutR = resolveInteriorHelixRadius(holeR, toolR, settings.radialOffset ?? 0);
+  const useTaper = settings.boreTaperAngleDeg > 0;
+  const plungeFeed = settings.plungeRate;
+  const rotDir = resolveInteriorHelixRotationDir(settings.climbMilling);
+  const segmentsPerRev = helixSegmentsPerRev(globals.resolution);
+  const radialStepPerRev = settings.toolDiameter * (settings.stepover / 100);
+  const helixStartZ = helixStartWorldZ(topZ, globals.safeHeight, settings.zStartOffset);
+  const entryX = cx + cutR;
+  const entryY = cy;
+  const center = { x: cx, y: cy };
+  const helixOpts = {
+    stockTopZ: topZ,
+    globals,
+    taper: useTaper,
+    interiorCutR: cutR,
+    rotDir,
+    feedRate: plungeFeed,
+  };
   const points: ToolpathPoint[] = [];
-  const segments = 36;
 
-  if (isFirst) {
-    points.push({ x: cx + cutR, y: cy, z: clearance, rapid: true });
-  } else {
-    points.push({ x: cx, y: cy, z: clearance, rapid: true });
-    points.push({ x: cx + cutR, y: cy, z: topZ });
+  points.push({ x: entryX, y: entryY, z: safeZ, rapid: true });
+  if (helixStartZ < safeZ - 1e-4) {
+    points.push({ x: entryX, y: entryY, z: helixStartZ, feedRate: plungeFeed });
   }
 
-  const zTargets = layers.length > 0 ? layers : [finalZ];
-  let currentZ = topZ;
-  let angle = 0;
+  if (targetZ < helixStartZ - 1e-4) {
+    const helixBore = generateHelixBorePoints(center, settings, helixStartZ, targetZ, helixOpts);
+    appendPoints(points, helixBore.points);
+    let finishAngle = helixBore.endAngle;
+    let finishR = interiorHelixRadiusAtZ(cutR, targetZ, topZ, settings.boreTaperAngleDeg);
 
-  for (const targetZ of zTargets) {
-    const zSpan = currentZ - targetZ;
-    if (zSpan <= 1e-6) continue;
-    const zStep = zSpan / segments;
-    for (let i = 0; i < segments; i++) {
-      angle += (Math.PI * 2) / segments;
-      currentZ = Math.max(currentZ - zStep, targetZ);
-      points.push({
-        x: cx + Math.cos(angle) * cutR,
-        y: cy + Math.sin(angle) * cutR,
-        z: currentZ,
-      });
+    if (useTaper) {
+      const bottomR = finishR;
+      if (bottomR + 1e-3 < cutR) {
+        const spiralPoints = adjustBoreRadiusToSlotWidth(
+          center,
+          bottomR,
+          cutR,
+          targetZ,
+          radialStepPerRev,
+          rotDir,
+          segmentsPerRev,
+          finishAngle,
+          plungeFeed
+        );
+        appendPoints(points, spiralPoints);
+        finishR = cutR;
+        const spiralEnd = lastPathPoint(spiralPoints);
+        if (spiralEnd) {
+          finishAngle = Math.atan2(spiralEnd.y - cy, spiralEnd.x - cx);
+        }
+      }
     }
-    currentZ = targetZ;
+
+    const finishOrbit = generateFullRevolutionOrbit(
+      center,
+      finishR,
+      targetZ,
+      finishAngle,
+      rotDir,
+      segmentsPerRev,
+      plungeFeed
+    );
+    appendPoints(points, finishOrbit.points);
   }
 
+  appendRetractViaSlotCenter(points, center, safeZ, globals.travelFeedRate);
   return points;
 }
 
-function generateHelixPath(op: Operation, ctx: CutZContext): ToolpathPoint[] {
+function generateHelixPath(
+  op: Operation,
+  ctx: CutZContext,
+  globals: ToolpathGlobalOptions,
+  warnings: string[] = []
+): ToolpathPoint[] {
   const { settings, geometry } = op;
   const holes = getSelectedHoles(geometry);
   if (holes.length === 0) return [];
 
-  const clearance = clearanceWorldZ(ctx, settings.clearance);
+  const safeZ = safeHeightWorldZ(ctx, globals.safeHeight);
   const points: ToolpathPoint[] = [];
 
-  holes.forEach((hole, index) => {
+  holes.forEach((hole) => {
+    const validation = validateHelixHole(hole.radius, settings, ctx);
+    if (!validation.valid) {
+      warnings.push(
+        `Helix skipped hole at (${hole.center.x.toFixed(1)}, ${hole.center.y.toFixed(1)}): ${helixHoleInvalidLabel(validation.reason!)}`
+      );
+      return;
+    }
+
     appendPoints(
       points,
       generateHelixPathForHole(
@@ -589,27 +910,29 @@ function generateHelixPath(op: Operation, ctx: CutZContext): ToolpathPoint[] {
         hole.radius,
         settings,
         ctx,
-        clearance,
-        index === 0
+        safeZ,
+        globals
       )
     );
   });
 
-  const last = holes[holes.length - 1];
-  points.push({ x: last.center.x, y: last.center.y, z: clearance, rapid: true });
   return points;
 }
 
-function generatePocketPath(op: Operation, ctx: CutZContext): ToolpathPoint[] {
+function generatePocketPath(
+  op: Operation,
+  ctx: CutZContext,
+  globals: ToolpathGlobalOptions
+): ToolpathPoint[] {
   const { settings, geometry } = op;
   const { minX, maxX, minY, maxY } = getBounds(geometry);
   const stepover = settings.toolDiameter * (settings.stepover / 100);
   const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
   const cutZ = layers.length > 0 ? layers[layers.length - 1] : finalCutWorldZ(ctx, settings.depthOffset);
-  const clearance = clearanceWorldZ(ctx, settings.clearance);
+  const safeZ = safeHeightWorldZ(ctx, globals.safeHeight);
   const points: ToolpathPoint[] = [];
 
-  points.push({ x: minX, y: minY, z: clearance, rapid: true });
+  points.push({ x: minX, y: minY, z: safeZ, rapid: true });
   points.push({ x: minX, y: minY, z: cutZ });
 
   let y = minY;
@@ -627,20 +950,24 @@ function generatePocketPath(op: Operation, ctx: CutZContext): ToolpathPoint[] {
     direction *= -1;
   }
 
-  points.push({ x: minX, y: minY, z: clearance, rapid: true });
+  points.push({ x: minX, y: minY, z: safeZ, rapid: true });
   return points;
 }
 
-function generateContourPath(op: Operation, ctx: CutZContext): ToolpathPoint[] {
+function generateContourPath(
+  op: Operation,
+  ctx: CutZContext,
+  globals: ToolpathGlobalOptions
+): ToolpathPoint[] {
   const { settings, geometry } = op;
   const { minX, maxX, minY, maxY } = getBounds(geometry);
   const topZ = stockTopWorldZ(ctx);
   const finalZ = finalCutWorldZ(ctx, settings.depthOffset);
-  const clearance = clearanceWorldZ(ctx, settings.clearance);
+  const safeZ = safeHeightWorldZ(ctx, globals.safeHeight);
   const points: ToolpathPoint[] = [];
-  const steps = 20;
+  const steps = contourSteps(globals.resolution);
 
-  points.push({ x: minX, y: minY, z: clearance, rapid: true });
+  points.push({ x: minX, y: minY, z: safeZ, rapid: true });
 
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
@@ -650,7 +977,7 @@ function generateContourPath(op: Operation, ctx: CutZContext): ToolpathPoint[] {
     points.push({ x, y: minY + (maxY - minY) * t, z: currentZ });
   }
 
-  points.push({ x: maxX, y: maxY, z: clearance, rapid: true });
+  points.push({ x: maxX, y: maxY, z: safeZ, rapid: true });
   return points;
 }
 
@@ -658,38 +985,138 @@ function normalizedSettings(settings: Operation['settings']): Operation['setting
   return clampOperationSettings({ ...DEFAULT_SETTINGS, ...settings });
 }
 
-function generatePathForOperation(op: Operation, ctx: CutZContext): ToolpathPoint[] {
+function generatePathForOperation(
+  op: Operation,
+  ctx: CutZContext,
+  globals: ToolpathGlobalOptions,
+  warnings: string[] = []
+): ToolpathPoint[] {
   const settings = normalizedSettings(op.settings);
   const operation = { ...op, settings };
 
   switch (operation.type) {
     case 'outline':
-      return generateOutlinePath(operation, ctx);
+      return generateOutlinePath(operation, ctx, globals);
     case 'adaptive-outline':
-      return generateAdaptiveOutlinePath(operation, ctx);
+      return generateAdaptiveOutlinePath(operation, ctx, globals);
     case 'drill':
-      return generateDrillPath(operation, ctx);
+      return generateDrillPath(operation, ctx, globals);
     case 'helix':
-      return generateHelixPath(operation, ctx);
+      return generateHelixPath(operation, ctx, globals, warnings);
     case 'pocket':
-      return generatePocketPath(operation, ctx);
+      return generatePocketPath(operation, ctx, globals);
     case 'contour':
-      return generateContourPath(operation, ctx);
+      return generateContourPath(operation, ctx, globals);
+    case 'custom-gcode':
+      return [];
     default:
       return [];
   }
 }
 
+export const INTER_OPERATION_TRAVEL_PREFIX = '__travel__';
+
 export function generateToolpaths(
   operations: Operation[],
-  partBounds: PartBounds | null = null
-): ToolpathSegment[] {
+  partBounds: PartBounds | null = null,
+  globals: ToolpathGlobalOptions = {
+    safeHeight: DEFAULT_SAFE_HEIGHT,
+    resolution: DEFAULT_TOOLPATH_RESOLUTION,
+    travelFeedRate: DEFAULT_TRAVEL_FEED_RATE,
+  }
+): ToolpathGenerationResult {
   const ctx = createCutZContext(partBounds);
-  return operations
-    .filter((op) => op.enabled)
-    .map((op) => ({
+  const budget = { discarded: 0 };
+  activePointBudget = budget;
+
+  const enabledOps = operations.filter((op) => op.enabled);
+  const segments: ToolpathSegment[] = [];
+  const warnings: string[] = [];
+  let prevLastPoint: ToolpathPoint | null = null;
+
+  for (let i = 0; i < enabledOps.length; i++) {
+    const op = enabledOps[i];
+    const opWarnings: string[] = [];
+    const points = generatePathForOperation(op, ctx, globals, opWarnings);
+    warnings.push(...opWarnings);
+    if (points.length === 0) continue;
+
+    if (prevLastPoint) {
+      const travelPoints = buildInterOperationTravel(prevLastPoint, points[0]);
+      if (travelPoints.length >= 2) {
+        segments.push({
+          operationId: `${INTER_OPERATION_TRAVEL_PREFIX}${i}`,
+          points: travelPoints,
+          color: '#f59e0b',
+        });
+      }
+    }
+
+    segments.push({
       operationId: op.id,
-      points: generatePathForOperation(op, ctx),
+      points,
       color: OPERATION_COLORS[op.type],
-    }));
+    });
+    prevLastPoint = points[points.length - 1];
+  }
+
+  activePointBudget = null;
+
+  if (budget.discarded > 0) {
+    const totalPoints = segments.reduce((sum, seg) => sum + seg.points.length, 0);
+    warnings.push(
+      `Toolpath point limit reached (${MAX_TOOLPATH_POINTS.toLocaleString()} max). ` +
+        `${budget.discarded.toLocaleString()} point${budget.discarded === 1 ? '' : 's'} discarded; ` +
+        `${totalPoints.toLocaleString()} kept. Increase Toolpath Resolution or disable operations to reduce point count.`
+    );
+  }
+
+  return { segments, warnings };
+}
+
+/** Keep visible operation segments plus travel links between adjacent visible ops. */
+export function filterVisibleToolpathSegments(
+  toolpaths: ToolpathSegment[],
+  operations: Operation[]
+): ToolpathSegment[] {
+  const visibleIds = new Set(operations.filter((o) => o.visible).map((o) => o.id));
+  const filtered: ToolpathSegment[] = [];
+
+  for (let i = 0; i < toolpaths.length; i++) {
+    const segment = toolpaths[i];
+    if (visibleIds.has(segment.operationId)) {
+      filtered.push(segment);
+      continue;
+    }
+    if (!segment.operationId.startsWith(INTER_OPERATION_TRAVEL_PREFIX)) continue;
+
+    const prev = toolpaths[i - 1];
+    const next = toolpaths[i + 1];
+    if (
+      prev &&
+      next &&
+      visibleIds.has(prev.operationId) &&
+      visibleIds.has(next.operationId)
+    ) {
+      filtered.push(segment);
+    }
+  }
+
+  return filtered;
+}
+
+/** Visible toolpaths with origin-to-first-point approach for preview/simulation. */
+export function buildVisiblePreviewToolpaths(
+  toolpaths: ToolpathSegment[],
+  operations: Operation[],
+  toolOrigin: ToolOrigin,
+  stockTopWorldZ: number,
+  safeHeight: number
+): ToolpathSegment[] {
+  const visible = filterVisibleToolpathSegments(toolpaths, operations);
+  return prependToolOriginApproach(
+    visible,
+    toolOrigin,
+    safeHeightWorldZ({ worldTopZ: stockTopWorldZ }, safeHeight)
+  );
 }

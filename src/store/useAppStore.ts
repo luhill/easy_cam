@@ -8,21 +8,25 @@ import type {
   ToolpathSegment,
 } from '../types/operations';
 import type { PartBounds } from '../lib/geometryProcessing';
-import { partBoundsEqual } from '../lib/geometryProcessing';
+import { partBoundsEqual, rotateSelectedGeometry, snapRotationDegrees } from '../lib/geometryProcessing';
+import { getPartTransformBridge } from '../lib/partTransformBridge';
 import {
-  DEFAULT_SETTINGS,
+  defaultSettingsForOperation,
   getOperationLabel,
 } from '../types/operations';
 import { clampOperationSettings } from '../lib/settingLimits';
 import { generateToolpaths } from '../lib/toolpaths';
-import { DEFAULT_DEV_STL_NAME, DEFAULT_DEV_STL_URL } from '../lib/defaultStl';
+import type { ToolpathColorMode } from '../lib/toolpathColors';
+import { DEFAULT_DEV_STL_NAME, getDefaultDevStlUrl } from '../lib/defaultStl';
+import { clearStlGeometryCache } from '../lib/stlLoader';
+import { useSettingsStore } from './useSettingsStore';
 
 function revokeStlUrl(url: string | null): void {
   if (url?.startsWith('blob:')) URL.revokeObjectURL(url);
 }
 
 const devDefaultStl = import.meta.env.DEV
-  ? { stlUrl: DEFAULT_DEV_STL_URL, stlFileName: DEFAULT_DEV_STL_NAME }
+  ? { stlUrl: getDefaultDevStlUrl('dev'), stlFileName: DEFAULT_DEV_STL_NAME }
   : { stlUrl: null as string | null, stlFileName: null as string | null };
 
 interface AppState {
@@ -34,10 +38,18 @@ interface AppState {
   selectionMode: boolean;
   selectionSubMode: SelectionSubMode;
   partBounds: PartBounds | null;
+  /** Part rotation around Z (degrees), snapped to 30° steps. */
+  partRotationZ: number;
   toolpaths: ToolpathSegment[];
+  toolpathWarnings: string[];
   simulationDistance: number;
   simulationPlaying: boolean;
   simulationSpeed: number;
+  /** Preview window as fraction of total path length [0, 1]. */
+  simulationWindowStart: number;
+  simulationWindowEnd: number;
+  simulationShowTool: boolean;
+  toolpathColorMode: ToolpathColorMode;
 
   setStlFile: (file: File) => void;
   loadDefaultStl: () => void;
@@ -58,10 +70,14 @@ interface AppState {
   toggleOperationVisible: (id: string) => void;
   toggleOperationCollapsed: (id: string) => void;
   setPartBounds: (bounds: PartBounds | null) => void;
+  setPartRotationZ: (degrees: number) => void;
   regenerateToolpaths: () => void;
   setSimulationDistance: (distance: number) => void;
   setSimulationPlaying: (playing: boolean) => void;
   setSimulationSpeed: (speed: number) => void;
+  setSimulationWindow: (start: number, end: number) => void;
+  setSimulationShowTool: (show: boolean) => void;
+  setToolpathColorMode: (mode: ToolpathColorMode) => void;
   resetSimulation: () => void;
 }
 
@@ -74,10 +90,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectionMode: false,
   selectionSubMode: 'geometry',
   partBounds: null,
+  partRotationZ: 0,
   toolpaths: [],
+  toolpathWarnings: [],
   simulationDistance: 0,
   simulationPlaying: false,
   simulationSpeed: 1,
+  simulationWindowStart: 0,
+  simulationWindowEnd: 1,
+  simulationShowTool: true,
+  toolpathColorMode: 'type',
 
   setStlFile: (file) => {
     const prev = get().stlUrl;
@@ -89,24 +111,34 @@ export const useAppStore = create<AppState>((set, get) => ({
       stlFileName: file.name,
       operations: [],
       toolpaths: [],
+      toolpathWarnings: [],
       partBounds: null,
+      partRotationZ: 0,
       simulationDistance: 0,
       simulationPlaying: false,
+      simulationWindowStart: 0,
+      simulationWindowEnd: 1,
     });
   },
 
   loadDefaultStl: () => {
     const prev = get().stlUrl;
     revokeStlUrl(prev);
+    clearStlGeometryCache();
+    const nextUrl = getDefaultDevStlUrl(Date.now());
     set({
       stlFile: null,
-      stlUrl: DEFAULT_DEV_STL_URL,
+      stlUrl: nextUrl,
       stlFileName: DEFAULT_DEV_STL_NAME,
       operations: [],
       toolpaths: [],
+      toolpathWarnings: [],
       partBounds: null,
+      partRotationZ: 0,
       simulationDistance: 0,
       simulationPlaying: false,
+      simulationWindowStart: 0,
+      simulationWindowEnd: 1,
     });
   },
 
@@ -119,10 +151,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       stlFileName: null,
       operations: [],
       toolpaths: [],
+      toolpathWarnings: [],
       partBounds: null,
+      partRotationZ: 0,
       activeOperationId: null,
       simulationDistance: 0,
       simulationPlaying: false,
+      simulationWindowStart: 0,
+      simulationWindowEnd: 1,
     });
   },
 
@@ -134,8 +170,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       enabled: true,
       visible: true,
       collapsed: false,
-      settings: clampOperationSettings({ ...DEFAULT_SETTINGS }),
+      settings: clampOperationSettings(defaultSettingsForOperation(type)),
       geometry: null,
+      ...(type === 'custom-gcode'
+        ? { customGcode: '; Custom G-code\n; Insert Marlin commands below\n' }
+        : {}),
     };
     set((state) => ({
       operations: [
@@ -171,7 +210,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         o.id === id
           ? {
               ...o,
-              settings: clampOperationSettings({ ...DEFAULT_SETTINGS, ...o.settings, ...settings }),
+              settings: clampOperationSettings({
+                ...defaultSettingsForOperation(o.type),
+                ...o.settings,
+                ...settings,
+              }),
             }
           : o
       ),
@@ -248,10 +291,38 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().regenerateToolpaths();
   },
 
+  setPartRotationZ: (degrees) => {
+    const snapped = snapRotationDegrees(degrees);
+    const prev = get().partRotationZ;
+    let delta = snapped - prev;
+    if (delta > 180) delta -= 360;
+    if (delta < -180) delta += 360;
+
+    if (Math.abs(delta) < 1e-6 && snapped === prev) return;
+
+    const bridge = getPartTransformBridge();
+    if (!bridge) return;
+
+    set((state) => ({
+      partRotationZ: snapped,
+      operations: state.operations.map((op) =>
+        op.geometry ? { ...op, geometry: rotateSelectedGeometry(op.geometry, delta) } : op
+      ),
+    }));
+
+    bridge.applyRotationZ(snapped);
+    get().regenerateToolpaths();
+  },
+
   regenerateToolpaths: () => {
     const { operations, partBounds } = get();
-    const toolpaths = generateToolpaths(operations, partBounds);
-    set({ toolpaths, simulationDistance: 0, simulationPlaying: false });
+    const { safeHeight, toolpathResolution, travelFeedRate } = useSettingsStore.getState();
+    const { segments, warnings } = generateToolpaths(operations, partBounds, {
+      safeHeight,
+      resolution: toolpathResolution,
+      travelFeedRate,
+    });
+    set({ toolpaths: segments, toolpathWarnings: warnings, simulationDistance: 0, simulationPlaying: false, simulationWindowStart: 0, simulationWindowEnd: 1 });
   },
 
   setSimulationDistance: (distance) =>
@@ -261,5 +332,22 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setSimulationSpeed: (speed) => set({ simulationSpeed: speed }),
 
-  resetSimulation: () => set({ simulationDistance: 0, simulationPlaying: false }),
+  setSimulationWindow: (start, end) => {
+    const s = Math.max(0, Math.min(1, start));
+    const e = Math.max(0, Math.min(1, end));
+    if (e - s < 0.02) return;
+    set({ simulationWindowStart: s, simulationWindowEnd: e });
+  },
+
+  setSimulationShowTool: (show) => set({ simulationShowTool: show }),
+
+  setToolpathColorMode: (mode) => set({ toolpathColorMode: mode }),
+
+  resetSimulation: () =>
+    set({
+      simulationDistance: 0,
+      simulationPlaying: false,
+      simulationWindowStart: 0,
+      simulationWindowEnd: 1,
+    }),
 }));

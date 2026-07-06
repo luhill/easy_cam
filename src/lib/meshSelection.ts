@@ -6,14 +6,20 @@ import {
   effectiveOutlineLoop,
   isHoleSelectable,
   isHoleSelectableForOperation,
-  isPhysicallyTopFace,
+  isUpwardFacingRegion,
   isRegionSelectableForOperation,
 } from './selectionRules';
 
 const COPLANAR_DOT_THRESHOLD = Math.cos((2 * Math.PI) / 180);
 const CIRCLE_TOLERANCE = 0.45;
 const MIN_HOLE_POINTS = 4;
-const HOLE_PICK_TOLERANCE = 1.2;
+/** Max inner/outer loop area ratio — rejects pocket openings misread as holes. */
+const MAX_HOLE_TO_FACE_AREA_RATIO = 0.35;
+/** On small upward faces, stricter ratio rejects top-rim pad cutouts above pocket bosses. */
+const SMALL_FACE_AREA_THRESHOLD = 200;
+const MAX_HOLE_TO_SMALL_FACE_RATIO = 0.15;
+/** Max hole radius as a fraction of the part XY diagonal. */
+const MAX_HOLE_RADIUS_PART_FRACTION = 0.12;
 
 export type RegionKind = 'top' | 'bottom' | 'side' | 'unknown';
 
@@ -31,6 +37,10 @@ export interface HoleFeature {
   loop: LoopPoint[];
   isVertical: boolean;
   regionId: number;
+  /** Cylindrical wall faces surrounding this hole. */
+  wallFaceIndices: number[];
+  /** Mean Z of the hole opening (boss/pocket floor). */
+  topZ: number;
 }
 
 export interface SelectionRegion {
@@ -197,6 +207,73 @@ function fitCircle2D(loop: LoopPoint[]): { center: LoopPoint; radius: number } |
   return approx;
 }
 
+function loopMeanZ(loop: LoopPoint[]): number {
+  if (loop.length === 0) return 0;
+  let z = 0;
+  for (const p of loop) z += p.z;
+  return z / loop.length;
+}
+
+function generateCircleLoop(
+  cx: number,
+  cy: number,
+  radius: number,
+  z: number,
+  segments = 64
+): LoopPoint[] {
+  const loop: LoopPoint[] = [];
+  for (let i = 0; i < segments; i++) {
+    const angle = (i / segments) * Math.PI * 2;
+    loop.push({
+      x: cx + Math.cos(angle) * radius,
+      y: cy + Math.sin(angle) * radius,
+      z,
+    });
+  }
+  return loop;
+}
+
+interface RadialWallCluster {
+  radius: number;
+  faceIndices: number[];
+}
+
+function isValidHoleCandidate(
+  inner: LoopPoint[],
+  fit: { center: LoopPoint; radius: number },
+  outerLoop: LoopPoint[] | null,
+  bounds: PartBounds
+): boolean {
+  if (fit.radius <= 0) return false;
+
+  const loopArea = Math.abs(loopArea2D(inner));
+  const circleArea = Math.PI * fit.radius * fit.radius;
+  if (loopArea > 0 && Math.abs(loopArea - circleArea) / circleArea > 0.25) {
+    return false;
+  }
+
+  const partDiag = Math.hypot(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
+  if (fit.radius > partDiag * MAX_HOLE_RADIUS_PART_FRACTION) {
+    return false;
+  }
+
+  if (outerLoop) {
+    const outerArea = Math.abs(loopArea2D(outerLoop));
+    if (outerArea > 0 && loopArea / outerArea > MAX_HOLE_TO_FACE_AREA_RATIO) {
+      return false;
+    }
+    if (
+      outerArea > 0 &&
+      outerArea < SMALL_FACE_AREA_THRESHOLD &&
+      loopArea / outerArea > MAX_HOLE_TO_SMALL_FACE_RATIO
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function classifyLoops(loops: LoopPoint[][]): {
   outerLoop: LoopPoint[] | null;
   innerLoops: LoopPoint[][];
@@ -279,6 +356,7 @@ export class MeshIndex {
   readonly faceToRegion: Int32Array;
   private readonly edgeToFaces: Map<string, number[]>;
   private readonly positions: THREE.BufferAttribute;
+  private readonly faceNormals: THREE.Vector3[];
   private readonly epsilon: number;
 
   constructor(geometry: THREE.BufferGeometry) {
@@ -290,7 +368,7 @@ export class MeshIndex {
     this.bounds = boundsFromGeometry(geometry);
     this.epsilon = computeEpsilon(this.bounds);
 
-    const faceNormals: THREE.Vector3[] = [];
+    this.faceNormals = [];
     const facePlaneKeys: string[] = [];
     const adjacency: number[][] = Array.from({ length: this.faceCount }, () => []);
 
@@ -302,7 +380,7 @@ export class MeshIndex {
       const normal = new THREE.Vector3()
         .crossVectors(v1.clone().sub(v0), v2.clone().sub(v0))
         .normalize();
-      faceNormals.push(normal);
+      this.faceNormals.push(normal);
       facePlaneKeys.push(planeKey(normal, normal.dot(v0), this.epsilon));
 
       const verts = [v0, v1, v2];
@@ -320,7 +398,7 @@ export class MeshIndex {
           const a = faces[i];
           const b = faces[j];
           if (facePlaneKeys[a] !== facePlaneKeys[b]) continue;
-          if (faceNormals[a].dot(faceNormals[b]) < COPLANAR_DOT_THRESHOLD) continue;
+          if (this.faceNormals[a].dot(this.faceNormals[b]) < COPLANAR_DOT_THRESHOLD) continue;
           adjacency[a].push(b);
           adjacency[b].push(a);
         }
@@ -349,7 +427,7 @@ export class MeshIndex {
 
         const regionId = this.regions.length;
         const loops = this.computeBoundaryLoops(faceIndices);
-        const normal = averageNormal(faceIndices, faceNormals);
+        const normal = averageNormal(faceIndices, this.faceNormals);
         const centroid = regionCentroid(faceIndices, geometry, this.positions);
         const kind = classifyRegionKind(normal, centroid, this.bounds);
         const { outerLoop, innerLoops } = classifyLoops(loops);
@@ -370,10 +448,10 @@ export class MeshIndex {
         });
 
         const region = this.regions[regionId];
-        if (isPhysicallyTopFace(region, this.bounds)) {
+        if (isUpwardFacingRegion(region)) {
           for (const inner of innerLoops) {
             const fit = fitCircle2D(inner);
-            if (fit && fit.radius > 0) {
+            if (fit && isValidHoleCandidate(inner, fit, outerLoop, this.bounds)) {
               this.holes.push({
                 id: this.holes.length,
                 center: fit.center,
@@ -381,12 +459,128 @@ export class MeshIndex {
                 loop: inner,
                 isVertical: true,
                 regionId,
+                wallFaceIndices: [],
+                topZ: loopMeanZ(inner),
               });
             }
           }
         }
       }
     }
+
+    for (const hole of this.holes) {
+      this.refineHoleToInnerBore(hole);
+    }
+  }
+
+  /** Snap hole to the innermost cylindrical wall when a boss outer ring was traced. */
+  private refineHoleToInnerBore(hole: HoleFeature): void {
+    const clusters = this.findRadialWallClusters(hole.center, hole.topZ);
+    if (clusters.length === 0) {
+      hole.wallFaceIndices = this.findWallFacesForCylinder(hole.center, hole.radius);
+      return;
+    }
+
+    const innerCluster = clusters.find((c) => c.radius < hole.radius * 0.92) ?? clusters[0];
+    if (innerCluster.radius < hole.radius * 0.95) {
+      hole.radius = innerCluster.radius;
+      hole.wallFaceIndices = innerCluster.faceIndices;
+      hole.loop = generateCircleLoop(hole.center.x, hole.center.y, innerCluster.radius, hole.topZ);
+      return;
+    }
+
+    hole.wallFaceIndices = innerCluster.faceIndices.length
+      ? innerCluster.faceIndices
+      : this.findWallFacesForCylinder(hole.center, hole.radius);
+  }
+
+  /**
+   * Group vertical wall faces by XY distance from a center — finds inner bore vs outer boss walls.
+   */
+  private findRadialWallClusters(center: LoopPoint, topZ: number): RadialWallCluster[] {
+    const bucketFaces = new Map<number, number[]>();
+    const zMin = this.bounds.minZ - this.epsilon;
+    const zMax = topZ + (this.bounds.maxZ - topZ) * 0.5 + this.epsilon;
+
+    for (let faceIndex = 0; faceIndex < this.faceCount; faceIndex++) {
+      const normal = this.faceNormals[faceIndex];
+      if (Math.abs(normal.z) > 0.35) continue;
+
+      const c = this.faceCentroid(faceIndex);
+      if (c.z < zMin || c.z > zMax) continue;
+
+      const dist = Math.hypot(c.x - center.x, c.y - center.y);
+      if (dist < 0.5) continue;
+
+      const bucket = Math.round(dist * 4) / 4;
+      const faces = bucketFaces.get(bucket) ?? [];
+      faces.push(faceIndex);
+      bucketFaces.set(bucket, faces);
+    }
+
+    const minFaces = 20;
+    const raw: RadialWallCluster[] = [];
+    for (const [radius, faceIndices] of bucketFaces) {
+      if (faceIndices.length >= minFaces) {
+        raw.push({ radius, faceIndices });
+      }
+    }
+    raw.sort((a, b) => a.radius - b.radius);
+
+    if (raw.length <= 1) return raw;
+
+    const merged: RadialWallCluster[] = [];
+    for (const cluster of raw) {
+      const last = merged[merged.length - 1];
+      if (last && cluster.radius - last.radius < 0.75) {
+        last.faceIndices.push(...cluster.faceIndices);
+        last.radius = (last.radius + cluster.radius) / 2;
+      } else {
+        merged.push({ ...cluster, faceIndices: [...cluster.faceIndices] });
+      }
+    }
+    return merged;
+  }
+
+  private faceCentroid(faceIndex: number): THREE.Vector3 {
+    const sum = new THREE.Vector3();
+    for (let i = 0; i < 3; i++) {
+      sum.add(getFaceVertex(this.geometry, this.positions, faceIndex, i, new THREE.Vector3()));
+    }
+    return sum.multiplyScalar(1 / 3);
+  }
+
+  private findWallFacesForCylinder(center: LoopPoint, radius: number): number[] {
+    if (radius <= 0) return [];
+
+    const minR = radius * 0.82;
+    const maxR = radius * 1.18;
+    const zMin = this.bounds.minZ - this.epsilon;
+    const zMax = this.bounds.maxZ + this.epsilon;
+    const faces: number[] = [];
+
+    for (let faceIndex = 0; faceIndex < this.faceCount; faceIndex++) {
+      const normal = this.faceNormals[faceIndex];
+      if (Math.abs(normal.z) > 0.35) continue;
+
+      const c = this.faceCentroid(faceIndex);
+      if (c.z < zMin || c.z > zMax) continue;
+
+      const dist = Math.hypot(c.x - center.x, c.y - center.y);
+      if (dist >= minR && dist <= maxR) {
+        faces.push(faceIndex);
+      }
+    }
+
+    return faces;
+  }
+
+  getWallFacesForHole(hole: { center: LoopPoint; radius: number; holeId?: number }): number[] {
+    if (hole.holeId !== undefined && hole.holeId >= 0) {
+      const feature = this.holes.find((h) => h.id === hole.holeId);
+      if (feature?.wallFaceIndices.length) return feature.wallFaceIndices;
+    }
+    return this.findWallFacesForCylinder(hole.center, hole.radius);
   }
 
   private computeBoundaryLoops(faceIndices: number[]): LoopPoint[][] {
@@ -433,33 +627,63 @@ export class MeshIndex {
     return this.faceToRegion[faceIndex];
   }
 
-  findInnerLoopAtPoint(x: number, y: number): HoleFeature | null {
+  private scoreHolePick(
+    hole: HoleFeature,
+    x: number,
+    y: number,
+    z: number | undefined
+  ): number | null {
+    const inside = pointInPolygon2D(x, y, hole.loop);
+    const distXY = Math.hypot(x - hole.center.x, y - hole.center.y);
+    const distEdge = distanceToLoop2D(x, y, hole.loop);
+    const onInnerWall = distEdge <= Math.max(hole.radius * 0.12, 0.35);
+
+    if (!inside && !onInnerWall) return null;
+    // Boss annulus between bore and outer diameter — not selectable.
+    if (!inside && distXY > hole.radius * 1.02) return null;
+
+    const zWeight = 8;
+    const zPenalty = z !== undefined ? Math.abs(hole.topZ - z) * zWeight : 0;
+    const xyScore = inside ? 0 : distEdge;
+    const sizePenalty = hole.radius * 0.05;
+    return xyScore + zPenalty + sizePenalty;
+  }
+
+  private buildHoleCandidate(
+    inner: LoopPoint[],
+    fit: { center: LoopPoint; radius: number },
+    regionId: number
+  ): HoleFeature {
+    const hole: HoleFeature = {
+      id: -1,
+      center: fit.center,
+      radius: fit.radius,
+      loop: inner,
+      isVertical: true,
+      regionId,
+      wallFaceIndices: [],
+      topZ: loopMeanZ(inner),
+    };
+    this.refineHoleToInnerBore(hole);
+    return hole;
+  }
+
+  findInnerLoopAtPoint(x: number, y: number, z?: number): HoleFeature | null {
     let best: { hole: HoleFeature; score: number } | null = null;
 
     for (const region of this.regions) {
-      if (!isPhysicallyTopFace(region, this.bounds)) continue;
+      if (!isUpwardFacingRegion(region)) continue;
+      if (z !== undefined && Math.abs(region.centroid.z - z) > 1.5) continue;
 
       for (const inner of region.innerLoops) {
         const fit = fitCircle2D(inner);
-        if (!fit || fit.radius <= 0) continue;
+        if (!fit || !isValidHoleCandidate(inner, fit, region.outerLoop, this.bounds)) {
+          continue;
+        }
 
-        const inside = pointInPolygon2D(x, y, inner);
-        const distToCenter = Math.hypot(x - fit.center.x, y - fit.center.y);
-        const distToEdge = distanceToLoop2D(x, y, inner);
-        const insideByRadius = distToCenter <= fit.radius * HOLE_PICK_TOLERANCE;
-        const nearEdge = distToEdge <= fit.radius * 0.35;
-
-        if (!inside && !insideByRadius && !nearEdge) continue;
-
-        const score = inside ? 0 : insideByRadius ? distToCenter : distToEdge;
-        const hole: HoleFeature = {
-          id: -1,
-          center: fit.center,
-          radius: fit.radius,
-          loop: inner,
-          isVertical: true,
-          regionId: region.id,
-        };
+        const hole = this.buildHoleCandidate(inner, fit, region.id);
+        const score = this.scoreHolePick(hole, x, y, z);
+        if (score === null) continue;
 
         if (!best || score < best.score) {
           best = { hole, score };
@@ -470,35 +694,28 @@ export class MeshIndex {
     return best?.hole ?? null;
   }
 
-  findHoleAtPoint(x: number, y: number, operationType: OperationType): HoleFeature | null {
+  findHoleAtPoint(
+    x: number,
+    y: number,
+    operationType: OperationType,
+    z?: number
+  ): HoleFeature | null {
     if (!isHoleSelectableForOperation(operationType)) return null;
 
+    let best: { hole: HoleFeature; score: number } | null = null;
+
     for (const hole of this.holes) {
       if (!isHoleSelectable(operationType, hole)) continue;
-      const inside = pointInPolygon2D(x, y, hole.loop);
-      const dist = Math.hypot(x - hole.center.x, y - hole.center.y);
-      if (
-        inside ||
-        dist <= hole.radius * HOLE_PICK_TOLERANCE ||
-        distanceToLoop2D(x, y, hole.loop) <= hole.radius * 0.35
-      ) {
-        return hole;
+      const score = this.scoreHolePick(hole, x, y, z);
+      if (score === null) continue;
+      if (!best || score < best.score) {
+        best = { hole, score };
       }
     }
 
-    let nearest: HoleFeature | null = null;
-    let nearestDist = Infinity;
-    for (const hole of this.holes) {
-      if (!isHoleSelectable(operationType, hole)) continue;
-      const d = Math.hypot(x - hole.center.x, y - hole.center.y);
-      if (d <= hole.radius * 1.75 && d < nearestDist) {
-        nearest = hole;
-        nearestDist = d;
-      }
-    }
-    if (nearest) return nearest;
+    if (best) return best.hole;
 
-    return this.findInnerLoopAtPoint(x, y);
+    return this.findInnerLoopAtPoint(x, y, z);
   }
 
   getOutlineLoop(region: SelectionRegion): LoopPoint[] | null {
@@ -520,14 +737,11 @@ export class MeshIndex {
 
     if (isHoleSelectableForOperation(operationType)) {
       if (!point) return null;
-      const hole = this.findHoleAtPoint(point.x, point.y, operationType);
+      const hole = this.findHoleAtPoint(point.x, point.y, operationType, point.z);
       if (!hole) return null;
 
-      const regionForHole =
-        hole.regionId >= 0 ? this.regions[hole.regionId] ?? region : region;
-
       return {
-        faceIndices: regionForHole.faceIndices,
+        faceIndices: hole.wallFaceIndices,
         loops: [hole.loop],
         holeId: hole.id >= 0 ? hole.id : undefined,
         outerLoop: null,

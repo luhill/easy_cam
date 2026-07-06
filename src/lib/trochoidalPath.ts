@@ -225,6 +225,80 @@ export function findClosestSOnGuide(
   return { s: bestS, x: bestX, y: bestY, dist: bestDist };
 }
 
+/** Advance along a closed guide by arc length (mm) in one direction. */
+export function advanceGuideArcLength(
+  guide: ArcLengthGuide,
+  fromS: number,
+  distance: number,
+  forward: boolean
+): number {
+  if (distance <= 0 || guide.totalLength <= 0) return fromS;
+
+  const total = guide.totalLength;
+  const next = forward ? fromS + distance : fromS - distance;
+  return ((next % total) + total) % total;
+}
+
+/** Arc length between two stations on a closed guide, in one traverse direction. */
+export function guideArcLengthBetween(
+  totalLength: number,
+  fromS: number,
+  toS: number,
+  forward: boolean
+): number {
+  if (totalLength <= 0) return 0;
+  if (forward) {
+    if (toS >= fromS - 1e-6) return toS - fromS;
+    return totalLength - fromS + toS;
+  }
+  if (fromS >= toS - 1e-6) return fromS - toS;
+  return fromS + totalLength - toS;
+}
+
+/** Sample a closed guide between two arc-length stations. */
+export function extractGuideArcSegment(
+  guide: ArcLengthGuide,
+  fromS: number,
+  toS: number,
+  traverseSign: number,
+  sampleSpacing: number,
+  z: number,
+  /** When true, take the shorter arc if the traverse-direction arc wraps past half the loop. */
+  preferShortArc = false
+): LoopPoint[] {
+  const total = guide.totalLength;
+  if (total <= 0) return [];
+
+  let forward = traverseSign >= 0;
+  let arcLen = guideArcLengthBetween(total, fromS, toS, forward);
+  if (preferShortArc) {
+    const reverseLen = guideArcLengthBetween(total, fromS, toS, !forward);
+    if (reverseLen + 1e-6 < arcLen) {
+      forward = !forward;
+      arcLen = reverseLen;
+    }
+  }
+  const joinPt = sampleGuideAtS(guide, toS);
+
+  if (arcLen <= sampleSpacing * 0.5) {
+    return [{ x: joinPt.x, y: joinPt.y, z }];
+  }
+
+  const points: LoopPoint[] = [];
+  const steps = Math.max(1, Math.ceil(arcLen / sampleSpacing));
+
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const delta = t * arcLen;
+    let s = forward ? fromS + delta : fromS - delta;
+    s = ((s % total) + total) % total;
+    const pt = sampleGuideAtS(guide, s);
+    points.push({ x: pt.x, y: pt.y, z });
+  }
+
+  return points;
+}
+
 export function sampleGuideAtS(guide: ArcLengthGuide, s: number): GuideFrame {
   const { frames, totalLength } = guide;
   if (frames.length === 0) {

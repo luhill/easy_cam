@@ -1,6 +1,7 @@
 import type { Operation } from '../../types/operations';
 import { useAppStore } from '../../store/useAppStore';
 import { SETTING_LIMITS, clampSettingValue } from '../../lib/settingLimits';
+import { HintTooltip, LabelWithHint } from '../HintTooltip';
 
 interface OperationSettingsProps {
   operation: Operation;
@@ -23,26 +24,46 @@ const BASE_FIELDS: {
   { key: 'stepDown', label: 'Step Down', unit: 'mm', step: 0.1 },
   { key: 'stepover', label: 'Stepover', unit: '%', step: 1 },
   { key: 'spindleSpeed', label: 'Spindle Speed', unit: 'RPM', step: 500 },
-  { key: 'clearance', label: 'Clearance', unit: 'mm', step: 1 },
   { key: 'depthOffset', label: 'Depth Offset', unit: 'mm', step: 0.1 },
+];
+
+const HELIX_BASE_FIELDS: typeof BASE_FIELDS = [
+  { key: 'toolDiameter', label: 'Tool Diameter', unit: 'mm', step: 0.1 },
+  { key: 'plungeRate', label: 'Plunge Rate', unit: 'mm/min', step: 25 },
+  { key: 'stepover', label: 'Stepover', unit: '%', step: 1 },
+  { key: 'spindleSpeed', label: 'Spindle Speed', unit: 'RPM', step: 500 },
+  { key: 'depthOffset', label: 'Z Offset', unit: 'mm', step: 0.1 },
 ];
 
 const OUTLINE_FIELDS: typeof BASE_FIELDS = [
   { key: 'radialOffset', label: 'Additional Offset', unit: 'mm', step: 0.1 },
 ];
 
+const HELIX_FIELDS: typeof BASE_FIELDS = [
+  { key: 'radialOffset', label: 'XY Offset', unit: 'mm', step: 0.1 },
+  { key: 'zStartOffset', label: 'Z Start Offset', unit: 'mm', step: 0.1 },
+  { key: 'helixAngleDeg', label: 'Helix Pitch Angle', unit: '°', step: 0.1 },
+  { key: 'boreTaperAngleDeg', label: 'Taper', unit: '°', step: 0.5 },
+];
+
 const ADAPTIVE_FIELDS: typeof BASE_FIELDS = [
   { key: 'radialOffset', label: 'Additional Offset', unit: 'mm', step: 0.1 },
   { key: 'slotWidthPercent', label: 'Slot Width', unit: '% of tool ⌀', step: 5 },
   { key: 'liftAmount', label: 'Pass Lift', unit: 'mm', step: 0.1 },
-  { key: 'helixDiameterPercent', label: 'Helix Diameter', unit: '% of tool ⌀', step: 5 },
-  { key: 'helixAngleDeg', label: 'Helix Angle', unit: '°', step: 0.1 },
-  { key: 'helixFeedRate', label: 'Helix Feed Rate', unit: 'mm/min', step: 25 },
+  { key: 'boreDiameterPercent', label: 'Bore Diameter', unit: '% of tool ⌀', step: 5 },
+  { key: 'helixAngleDeg', label: 'Helix Pitch Angle', unit: '°', step: 0.1 },
+  { key: 'boreTaperAngleDeg', label: 'Bore Taper', unit: '°', step: 0.5 },
 ];
+
+const DEPTH_HINT =
+  'Z=0 at stock top; cuts are negative Z. Z offset is measured from the part bottom (+ stops short). Step down sets the maximum per-pass depth; passes are spaced evenly to the target.';
 
 function fieldLabel(operation: Operation, key: NumericSettingKey, fallback: string): string {
   if (operation.type === 'adaptive-outline' && key === 'stepover') {
     return 'Pass Advance (Stepover)';
+  }
+  if (operation.type === 'helix' && key === 'stepover') {
+    return 'Bottom Widen Stepover';
   }
   return fallback;
 }
@@ -51,12 +72,51 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
   const updateOperationSettings = useAppStore((s) => s.updateOperationSettings);
   const updateOperation = useAppStore((s) => s.updateOperation);
 
+  if (operation.type === 'custom-gcode') {
+    return (
+      <div className="operation-settings">
+        <div className="setting-row">
+          <label>Name</label>
+          <input
+            type="text"
+            value={operation.name}
+            onChange={(e) => updateOperation(operation.id, { name: e.target.value })}
+          />
+        </div>
+        <div className="gcode-template-field custom-gcode-field">
+          <label htmlFor={`custom-gcode-${operation.id}`}>
+            <LabelWithHint hint="Marlin G-code inserted verbatim at this step in the exported program. One command per line.">
+              G-code
+            </LabelWithHint>
+          </label>
+          <textarea
+            id={`custom-gcode-${operation.id}`}
+            className="custom-gcode-textarea"
+            value={operation.customGcode ?? ''}
+            onChange={(e) =>
+              updateOperation(operation.id, { customGcode: e.target.value })
+            }
+            rows={12}
+            spellCheck={false}
+          />
+        </div>
+      </div>
+    );
+  }
+
   const fields =
     operation.type === 'adaptive-outline'
       ? [...BASE_FIELDS, ...ADAPTIVE_FIELDS]
-      : operation.type === 'outline'
-        ? [...BASE_FIELDS, ...OUTLINE_FIELDS]
-        : BASE_FIELDS;
+      : operation.type === 'helix'
+        ? [...HELIX_BASE_FIELDS, ...HELIX_FIELDS]
+        : operation.type === 'outline'
+          ? [...BASE_FIELDS, ...OUTLINE_FIELDS]
+          : BASE_FIELDS;
+
+  const showDepthHint =
+    operation.type === 'outline' ||
+    operation.type === 'adaptive-outline' ||
+    operation.type === 'helix';
 
   return (
     <div className="operation-settings">
@@ -69,7 +129,9 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
         />
       </div>
 
-      {(operation.type === 'outline' || operation.type === 'adaptive-outline') && (
+      {(operation.type === 'outline' ||
+        operation.type === 'adaptive-outline' ||
+        operation.type === 'helix') && (
         <div className="settings-checkboxes">
           <label className="checkbox-row">
             <input
@@ -79,7 +141,7 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
                 updateOperationSettings(operation.id, { climbMilling: e.target.checked })
               }
             />
-            Climb milling (clockwise on external cuts)
+            Climb milling
           </label>
           {operation.type === 'adaptive-outline' && (
             <label className="checkbox-row">
@@ -90,7 +152,7 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
                   updateOperationSettings(operation.id, { finishingPass: e.target.checked })
                 }
               />
-              Final outline finishing pass (0.1 mm roughing stock)
+              Final outline finishing pass
             </label>
           )}
         </div>
@@ -99,10 +161,27 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
       <div className="settings-grid">
         {fields.map(({ key, label, unit, step }) => {
           const limits = SETTING_LIMITS[key];
+          const hint =
+            key === 'depthOffset' && showDepthHint
+              ? DEPTH_HINT
+              : key === 'stepDown' && showDepthHint
+                ? DEPTH_HINT
+                : key === 'boreTaperAngleDeg' && operation.type === 'helix'
+                  ? 'Set to 0 to disable. At each pass bottom the tool spirals outward to full diameter using stepover.'
+                  : key === 'zStartOffset' && operation.type === 'helix'
+                    ? 'Helix ramp begins at the lower of this offset above stock top or the global safe height.'
+                    : undefined;
           return (
             <div className="setting-row" key={key}>
               <label>
-                {fieldLabel(operation, key, label)} <span className="unit">({unit})</span>
+                {hint ? (
+                  <LabelWithHint hint={hint}>
+                    {fieldLabel(operation, key, label)}
+                  </LabelWithHint>
+                ) : (
+                  fieldLabel(operation, key, label)
+                )}{' '}
+                <span className="unit">({unit})</span>
               </label>
               <input
                 type="number"
@@ -120,18 +199,20 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
           );
         })}
       </div>
-      {(operation.type === 'outline' || operation.type === 'adaptive-outline') && (
-        <p className="settings-hint">
-          {operation.type === 'adaptive-outline'
-            ? 'Z=0 at stock top; cuts are negative Z. Depth offset is measured from the part bottom (+ stops short). Step down sets the maximum per-pass depth; passes are spaced evenly to the target.'
-            : 'Z=0 at stock top; cuts are negative Z. Depth offset is measured from the part bottom (+ stops short).'}
-        </p>
+      {operation.type === 'adaptive-outline' && (
+        <div className="operation-settings-footer">
+          <HintTooltip text="Viewer debug: orange = slot centerline guide; green trochoid loops = samples classified as on-spur (scaled radius)." />
+        </div>
       )}
-      {(operation.type === 'drill' || operation.type === 'helix') && (
-        <p className="settings-hint">
-          Click holes to add/remove. Multiple holes are drilled in selection order with rapid moves
-          between them.
-        </p>
+      {operation.type === 'drill' && (
+        <div className="operation-settings-footer">
+          <HintTooltip text="Click holes to add/remove. Multiple holes are drilled in selection order with rapid moves between them." />
+        </div>
+      )}
+      {operation.type === 'helix' && (
+        <div className="operation-settings-footer">
+          <HintTooltip text="Click holes to add/remove. Invalid holes (red) are skipped: hole diameter must exceed tool diameter, and taper must not collapse the helix radius before final depth." />
+        </div>
       )}
     </div>
   );
