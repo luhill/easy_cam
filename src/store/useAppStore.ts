@@ -165,6 +165,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   addOperation: (type) => {
     const feedsCalculator = useSettingsStore.getState().feedsCalculator;
+    const feedsMaterialProfiles = useSettingsStore.getState().feedsMaterialProfiles;
     const op: Operation = {
       id: uuidv4(),
       type,
@@ -174,7 +175,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       collapsed: false,
       settings: clampOperationSettings({
         ...defaultSettingsForOperation(type),
-        ...operationSettingsFromFeedsCalculator(type, feedsCalculator),
+        ...operationSettingsFromFeedsCalculator(type, feedsCalculator, feedsMaterialProfiles),
       }),
       geometry: null,
       ...(type === 'custom-gcode'

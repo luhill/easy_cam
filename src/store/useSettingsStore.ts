@@ -2,7 +2,12 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { ToolOrigin } from '../lib/geometryProcessing';
 import type { UiTheme } from '../lib/uiTheme';
-import { getMaterialDefaults, type MaterialId } from '../lib/feedsSpeedsCalculator';
+import { getMaterialDefaults, getMaterialProfile, MATERIAL_PROFILES, type MaterialId } from '../lib/feedsSpeedsCalculator';
+import {
+  defaultStoredMaterialProfiles,
+  normalizeStoredMaterialProfiles,
+  type StoredMaterialProfiles,
+} from '../lib/feedsMaterialProfiles';
 import { DEFAULT_WCS_Z_ABOVE_STOCK } from '../lib/cutDepth';
 import {
   DEFAULT_SAFE_HEIGHT,
@@ -116,6 +121,7 @@ interface SettingsState {
   isometricProjection: boolean;
   uiTheme: UiTheme;
   feedsCalculator: FeedsCalculatorInputs;
+  feedsMaterialProfiles: StoredMaterialProfiles;
   setGcodeTemplate: (key: keyof GcodeTemplates, value: string) => void;
   setGcodeOutputFormat: (format: GcodeOutputFormat) => void;
   resetGcodeTemplates: () => void;
@@ -127,6 +133,7 @@ interface SettingsState {
   setUiTheme: (theme: UiTheme) => void;
   setFeedsCalculatorMaterial: (materialId: MaterialId) => void;
   updateFeedsCalculator: (patch: Partial<FeedsCalculatorInputs>) => void;
+  setFeedsMaterialProfiles: (profiles: StoredMaterialProfiles) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -141,6 +148,7 @@ export const useSettingsStore = create<SettingsState>()(
       isometricProjection: false,
       uiTheme: 'dark',
       feedsCalculator: defaultFeedsCalculatorInputs(),
+      feedsMaterialProfiles: defaultStoredMaterialProfiles(MATERIAL_PROFILES),
       setGcodeTemplate: (key, value) =>
         set((state) => ({
           gcodeTemplates: { ...state.gcodeTemplates, [key]: value },
@@ -172,13 +180,13 @@ export const useSettingsStore = create<SettingsState>()(
       setUiTheme: (theme) => set({ uiTheme: theme === 'light' ? 'light' : 'dark' }),
       setFeedsCalculatorMaterial: (materialId) =>
         set((state) => {
-          const defaults = getMaterialDefaults(materialId);
+          const profile = getMaterialProfile(materialId, state.feedsMaterialProfiles);
           return {
             feedsCalculator: {
               ...state.feedsCalculator,
               materialId,
-              chipLoadMm: defaults.chipLoad,
-              stepoverPct: defaults.stepoverPercentage,
+              chipLoadMm: profile.chipLoad,
+              stepoverPct: profile.stepoverPercentage,
             },
           };
         }),
@@ -189,10 +197,14 @@ export const useSettingsStore = create<SettingsState>()(
             ...patch,
           }),
         })),
+      setFeedsMaterialProfiles: (profiles) =>
+        set({
+          feedsMaterialProfiles: normalizeStoredMaterialProfiles(profiles, MATERIAL_PROFILES),
+        }),
     }),
     {
       name: 'easy-cam-gcode-settings',
-      version: 3,
+      version: 4,
       migrate: (persisted, version) => {
       const state = persisted as Record<string, unknown>;
       if (state.gcodeOutputFormat === 'marlin') {
@@ -204,6 +216,12 @@ export const useSettingsStore = create<SettingsState>()(
       if (version < 3) {
         state.feedsCalculator = normalizeFeedsCalculatorInputs(
           state.feedsCalculator as Partial<FeedsCalculatorInputs> | undefined
+        );
+      }
+      if (version < 4) {
+        state.feedsMaterialProfiles = normalizeStoredMaterialProfiles(
+          state.feedsMaterialProfiles as Partial<StoredMaterialProfiles> | undefined,
+          MATERIAL_PROFILES
         );
       }
       return state;

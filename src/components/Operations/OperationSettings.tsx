@@ -72,7 +72,7 @@ const ADAPTIVE_FIELDS: FieldDef[] = [
 const FINISHING_FIELDS: FieldDef[] = [
   {
     key: 'finishingStockPercent',
-    label: 'Finish Stock',
+    label: 'Finish Allowance',
     unit: '% of tool ⌀',
     step: 0.5,
   },
@@ -117,7 +117,7 @@ function fieldHint(operation: Operation, key: NumericSettingKey): string | undef
     return 'Horizontal distance per forward/backward ramp leg along the outline (each leg × tan(angle) of Z drop).';
   }
   if (key === 'finishingStockPercent') {
-    return 'Radial stock left on walls during roughing before the final finish pass.';
+    return 'Radial finish allowance left on walls during roughing before the final finish pass.';
   }
   if (key === 'boreTaperAngleDeg' && operation.type === 'helix') {
     return 'Set to 0 to disable. At each pass bottom the tool spirals outward to full diameter using stepover.';

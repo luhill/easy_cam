@@ -754,9 +754,21 @@ body {
 
 .feeds-calculator-header {
   flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
   padding: 14px 14px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-secondary);
+}
+
+.feeds-calculator-header-copy {
+  min-width: 0;
+}
+
+.feeds-calculator-edit-btn {
+  flex-shrink: 0;
 }
 
 .feeds-calculator-title {
@@ -873,6 +885,114 @@ body {
   font-size: 10px;
   color: var(--text-muted);
   line-height: 1.45;
+}
+
+.feeds-material-editor-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10050;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(8, 10, 14, 0.62);
+}
+
+[data-theme='light'] .feeds-material-editor-overlay {
+  background: rgba(15, 23, 42, 0.28);
+}
+
+.feeds-material-editor-dialog {
+  width: min(920px, 100%);
+  max-height: min(88vh, 900px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+}
+
+.feeds-material-editor-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.feeds-material-editor-header h2 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.feeds-material-editor-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.feeds-material-editor-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.feeds-material-editor-card {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+}
+
+.feeds-material-editor-card-title {
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.feeds-material-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.feeds-material-editor-row--full {
+  grid-column: 1 / -1;
+}
+
+.feeds-material-editor-textarea {
+  width: 100%;
+  min-height: 52px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.feeds-material-editor-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.feeds-material-editor-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px 16px;
+  border-top: 1px solid var(--border);
 }
 
 /* Geometry section */

@@ -70,6 +70,8 @@ export interface MaterialProfile extends MaterialDefaults {
   adaptiveDocMaxRatio: number;
   pocketDocMinRatio: number;
   pocketDocMaxRatio: number;
+  finishAllowancePercent: number;
+  finishAllowanceNote: string;
   isHard: boolean;
   recommendedMilling: RecommendedMilling;
   millingNote?: string;
@@ -83,6 +85,8 @@ const MATERIAL_DOC_AND_MILLING: Record<
     | 'adaptiveDocMaxRatio'
     | 'pocketDocMinRatio'
     | 'pocketDocMaxRatio'
+    | 'finishAllowancePercent'
+    | 'finishAllowanceNote'
     | 'isHard'
     | 'recommendedMilling'
     | 'millingNote'
@@ -93,6 +97,9 @@ const MATERIAL_DOC_AND_MILLING: Record<
     adaptiveDocMaxRatio: 1.0,
     pocketDocMinRatio: 0.25,
     pocketDocMaxRatio: 0.5,
+    finishAllowancePercent: 3.7,
+    finishAllowanceNote:
+      'Minimizes machine deflection; stops high-frequency tool chatter.',
     isHard: true,
     recommendedMilling: 'climb',
     millingNote: 'Keeps constant engagement in adaptive/trochoidal paths.',
@@ -102,6 +109,9 @@ const MATERIAL_DOC_AND_MILLING: Record<
     adaptiveDocMaxRatio: 1.5,
     pocketDocMinRatio: 0.4,
     pocketDocMaxRatio: 0.8,
+    finishAllowancePercent: 6.2,
+    finishAllowanceNote:
+      'Gives a clean bite while remaining light enough to prevent the material from gumming the tool.',
     isHard: true,
     recommendedMilling: 'climb',
     millingNote: 'Improves chip evacuation and reduces rubbing/work hardening.',
@@ -111,6 +121,9 @@ const MATERIAL_DOC_AND_MILLING: Record<
     adaptiveDocMaxRatio: 0.9,
     pocketDocMinRatio: 0.25,
     pocketDocMaxRatio: 0.55,
+    finishAllowancePercent: 10.0,
+    finishAllowanceNote:
+      'Crucial: Needs a heavy bite so the O-flute cleanly slices both the aluminum skin and the soft plastic core without melting.',
     isHard: true,
     recommendedMilling: 'climb',
     millingNote: 'Cleaner skin finish; use sharp tooling and support sheet well.',
@@ -120,6 +133,9 @@ const MATERIAL_DOC_AND_MILLING: Record<
     adaptiveDocMaxRatio: 2.0,
     pocketDocMinRatio: 0.5,
     pocketDocMaxRatio: 1.0,
+    finishAllowancePercent: 10.0,
+    finishAllowanceNote:
+      'Deep enough to cut cleanly past the crushed fibers left behind by the heavy roughing pass.',
     isHard: false,
     recommendedMilling: 'climb',
     millingNote: 'Standard CNC router practice for most contour and adaptive cuts.',
@@ -129,6 +145,9 @@ const MATERIAL_DOC_AND_MILLING: Record<
     adaptiveDocMaxRatio: 2.5,
     pocketDocMinRatio: 0.75,
     pocketDocMaxRatio: 1.5,
+    finishAllowancePercent: 12.5,
+    finishAllowanceNote:
+      'Ensures the bit slices past any fuzzy splinters left on the profile walls.',
     isHard: false,
     recommendedMilling: 'climb',
     millingNote: 'Try conventional on thin plywood if climb lifts veneer at exit.',
@@ -138,6 +157,9 @@ const MATERIAL_DOC_AND_MILLING: Record<
     adaptiveDocMaxRatio: 1.5,
     pocketDocMinRatio: 0.4,
     pocketDocMaxRatio: 0.8,
+    finishAllowancePercent: 12.5,
+    finishAllowanceNote:
+      'Crucial: Industry standard for routing acrylic is 0.4mm to 0.6mm. Anything less causes the tool to rub, leading to edge hazing and welding.',
     isHard: false,
     recommendedMilling: 'climb',
     millingNote: 'Reduces heat buildup and melted swarf re-welding to the part.',
@@ -156,11 +178,14 @@ export function getMaterialDefaults(id: MaterialId): MaterialDefaults {
   return MATERIAL_DEFAULTS[id] ?? MATERIAL_DEFAULTS['mild-steel'];
 }
 
-export function getMaterialProfile(id: MaterialId): MaterialProfile {
-  return (
-    MATERIAL_PROFILES.find((m) => m.id === id) ??
-    MATERIAL_PROFILES[0]
-  );
+import type { StoredMaterialProfiles } from './feedsMaterialProfiles';
+import { resolveMaterialProfile } from './feedsMaterialProfiles';
+
+export function getMaterialProfile(
+  id: MaterialId,
+  stored?: StoredMaterialProfiles | null
+): MaterialProfile {
+  return resolveMaterialProfile(id, MATERIAL_PROFILES, stored);
 }
 
 /** Cutting feedrate (mm/min) = RPM × flutes × chip load (mm/tooth). */
@@ -213,13 +238,19 @@ export interface FeedsSpeedsResults {
   rampAngleDeg: number;
   plungeFeedLabel: string;
   plungeFeedMmMin: number;
+  finishAllowancePercent: number;
+  finishAllowanceMm: number;
+  finishAllowanceLabel: string;
   millingDirectionLabel: string;
   millingNote?: string;
   lowRpmWarning: boolean;
 }
 
-export function calculateFeedsSpeeds(inputs: FeedsSpeedsInputs): FeedsSpeedsResults {
-  const profile = getMaterialProfile(inputs.materialId);
+export function calculateFeedsSpeeds(
+  inputs: FeedsSpeedsInputs,
+  stored?: StoredMaterialProfiles | null
+): FeedsSpeedsResults {
+  const profile = getMaterialProfile(inputs.materialId, stored);
   const toolD = Math.max(inputs.toolDiameterMm, 0.01);
   const flutes = Math.max(Math.round(inputs.fluteCount), 1);
   const rpm = Math.max(inputs.rpm, 0);
@@ -232,6 +263,8 @@ export function calculateFeedsSpeeds(inputs: FeedsSpeedsInputs): FeedsSpeedsResu
   const chipThinningFactor = chipThinningFeedMultiplier(toolD, stepoverMm);
   const adjustedFeedMmMin = cuttingFeedMmMin * chipThinningFactor;
   const plungeFeedMmMin = cuttingFeedMmMin * profile.plungeRatio;
+  const finishAllowancePercent = profile.finishAllowancePercent;
+  const finishAllowanceMm = toolD * (finishAllowancePercent / 100);
 
   return {
     profile,
@@ -246,6 +279,9 @@ export function calculateFeedsSpeeds(inputs: FeedsSpeedsInputs): FeedsSpeedsResu
     rampAngleDeg: profile.rampAngle,
     plungeFeedLabel: `${Math.round(plungeFeedMmMin)} mm/min (${Math.round(profile.plungeRatio * 100)}% of cut feed)`,
     plungeFeedMmMin,
+    finishAllowancePercent,
+    finishAllowanceMm,
+    finishAllowanceLabel: `${finishAllowanceMm.toFixed(2)} mm (${finishAllowancePercent.toFixed(1)}% of tool Ø)`,
     millingDirectionLabel:
       profile.recommendedMilling === 'climb' ? 'Climb milling' : 'Conventional milling',
     millingNote: profile.millingNote,
@@ -266,9 +302,10 @@ export function formatFactor(value: number): string {
 /** Map calculator inputs/outputs to operation setting defaults for new operations. */
 export function operationSettingsFromFeedsCalculator(
   type: OperationType,
-  inputs: FeedsSpeedsInputs
+  inputs: FeedsSpeedsInputs,
+  stored?: StoredMaterialProfiles | null
 ): Partial<OperationDefaults> {
-  const results = calculateFeedsSpeeds(inputs);
+  const results = calculateFeedsSpeeds(inputs, stored);
   const toolD = Math.max(inputs.toolDiameterMm, 0.01);
   const { profile } = results;
 
@@ -287,6 +324,10 @@ export function operationSettingsFromFeedsCalculator(
     partial.stepDown = profile.pocketDocMinRatio * toolD;
   } else if (type !== 'custom-gcode') {
     partial.stepDown = profile.adaptiveDocMinRatio * toolD;
+  }
+
+  if (type === 'outline' || type === 'adaptive-outline') {
+    partial.finishingStockPercent = results.finishAllowancePercent;
   }
 
   return partial;

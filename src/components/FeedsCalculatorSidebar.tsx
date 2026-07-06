@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   calculateFeedsSpeeds,
   formatFactor,
@@ -8,6 +8,7 @@ import {
   type MaterialId,
 } from '../lib/feedsSpeedsCalculator';
 import { useSettingsStore } from '../store/useSettingsStore';
+import { FeedsMaterialEditor } from './FeedsMaterialEditor';
 
 interface FeedsCalculatorSidebarProps {
   open: boolean;
@@ -60,23 +61,29 @@ function ChevronIcon({ collapsed }: { collapsed: boolean }) {
 
 export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSidebarProps) {
   const feedsCalculator = useSettingsStore((s) => s.feedsCalculator);
+  const feedsMaterialProfiles = useSettingsStore((s) => s.feedsMaterialProfiles);
   const setFeedsCalculatorMaterial = useSettingsStore((s) => s.setFeedsCalculatorMaterial);
   const updateFeedsCalculator = useSettingsStore((s) => s.updateFeedsCalculator);
+  const setFeedsMaterialProfiles = useSettingsStore((s) => s.setFeedsMaterialProfiles);
+  const [materialEditorOpen, setMaterialEditorOpen] = useState(false);
 
   const { materialId, toolDiameterMm, fluteCount, rpm, chipLoadMm, stepoverPct } = feedsCalculator;
-  const profile = getMaterialProfile(materialId);
+  const profile = getMaterialProfile(materialId, feedsMaterialProfiles);
 
   const results = useMemo(
     () =>
-      calculateFeedsSpeeds({
-        materialId,
-        toolDiameterMm,
-        fluteCount,
-        rpm,
-        chipLoadMm,
-        stepoverPct,
-      }),
-    [materialId, toolDiameterMm, fluteCount, rpm, chipLoadMm, stepoverPct]
+      calculateFeedsSpeeds(
+        {
+          materialId,
+          toolDiameterMm,
+          fluteCount,
+          rpm,
+          chipLoadMm,
+          stepoverPct,
+        },
+        feedsMaterialProfiles
+      ),
+    [materialId, toolDiameterMm, fluteCount, rpm, chipLoadMm, stepoverPct, feedsMaterialProfiles]
   );
 
   return (
@@ -103,8 +110,18 @@ export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSideba
         aria-hidden={!open}
       >
         <header className="feeds-calculator-header">
-          <h2 className="feeds-calculator-title">Feeds &amp; Speeds</h2>
-          <p className="feeds-calculator-subtitle">Reference calculator — verify on scrap first.</p>
+          <div className="feeds-calculator-header-copy">
+            <h2 className="feeds-calculator-title">Feeds &amp; Speeds</h2>
+            <p className="feeds-calculator-subtitle">Reference calculator — verify on scrap first.</p>
+          </div>
+          <button
+            type="button"
+            className="btn btn-small btn-secondary feeds-calculator-edit-btn"
+            onClick={() => setMaterialEditorOpen(true)}
+            title="Edit stored material profiles"
+          >
+            Edit
+          </button>
         </header>
 
         <div className="feeds-calculator-body">
@@ -260,6 +277,10 @@ export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSideba
                 <dt>Plunge feed</dt>
                 <dd>{results.plungeFeedLabel}</dd>
               </div>
+              <div className="feeds-calculator-output-row">
+                <dt>Finish allowance</dt>
+                <dd>{results.finishAllowanceLabel}</dd>
+              </div>
             </dl>
             <p className="feeds-calculator-footnote">
               {results.millingNote ? `${results.millingDirectionLabel}: ${results.millingNote} ` : ''}
@@ -270,6 +291,16 @@ export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSideba
           </section>
         </div>
       </div>
+
+      <FeedsMaterialEditor
+        open={materialEditorOpen}
+        storedProfiles={feedsMaterialProfiles}
+        onSave={(profiles) => {
+          setFeedsMaterialProfiles(profiles);
+          setMaterialEditorOpen(false);
+        }}
+        onCancel={() => setMaterialEditorOpen(false)}
+      />
     </aside>
   );
 }
