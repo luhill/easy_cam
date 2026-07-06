@@ -5,6 +5,7 @@ import {
   getSelectedHoles,
   DEFAULT_SETTINGS,
   isAdaptiveOutlineOperation,
+  isOutlineHelixEntryOperation,
   isOutlineOperation,
 } from '../../types/operations';
 import { createCutZContext, type CutZContext } from '../../lib/cutDepth';
@@ -15,7 +16,8 @@ import {
   resolveAdaptiveEntryLayout,
 } from '../../lib/adaptiveGuides';
 import { minkowskiSegmentLen, trochoidSampleSpacing } from '../../lib/toolpathConfig';
-import { resolveAdaptiveSlotGeometry } from '../../lib/adaptiveOutline';
+import { resolveStandardHelixEntryLayout } from '../../lib/outlineEntry';
+import { finishingStockAllowance, resolveAdaptiveSlotGeometry } from '../../lib/adaptiveOutline';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { useAppStore } from '../../store/useAppStore';
 import { HintTooltip } from '../HintTooltip';
@@ -49,6 +51,23 @@ function formatGeometrySummary(operation: Operation, cutZContext: CutZContext): 
       return `Hole ⌀${(holes[0].radius * 2).toFixed(1)} mm`;
     }
     return `${holes.length} holes`;
+  }
+
+  if (isOutlineHelixEntryOperation(operation) && !isAdaptiveOutlineOperation(operation)) {
+    const hasOutline = geo.loops && geo.loops.length > 0;
+    if (!hasOutline) return 'None selected';
+    const loop = geo.loops![0];
+    const stockAllowance = finishingStockAllowance(operation.settings);
+    const layout = resolveStandardHelixEntryLayout(
+      loop,
+      operation.settings,
+      stockAllowance,
+      geo
+    );
+    if (layout) {
+      return `outline, start (${layout.toolStart.x.toFixed(1)}, ${layout.toolStart.y.toFixed(1)})`;
+    }
+    return 'outline';
   }
 
   if (isAdaptiveOutlineOperation(operation)) {
@@ -107,10 +126,11 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
 
   const isActive = activeOperationId === operation.id;
   const geometrySummary = formatGeometrySummary(operation, cutZContext);
-  const hasOutlineLoop =
-    isAdaptiveOutlineOperation(operation) &&
+  const hasHelixEntry =
+    isOutlineHelixEntryOperation(operation) &&
     !!operation.geometry?.loops &&
     operation.geometry.loops.length > 0;
+  const hasAdaptiveEntry = hasHelixEntry && isAdaptiveOutlineOperation(operation);
   const hasGeometry =
     !!operation.geometry &&
     (operation.geometry.faceIndices.length > 0 ||
@@ -118,34 +138,48 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
       !!operation.geometry.entryPoint ||
       !!operation.geometry.toolStartPoint ||
       !!operation.geometry.slotJoinPoint ||
-      hasOutlineLoop);
+      hasHelixEntry);
   const isEditingEntry = isActive && selectionMode && selectionSubMode === 'entry-point';
   const isSelectingGeometry = isActive && selectionMode && selectionSubMode !== 'entry-point';
 
   const entryLayout = (() => {
-    if (!hasOutlineLoop || !operation.geometry?.loops?.[0]) return null;
-    const resolution = useSettingsStore.getState().toolpathResolution;
-    const segLen = minkowskiSegmentLen(resolution);
-    const roughSlot = resolveAdaptiveSlotGeometry(operation.settings, { roughing: true });
-    const trochSampleSpacing = trochoidSampleSpacing(
-      roughSlot.forwardIncrement,
-      roughSlot.trochoidRadius,
-      resolution
-    );
-    return resolveAdaptiveEntryLayout(
-      operation.geometry.loops[0],
+    if (!hasHelixEntry || !operation.geometry?.loops?.[0]) return null;
+    const loop = operation.geometry.loops[0];
+    if (isAdaptiveOutlineOperation(operation)) {
+      const resolution = useSettingsStore.getState().toolpathResolution;
+      const segLen = minkowskiSegmentLen(resolution);
+      const roughSlot = resolveAdaptiveSlotGeometry(operation.settings, { roughing: true });
+      const trochSampleSpacing = trochoidSampleSpacing(
+        roughSlot.forwardIncrement,
+        roughSlot.trochoidRadius,
+        resolution
+      );
+      return resolveAdaptiveEntryLayout(
+        loop,
+        operation.settings,
+        adaptiveEntryOverridesFromGeometry(operation.geometry),
+        segLen,
+        trochSampleSpacing,
+        resolution
+      );
+    }
+    const stockAllowance = finishingStockAllowance(operation.settings);
+    return resolveStandardHelixEntryLayout(
+      loop,
       operation.settings,
-      adaptiveEntryOverridesFromGeometry(operation.geometry),
-      segLen,
-      trochSampleSpacing,
-      resolution
+      stockAllowance,
+      operation.geometry
     );
   })();
 
   const toolStartX =
-    operation.geometry?.toolStartPoint?.x ?? entryLayout?.toolStart.x ?? 0;
+    operation.geometry?.toolStartPoint?.x ??
+    (entryLayout && 'toolStart' in entryLayout ? entryLayout.toolStart.x : undefined) ??
+    0;
   const toolStartY =
-    operation.geometry?.toolStartPoint?.y ?? entryLayout?.toolStart.y ?? 0;
+    operation.geometry?.toolStartPoint?.y ??
+    (entryLayout && 'toolStart' in entryLayout ? entryLayout.toolStart.y : undefined) ??
+    0;
 
   const handleSelectGeometry = () => {
     setActiveOperation(operation.id);
@@ -165,7 +199,9 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
     if (!operation.geometry) return;
     const value = parseFloat(raw);
     if (!Number.isFinite(value)) return;
-    const current = operation.geometry.toolStartPoint ?? entryLayout?.toolStart ?? { x: 0, y: 0 };
+    const current =
+      operation.geometry.toolStartPoint ??
+      (entryLayout && 'toolStart' in entryLayout ? entryLayout.toolStart : { x: 0, y: 0 });
     updateOperation(operation.id, {
       geometry: {
         ...operation.geometry,
@@ -187,10 +223,14 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
 
   const geometryHint = (() => {
     if (isEditingEntry) {
-      return 'Drag amber cross = tool start, blue cross = slot join on centerline (orange guide). Right-drag to orbit the view.';
+      return hasAdaptiveEntry
+        ? 'Drag amber cross = tool start, blue cross = slot join on centerline (orange guide). Right-drag to orbit the view.'
+        : 'Drag amber cross = helix bore start outside the part. Right-drag to orbit the view.';
     }
-    if (isActive && hasOutlineLoop && !isEditingEntry) {
-      return 'Use Edit Entry Points to drag tool start and slot join without rotating the view. Lead-in is a spline tangent to the outline in climb/conventional direction.';
+    if (isActive && hasHelixEntry && !isEditingEntry) {
+      return hasAdaptiveEntry
+        ? 'Use Edit Entry Points to drag tool start and slot join without rotating the view. Lead-in is a spline tangent to the outline in climb/conventional direction.'
+        : 'Use Edit Entry Points to place the helix bore start outside the part so the entry bore does not cut into the outline.';
     }
     if (isSelectingGeometry && isOutlineOperation(operation)) {
       return 'Select top-facing part outline';
@@ -227,7 +267,7 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
             <button className="btn btn-small" onClick={handleSelectGeometry}>
               Select from Model
             </button>
-            {hasOutlineLoop && (
+            {hasHelixEntry && (
               <button className="btn btn-small btn-secondary" onClick={handleEditEntryPoints}>
                 Edit Entry Points
               </button>
@@ -243,7 +283,7 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
           </button>
         )}
       </div>
-      {hasOutlineLoop && (
+      {hasHelixEntry && (
         <div className="settings-grid entry-start-grid">
           <div className="setting-row">
             <label>

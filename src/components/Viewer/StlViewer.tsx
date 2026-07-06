@@ -9,6 +9,7 @@ import {
   OPERATION_COLORS,
   getSelectedHoles,
   isAdaptiveOutlineOperation,
+  isOutlineHelixEntryOperation,
   isOutlineOperation,
 } from '../../types/operations';
 import type { LoopPoint, OperationType, ToolpathSegment, Operation } from '../../types/operations';
@@ -58,7 +59,8 @@ import {
   adaptiveEntryOverridesFromGeometry,
 } from '../../lib/adaptiveGuides';
 import { minkowskiSegmentLen, trochoidSampleSpacing } from '../../lib/toolpathConfig';
-import { resolveAdaptiveSlotGeometry } from '../../lib/adaptiveOutline';
+import { resolveAdaptiveSlotGeometry, finishingStockAllowance } from '../../lib/adaptiveOutline';
+import { resolveStandardHelixEntryLayout } from '../../lib/outlineEntry';
 import { createViewerRenderer, detectWebGLSupport } from '../../lib/webglSupport';
 import { registerViewerCameraBridge, goHomeWithCamera, goToViewerHome } from '../../lib/viewerCamera';
 import {
@@ -814,41 +816,64 @@ function SceneContent({
     const op = operations.find(
       (o) =>
         o.id === activeOperationId &&
-        isAdaptiveOutlineOperation(o) &&
+        isOutlineHelixEntryOperation(o) &&
         o.geometry?.loops?.[0]
     );
     if (!op?.geometry?.loops?.[0]) return null;
 
     const loop = op.geometry.loops[0];
-    const segLen = minkowskiSegmentLen(toolpathResolution);
-    const roughSlot = resolveAdaptiveSlotGeometry(op.settings, { roughing: true });
-    const trochSampleSpacing = trochoidSampleSpacing(
-      roughSlot.forwardIncrement,
-      roughSlot.trochoidRadius,
-      toolpathResolution
-    );
-    const layout = resolveAdaptiveEntryLayout(
+    const isAdaptive = isAdaptiveOutlineOperation(op);
+
+    if (isAdaptive) {
+      const segLen = minkowskiSegmentLen(toolpathResolution);
+      const roughSlot = resolveAdaptiveSlotGeometry(op.settings, { roughing: true });
+      const trochSampleSpacing = trochoidSampleSpacing(
+        roughSlot.forwardIncrement,
+        roughSlot.trochoidRadius,
+        toolpathResolution
+      );
+      const layout = resolveAdaptiveEntryLayout(
+        loop,
+        op.settings,
+        adaptiveEntryOverridesFromGeometry(op.geometry),
+        segLen,
+        trochSampleSpacing,
+        toolpathResolution
+      );
+      if (!layout) return null;
+
+      const slotArcGuide = buildSlotCenterlineArcGuide(loop, op.settings, {
+        safeHeight,
+        resolution: toolpathResolution,
+        travelFeedRate,
+      });
+
+      return {
+        op,
+        layout,
+        slotArcGuide,
+        showSlotJoin: true,
+        toolStartManual: !!(op.geometry.toolStartPoint ?? op.geometry.entryPoint),
+        slotJoinManual: !!op.geometry.slotJoinPoint,
+      };
+    }
+
+    const stockAllowance = finishingStockAllowance(op.settings);
+    const layout = resolveStandardHelixEntryLayout(
       loop,
       op.settings,
-      adaptiveEntryOverridesFromGeometry(op.geometry),
-      segLen,
-      trochSampleSpacing,
-      toolpathResolution
+      stockAllowance,
+      op.geometry
     );
     if (!layout) return null;
 
-    const slotArcGuide = buildSlotCenterlineArcGuide(loop, op.settings, {
-      safeHeight,
-      resolution: toolpathResolution,
-      travelFeedRate,
-    });
-
     return {
       op,
-      layout,
-      slotArcGuide,
+      layout: { toolStart: layout.toolStart, slotJoin: layout.joinPoint },
+      slotArcGuide: undefined,
+      showSlotJoin: false,
       toolStartManual: !!(op.geometry.toolStartPoint ?? op.geometry.entryPoint),
-      slotJoinManual: !!op.geometry.slotJoinPoint,
+      slotJoinManual: false,
     };
   }, [
     operations,
@@ -938,6 +963,7 @@ function SceneContent({
           topZ={partBounds.maxZ}
           toolStartManual={adaptiveEntry.toolStartManual}
           slotJoinManual={adaptiveEntry.slotJoinManual}
+          showSlotJoin={adaptiveEntry.showSlotJoin}
           onToolStartChange={handleToolStartChange}
           onSlotJoinChange={handleSlotJoinChange}
         />

@@ -1,8 +1,13 @@
 import type { Operation } from '../../types/operations';
-import { isAdaptiveOutlineOperation, isOutlineOperation } from '../../types/operations';
+import {
+  isAdaptiveOutlineOperation,
+  isOutlineOperation,
+  type OperationDefaults,
+} from '../../types/operations';
 import { useAppStore } from '../../store/useAppStore';
 import { SETTING_LIMITS, clampSettingValue } from '../../lib/settingLimits';
 import { HintTooltip, LabelWithHint } from '../HintTooltip';
+import type { ReactNode } from 'react';
 
 interface OperationSettingsProps {
   operation: Operation;
@@ -10,15 +15,17 @@ interface OperationSettingsProps {
 
 type NumericSettingKey = Exclude<
   keyof Operation['settings'],
-  'finishingPass' | 'climbMilling' | 'adaptiveMode'
+  'finishingPass' | 'climbMilling' | 'adaptiveMode' | 'outlineEntryType'
 >;
 
-const BASE_FIELDS: {
+type FieldDef = {
   key: NumericSettingKey;
   label: string;
   unit: string;
   step: number;
-}[] = [
+};
+
+const BASE_FIELDS: FieldDef[] = [
   { key: 'toolDiameter', label: 'Tool Diameter', unit: 'mm', step: 0.1 },
   { key: 'feedRate', label: 'Feed Rate', unit: 'mm/min', step: 50 },
   { key: 'plungeRate', label: 'Plunge Rate', unit: 'mm/min', step: 25 },
@@ -28,7 +35,7 @@ const BASE_FIELDS: {
   { key: 'depthOffset', label: 'Depth Offset', unit: 'mm', step: 0.1 },
 ];
 
-const HELIX_BASE_FIELDS: typeof BASE_FIELDS = [
+const HELIX_BASE_FIELDS: FieldDef[] = [
   { key: 'toolDiameter', label: 'Tool Diameter', unit: 'mm', step: 0.1 },
   { key: 'plungeRate', label: 'Plunge Rate', unit: 'mm/min', step: 25 },
   { key: 'stepover', label: 'Stepover', unit: '%', step: 1 },
@@ -36,20 +43,32 @@ const HELIX_BASE_FIELDS: typeof BASE_FIELDS = [
   { key: 'depthOffset', label: 'Z Offset', unit: 'mm', step: 0.1 },
 ];
 
-const OUTLINE_SHARED_FIELDS: typeof BASE_FIELDS = [
+const OUTLINE_COMMON_FIELDS: FieldDef[] = [
   { key: 'radialOffset', label: 'Additional Offset', unit: 'mm', step: 0.1 },
-  { key: 'rampAngleDeg', label: 'Ramp Angle', unit: '°', step: 0.1 },
 ];
 
-const ADAPTIVE_ONLY_FIELDS: typeof BASE_FIELDS = [
-  { key: 'slotWidthPercent', label: 'Slot Width', unit: '% of tool ⌀', step: 5 },
-  { key: 'liftAmount', label: 'Pass Lift', unit: 'mm', step: 0.1 },
+const LINEAR_ENTRY_FIELDS: FieldDef[] = [
+  { key: 'rampAngleDeg', label: 'Ramp Angle', unit: '°', step: 0.1 },
+  { key: 'rampLengthToolDiameters', label: 'Ramp Length', unit: '× tool ⌀', step: 0.5 },
+];
+
+const HELIX_ENTRY_FIELDS: FieldDef[] = [
+  { key: 'rampAngleDeg', label: 'Ramp Angle', unit: '°', step: 0.1 },
   { key: 'boreDiameterPercent', label: 'Bore Diameter', unit: '% of tool ⌀', step: 5 },
   { key: 'boreTaperAngleDeg', label: 'Bore Taper', unit: '°', step: 0.5 },
   { key: 'helixFeedRate', label: 'Helix Feed Rate', unit: 'mm/min', step: 25 },
 ];
 
-const FINISHING_FIELDS: typeof BASE_FIELDS = [
+const ADAPTIVE_FIELDS: FieldDef[] = [
+  { key: 'slotWidthPercent', label: 'Slot Width', unit: '% of tool ⌀', step: 5 },
+  { key: 'liftAmount', label: 'Pass Lift', unit: 'mm', step: 0.1 },
+  { key: 'boreDiameterPercent', label: 'Bore Diameter', unit: '% of tool ⌀', step: 5 },
+  { key: 'rampAngleDeg', label: 'Ramp Angle', unit: '°', step: 0.1 },
+  { key: 'boreTaperAngleDeg', label: 'Bore Taper', unit: '°', step: 0.5 },
+  { key: 'helixFeedRate', label: 'Helix Feed Rate', unit: 'mm/min', step: 25 },
+];
+
+const FINISHING_FIELDS: FieldDef[] = [
   {
     key: 'finishingStockPercent',
     label: 'Finish Stock',
@@ -58,7 +77,7 @@ const FINISHING_FIELDS: typeof BASE_FIELDS = [
   },
 ];
 
-const HELIX_FIELDS: typeof BASE_FIELDS = [
+const HELIX_OP_FIELDS: FieldDef[] = [
   { key: 'radialOffset', label: 'XY Offset', unit: 'mm', step: 0.1 },
   { key: 'zStartOffset', label: 'Z Start Offset', unit: 'mm', step: 0.1 },
   { key: 'rampAngleDeg', label: 'Helix Pitch Angle', unit: '°', step: 0.1 },
@@ -80,17 +99,21 @@ function fieldLabel(operation: Operation, key: NumericSettingKey, fallback: stri
 
 function fieldHint(operation: Operation, key: NumericSettingKey): string | undefined {
   if (key === 'depthOffset' || key === 'stepDown') {
-    if (
-      isOutlineOperation(operation) ||
-      operation.type === 'helix'
-    ) {
+    if (isOutlineOperation(operation) || operation.type === 'helix') {
       return DEPTH_HINT;
     }
   }
   if (key === 'rampAngleDeg' && isOutlineOperation(operation)) {
-    return operation.settings.adaptiveMode
-      ? 'Helical bore entry pitch angle for adaptive clearing.'
-      : 'Linear entry ramp angle; each layer ramps in, cuts one full loop, then ramps to the next depth.';
+    if (operation.settings.adaptiveMode) {
+      return 'Helical bore entry pitch angle for adaptive clearing.';
+    }
+    if (operation.settings.outlineEntryType === 'helix') {
+      return 'Helical bore pitch for entry and inter-layer bores.';
+    }
+    return 'Linear ramp angle along the outline; forward and backward passes reach each layer depth.';
+  }
+  if (key === 'rampLengthToolDiameters') {
+    return 'Horizontal distance per forward/backward ramp leg along the outline (each leg × tan(angle) of Z drop).';
   }
   if (key === 'finishingStockPercent') {
     return 'Radial stock left on walls during roughing before the final finish pass.';
@@ -102,6 +125,64 @@ function fieldHint(operation: Operation, key: NumericSettingKey): string | undef
     return 'Helix ramp begins at the lower of this offset above stock top or the global safe height.';
   }
   return undefined;
+}
+
+function SettingFields({
+  operation,
+  fields,
+}: {
+  operation: Operation;
+  fields: FieldDef[];
+}) {
+  const updateOperationSettings = useAppStore((s) => s.updateOperationSettings);
+
+  return (
+    <>
+      {fields.map(({ key, label, unit, step }) => {
+        const limits = SETTING_LIMITS[key];
+        const hint = fieldHint(operation, key);
+        return (
+          <div className="setting-row" key={key}>
+            <label>
+              {hint ? (
+                <LabelWithHint hint={hint}>{fieldLabel(operation, key, label)}</LabelWithHint>
+              ) : (
+                fieldLabel(operation, key, label)
+              )}{' '}
+              <span className="unit">({unit})</span>
+            </label>
+            <input
+              type="number"
+              value={operation.settings[key]}
+              min={limits.min}
+              max={limits.max}
+              step={step}
+              onChange={(e) =>
+                updateOperationSettings(operation.id, {
+                  [key]: clampSettingValue(key, parseFloat(e.target.value)),
+                })
+              }
+            />
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+function SettingsGroup({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="settings-group">
+      <div className="settings-group-title">{title}</div>
+      <div className="settings-grid settings-group-grid">{children}</div>
+    </div>
+  );
 }
 
 export function OperationSettings({ operation }: OperationSettingsProps) {
@@ -141,18 +222,13 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
   }
 
   const adaptiveMode = isAdaptiveOutlineOperation(operation);
+  const entryType = operation.settings.outlineEntryType ?? 'linear';
 
-  const fields =
-    operation.type === 'helix'
-      ? [...HELIX_BASE_FIELDS, ...HELIX_FIELDS]
-      : isOutlineOperation(operation)
-        ? [
-            ...BASE_FIELDS,
-            ...OUTLINE_SHARED_FIELDS,
-            ...(adaptiveMode ? ADAPTIVE_ONLY_FIELDS : []),
-            ...(operation.settings.finishingPass ? FINISHING_FIELDS : []),
-          ]
-        : BASE_FIELDS;
+  const entryTypeLabel: Record<OperationDefaults['outlineEntryType'], string> = {
+    linear: 'Linear',
+    helix: 'Helix',
+    straight: 'Straight',
+  };
 
   return (
     <div className="operation-settings">
@@ -165,86 +241,123 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
         />
       </div>
 
-      {isOutlineOperation(operation) && (
-        <div className="settings-checkboxes">
-          <label className="checkbox-row">
-            <input
-              type="checkbox"
-              checked={operation.settings.adaptiveMode}
-              onChange={(e) =>
-                updateOperationSettings(operation.id, { adaptiveMode: e.target.checked })
-              }
-            />
-            Adaptive mode
-          </label>
-          <label className="checkbox-row">
-            <input
-              type="checkbox"
-              checked={operation.settings.climbMilling}
-              onChange={(e) =>
-                updateOperationSettings(operation.id, { climbMilling: e.target.checked })
-              }
-            />
-            Climb milling
-          </label>
-          <label className="checkbox-row">
-            <input
-              type="checkbox"
-              checked={operation.settings.finishingPass}
-              onChange={(e) =>
-                updateOperationSettings(operation.id, { finishingPass: e.target.checked })
-              }
-            />
-            Final outline finishing pass
-          </label>
-        </div>
-      )}
-
-      {operation.type === 'helix' && (
-        <div className="settings-checkboxes">
-          <label className="checkbox-row">
-            <input
-              type="checkbox"
-              checked={operation.settings.climbMilling}
-              onChange={(e) =>
-                updateOperationSettings(operation.id, { climbMilling: e.target.checked })
-              }
-            />
-            Climb milling
-          </label>
-        </div>
-      )}
-
-      <div className="settings-grid">
-        {fields.map(({ key, label, unit, step }) => {
-          const limits = SETTING_LIMITS[key];
-          const hint = fieldHint(operation, key);
-          return (
-            <div className="setting-row" key={key}>
-              <label>
-                {hint ? (
-                  <LabelWithHint hint={hint}>{fieldLabel(operation, key, label)}</LabelWithHint>
-                ) : (
-                  fieldLabel(operation, key, label)
-                )}{' '}
-                <span className="unit">({unit})</span>
-              </label>
+      {operation.type === 'helix' ? (
+        <>
+          <div className="settings-checkboxes">
+            <label className="checkbox-row">
               <input
-                type="number"
-                value={operation.settings[key]}
-                min={limits.min}
-                max={limits.max}
-                step={step}
+                type="checkbox"
+                checked={operation.settings.climbMilling}
                 onChange={(e) =>
-                  updateOperationSettings(operation.id, {
-                    [key]: clampSettingValue(key, parseFloat(e.target.value)),
-                  })
+                  updateOperationSettings(operation.id, { climbMilling: e.target.checked })
                 }
               />
+              Climb milling
+            </label>
+          </div>
+          <div className="settings-grid">
+            <SettingFields operation={operation} fields={[...HELIX_BASE_FIELDS, ...HELIX_OP_FIELDS]} />
+          </div>
+        </>
+      ) : isOutlineOperation(operation) ? (
+        <>
+          <div className="settings-grid">
+            <SettingFields operation={operation} fields={[...BASE_FIELDS, ...OUTLINE_COMMON_FIELDS]} />
+          </div>
+
+          <div className="settings-checkboxes">
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={operation.settings.adaptiveMode}
+                onChange={(e) =>
+                  updateOperationSettings(operation.id, { adaptiveMode: e.target.checked })
+                }
+              />
+              Adaptive mode
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={operation.settings.climbMilling}
+                onChange={(e) =>
+                  updateOperationSettings(operation.id, { climbMilling: e.target.checked })
+                }
+              />
+              Climb milling
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={operation.settings.finishingPass}
+                onChange={(e) =>
+                  updateOperationSettings(operation.id, { finishingPass: e.target.checked })
+                }
+              />
+              Final outline finishing pass
+            </label>
+          </div>
+
+          {!adaptiveMode && (
+            <div className="setting-row entry-type-row">
+              <label>Entry type</label>
+              <select
+                value={entryType}
+                onChange={(e) =>
+                  updateOperationSettings(operation.id, {
+                    outlineEntryType: e.target.value as OperationDefaults['outlineEntryType'],
+                  })
+                }
+              >
+                {(Object.keys(entryTypeLabel) as OperationDefaults['outlineEntryType'][]).map(
+                  (value) => (
+                    <option key={value} value={value}>
+                      {entryTypeLabel[value]}
+                    </option>
+                  )
+                )}
+              </select>
             </div>
-          );
-        })}
-      </div>
+          )}
+
+          {adaptiveMode && (
+            <SettingsGroup title="Adaptive clearing">
+              <SettingFields operation={operation} fields={ADAPTIVE_FIELDS} />
+            </SettingsGroup>
+          )}
+
+          {!adaptiveMode && entryType === 'linear' && (
+            <SettingsGroup title="Linear entry">
+              <SettingFields operation={operation} fields={LINEAR_ENTRY_FIELDS} />
+            </SettingsGroup>
+          )}
+
+          {!adaptiveMode && entryType === 'helix' && (
+            <SettingsGroup title="Helix entry">
+              <SettingFields operation={operation} fields={HELIX_ENTRY_FIELDS} />
+            </SettingsGroup>
+          )}
+
+          {!adaptiveMode && entryType === 'straight' && (
+            <SettingsGroup title="Straight entry">
+              <p className="settings-group-note">
+                Plunges vertically at the outline start for the first entry and between each layer.
+              </p>
+            </SettingsGroup>
+          )}
+
+          {operation.settings.finishingPass && (
+            <SettingsGroup title="Finishing pass">
+              <SettingFields operation={operation} fields={FINISHING_FIELDS} />
+            </SettingsGroup>
+          )}
+        </>
+      ) : (
+        <div className="settings-grid">
+          <SettingFields operation={operation} fields={BASE_FIELDS} />
+        </div>
+      )}
+
       {adaptiveMode && (
         <div className="operation-settings-footer">
           <HintTooltip text="Viewer debug: orange = slot centerline guide; green trochoid loops = samples classified as on-spur (scaled radius)." />

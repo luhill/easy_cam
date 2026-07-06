@@ -19,6 +19,11 @@ import {
 } from './cornerSpurs';
 import { resolveAdaptiveSlotGeometry, cornerSpurOptionsForRoughing, finishingStockAllowance } from './adaptiveOutline';
 import {
+  generateContourLinearRamp,
+  outlineRampLengthMm,
+  resolveStandardHelixEntryLayout,
+} from './outlineEntry';
+import {
   adaptiveEntryOverridesFromGeometry,
   resolveAdaptiveEntryLayout,
 } from './adaptiveEntryLayout';
@@ -36,11 +41,11 @@ import {
   generateBoreBottomToLeadInTransition,
   generateFullRevolutionOrbit,
   generateHelixBorePoints,
-  generateLinearEntryRamp,
   helixRadiusAtZ,
   helixRadiusTaperedFromStart,
   interiorHelixRadiusAtZ,
   isGuideOutwardCCW,
+  resolveHelixRadius,
   resolveHelixRotationDir,
   resolveInteriorHelixRadius,
   resolveInteriorHelixRotationDir,
@@ -65,6 +70,7 @@ import {
   contourSteps,
   helixSegmentsPerRev,
   minkowskiSegmentLen,
+  pathSampleSpacing,
   safeHeightWorldZ,
   trochoidSampleSpacing,
   type ToolpathGlobalOptions,
@@ -152,11 +158,48 @@ function contourTraverse(
   return reverse ? [...toolLoop].reverse() : toolLoop;
 }
 
-function generateStandardOutlinePath(
+function appendContourLoopAtZ(
+  points: ToolpathPoint[],
+  traverse: LoopPoint[],
+  layerZ: number,
+  feedRate: number
+): boolean {
+  for (const p of traverse) {
+    if (!appendPoints(points, [{ x: p.x, y: p.y, z: layerZ, feedRate }])) {
+      return false;
+    }
+  }
+  return appendPoints(points, [
+    { x: traverse[0].x, y: traverse[0].y, z: layerZ, feedRate },
+  ]);
+}
+
+function generateStraightOutlineEntry(
+  points: ToolpathPoint[],
+  start: { x: number; y: number },
+  fromZ: number,
+  layerZ: number,
+  plungeRate: number,
+  isFirstLayer: boolean
+): boolean {
+  if (isFirstLayer) {
+    return appendPoints(points, [{ x: start.x, y: start.y, z: fromZ, feedRate: plungeRate }]);
+  }
+  if (Math.abs(fromZ - layerZ) < 1e-5) {
+    return appendPoints(points, [{ x: start.x, y: start.y, z: layerZ }]);
+  }
+  return appendPoints(points, [
+    { x: start.x, y: start.y, z: fromZ },
+    { x: start.x, y: start.y, z: layerZ, feedRate: plungeRate },
+  ]);
+}
+
+function generateStandardHelixOutlinePath(
   loop: LoopPoint[],
   settings: Operation['settings'],
   ctx: CutZContext,
-  globals: ToolpathGlobalOptions
+  globals: ToolpathGlobalOptions,
+  geometry: Operation['geometry'] | null
 ): ToolpathPoint[] {
   const topZ = stockTopWorldZ(ctx);
   const safeZ = safeHeightWorldZ(ctx, globals.safeHeight);
@@ -169,36 +212,178 @@ function generateStandardOutlinePath(
   const traverse = contourTraverse(loop, settings, stockAllowance);
   if (traverse.length === 0) return points;
 
+  const entryLayout = resolveStandardHelixEntryLayout(loop, settings, stockAllowance, geometry);
+  if (!entryLayout) {
+    return generateStandardOutlinePath(loop, settings, ctx, globals, geometry, 'straight');
+  }
+
+  const { toolStart, joinPoint } = entryLayout;
+  const helixR = resolveHelixRadius(settings);
+  const helixOpts = { stockTopZ: topZ, globals };
+  const plungeFeed = settings.plungeRate;
+  const cutFeed = settings.feedRate;
+  const rotDir = resolveHelixRotationDir(settings.climbMilling);
+  const segmentsPerRev = helixSegmentsPerRev(globals.resolution);
+  const stepoverIncrement = adaptiveForwardIncrement(settings.toolDiameter, settings.stepover);
+  const firstContourPoint: ToolpathPoint = {
+    x: joinPoint.x,
+    y: joinPoint.y,
+    z: layers[0],
+    feedRate: cutFeed,
+  };
+
+  points.push({ x: toolStart.x, y: toolStart.y, z: safeZ, rapid: true });
+
+  let boreHelixAngle = 0;
+
+  for (let li = 0; li < layers.length; li++) {
+    const layerZ = layers[li];
+    const layerPrevZ = li > 0 ? layers[li - 1] : safeZ;
+
+    if (li === 0) {
+      const initialBore = generateHelixBorePoints(toolStart, settings, safeZ, layerZ, {
+        ...helixOpts,
+        taper: true,
+        startAngle: boreHelixAngle,
+        rotDir,
+        feedRate: plungeFeed,
+      });
+      if (!appendPoints(points, initialBore.points)) break;
+      boreHelixAngle = initialBore.endAngle;
+
+      if (
+        !appendBoreBottomWidenAndLeadIn(
+          points,
+          toolStart,
+          layerZ,
+          helixR,
+          helixRadiusAtZ(settings, layerZ, topZ),
+          stepoverIncrement,
+          rotDir,
+          segmentsPerRev,
+          plungeFeed,
+          firstContourPoint
+        )
+      ) {
+        break;
+      }
+    } else {
+      appendFreshSlotWidthBore(
+        points,
+        joinPoint,
+        layerPrevZ,
+        layerZ,
+        helixR,
+        settings,
+        helixOpts
+      );
+
+      if (
+        !appendBoreBottomWidenAndLeadIn(
+          points,
+          joinPoint,
+          layerZ,
+          helixR,
+          helixRadiusTaperedFromStart(settings, layerZ, layerPrevZ, helixR),
+          stepoverIncrement,
+          rotDir,
+          segmentsPerRev,
+          plungeFeed,
+          firstContourPoint
+        )
+      ) {
+        break;
+      }
+    }
+
+    if (!appendContourLoopAtZ(points, traverse, layerZ, cutFeed)) break;
+  }
+
+  if (settings.finishingPass) {
+    const finishZ = layers[layers.length - 1];
+    const finishTraverse = contourTraverse(loop, settings, 0);
+    if (finishTraverse.length > 0) {
+      const finishPts: ToolpathPoint[] = finishTraverse.map((p) => ({
+        x: p.x,
+        y: p.y,
+        z: finishZ,
+        feedRate: cutFeed,
+      }));
+      finishPts.push({
+        x: finishTraverse[0].x,
+        y: finishTraverse[0].y,
+        z: finishZ,
+        feedRate: cutFeed,
+      });
+      const at = lastPathPoint(points);
+      if (at) {
+        appendClosedOutlinePath(points, finishPts, at);
+      } else {
+        appendPoints(points, finishPts);
+      }
+    }
+  }
+
   const start = traverse[0];
-  const next = traverse[1] ?? start;
-  const approachTx = start.x - next.x;
-  const approachTy = start.y - next.y;
+  points.push({ x: start.x, y: start.y, z: safeZ, rapid: true });
+  return points;
+}
+
+function generateStandardOutlinePath(
+  loop: LoopPoint[],
+  settings: Operation['settings'],
+  ctx: CutZContext,
+  globals: ToolpathGlobalOptions,
+  geometry: Operation['geometry'] | null = null,
+  entryTypeOverride?: Operation['settings']['outlineEntryType']
+): ToolpathPoint[] {
+  const entryType = entryTypeOverride ?? settings.outlineEntryType ?? 'linear';
+
+  if (entryType === 'helix') {
+    return generateStandardHelixOutlinePath(loop, settings, ctx, globals, geometry);
+  }
+
+  const topZ = stockTopWorldZ(ctx);
+  const safeZ = safeHeightWorldZ(ctx, globals.safeHeight);
+  const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
+  const points: ToolpathPoint[] = [];
+
+  if (loop.length === 0 || layers.length === 0) return points;
+
+  const stockAllowance = finishingStockAllowance(settings);
+  const traverse = contourTraverse(loop, settings, stockAllowance);
+  if (traverse.length === 0) return points;
+
+  const start = traverse[0];
+  const rampSampleSpacing = pathSampleSpacing(globals.resolution);
+  const rampLength = outlineRampLengthMm(settings);
 
   points.push({ x: start.x, y: start.y, z: safeZ, rapid: true });
 
   for (let li = 0; li < layers.length; li++) {
     const layerZ = layers[li];
     const fromZ = li === 0 ? topZ : layers[li - 1];
-    const ramp = generateLinearEntryRamp(
-      start.x,
-      start.y,
-      approachTx,
-      approachTy,
-      fromZ,
-      layerZ,
-      settings.rampAngleDeg,
-      settings.plungeRate
-    );
-    if (!appendPoints(points, ramp)) break;
 
-    for (const p of traverse) {
-      if (!appendPoints(points, [{ x: p.x, y: p.y, z: layerZ, feedRate: settings.feedRate }])) {
+    if (entryType === 'straight') {
+      if (!generateStraightOutlineEntry(points, start, fromZ, layerZ, settings.plungeRate, li === 0)) {
         break;
       }
+    } else {
+      const ramp = generateContourLinearRamp(
+        traverse,
+        start,
+        fromZ,
+        layerZ,
+        rampLength,
+        settings.rampAngleDeg,
+        settings.plungeRate,
+        rampSampleSpacing,
+        true
+      );
+      if (!appendPoints(points, ramp)) break;
     }
-    appendPoints(points, [
-      { x: traverse[0].x, y: traverse[0].y, z: layerZ, feedRate: settings.feedRate },
-    ]);
+
+    if (!appendContourLoopAtZ(points, traverse, layerZ, settings.feedRate)) break;
   }
 
   if (settings.finishingPass) {
@@ -244,7 +429,7 @@ function generateOutlinePath(
   const topZ = stockTopWorldZ(ctx);
 
   if (geometry?.loops && geometry.loops.length > 0) {
-    return generateStandardOutlinePath(geometry.loops[0], settings, ctx, globals);
+    return generateStandardOutlinePath(geometry.loops[0], settings, ctx, globals, geometry);
   }
 
   const { minX, maxX, minY, maxY } = getBounds(geometry);
@@ -254,7 +439,7 @@ function generateOutlinePath(
     { x: maxX, y: maxY, z: topZ },
     { x: minX, y: maxY, z: topZ },
   ];
-  return generateStandardOutlinePath(fallbackLoop, settings, ctx, globals);
+  return generateStandardOutlinePath(fallbackLoop, settings, ctx, globals, geometry);
 }
 
 function trochoidParams(
@@ -613,7 +798,7 @@ function generateAdaptiveOutlinePath(
       { x: maxX, y: maxY, z: topZ },
       { x: minX, y: maxY, z: topZ },
     ];
-    return generateStandardOutlinePath(fallbackLoop, settings, ctx, globals);
+    return generateStandardOutlinePath(fallbackLoop, settings, ctx, globals, geometry);
   }
 
   const topZ = stockTopWorldZ(ctx);
@@ -638,7 +823,7 @@ function generateAdaptiveOutlinePath(
     globals.resolution
   );
   if (!entryLayout) {
-    return generateStandardOutlinePath(loop, settings, ctx, globals);
+    return generateStandardOutlinePath(loop, settings, ctx, globals, geometry);
   }
 
   const toolStart = entryLayout.toolStart;

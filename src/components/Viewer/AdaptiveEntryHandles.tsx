@@ -7,13 +7,14 @@ import { snapPointToSlotCenterline } from '../../lib/adaptiveEntryLayout';
 
 interface AdaptiveEntryHandlesProps {
   toolStart: { x: number; y: number };
-  slotJoin: { x: number; y: number };
-  slotArcGuide: ArcLengthGuide;
+  slotJoin?: { x: number; y: number };
+  slotArcGuide?: ArcLengthGuide;
   topZ: number;
   toolStartManual: boolean;
-  slotJoinManual: boolean;
+  slotJoinManual?: boolean;
+  showSlotJoin?: boolean;
   onToolStartChange: (point: { x: number; y: number }) => void;
-  onSlotJoinChange: (point: { x: number; y: number }) => void;
+  onSlotJoinChange?: (point: { x: number; y: number }) => void;
 }
 
 function crossSegments(x: number, y: number, z: number, size: number) {
@@ -118,7 +119,8 @@ export function AdaptiveEntryHandles({
   slotArcGuide,
   topZ,
   toolStartManual,
-  slotJoinManual,
+  slotJoinManual = false,
+  showSlotJoin = true,
   onToolStartChange,
   onSlotJoinChange,
 }: AdaptiveEntryHandlesProps) {
@@ -129,8 +131,13 @@ export function AdaptiveEntryHandles({
 
   const handleSlotJoinCommit = useCallback(
     (x: number, y: number) => {
-      const snapped = snapPointToSlotCenterline(slotArcGuide, { x, y });
-      onSlotJoinChange({ x: snapped.x, y: snapped.y });
+      if (!onSlotJoinChange) return;
+      if (slotArcGuide) {
+        const snapped = snapPointToSlotCenterline(slotArcGuide, { x, y });
+        onSlotJoinChange({ x: snapped.x, y: snapped.y });
+      } else {
+        onSlotJoinChange({ x, y });
+      }
     },
     [onSlotJoinChange, slotArcGuide]
   );
@@ -144,13 +151,15 @@ export function AdaptiveEntryHandles({
         onCommit={(x, y) => onToolStartChange({ x, y })}
         dragPlane={dragPlane}
       />
-      <DragHandle
-        point={slotJoin}
-        topZ={topZ}
-        color={slotJoinManual ? '#38bdf8' : '#64748b'}
-        onCommit={handleSlotJoinCommit}
-        dragPlane={dragPlane}
-      />
+      {showSlotJoin && slotJoin && (
+        <DragHandle
+          point={slotJoin}
+          topZ={topZ}
+          color={slotJoinManual ? '#38bdf8' : '#64748b'}
+          onCommit={handleSlotJoinCommit}
+          dragPlane={dragPlane}
+        />
+      )}
     </group>
   );
 }

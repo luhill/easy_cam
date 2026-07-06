@@ -8,7 +8,7 @@ export interface NumericLimit {
 
 type ClampedSettingKey = Exclude<
   keyof OperationDefaults,
-  'finishingPass' | 'climbMilling' | 'adaptiveMode'
+  'finishingPass' | 'climbMilling' | 'adaptiveMode' | 'outlineEntryType'
 >;
 
 export const SETTING_LIMITS: Record<ClampedSettingKey, NumericLimit> = {
@@ -25,6 +25,7 @@ export const SETTING_LIMITS: Record<ClampedSettingKey, NumericLimit> = {
   liftAmount: { min: 0, max: 20 },
   boreDiameterPercent: { min: 100, max: 400 },
   rampAngleDeg: { min: 0.5, max: 45 },
+  rampLengthToolDiameters: { min: 0.5, max: 50 },
   boreTaperAngleDeg: { min: 0, max: 15 },
   helixFeedRate: { min: 1, max: 5000 },
   finishingStockPercent: { min: 0.5, max: 50 },
@@ -67,5 +68,8 @@ export function clampOperationSettings(
   merged.adaptiveMode = !!merged.adaptiveMode;
   merged.finishingPass = !!merged.finishingPass;
   merged.climbMilling = merged.climbMilling !== false;
+  const entryType = merged.outlineEntryType;
+  merged.outlineEntryType =
+    entryType === 'helix' || entryType === 'straight' ? entryType : 'linear';
   return merged as OperationDefaults;
 }

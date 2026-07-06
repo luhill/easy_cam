@@ -24,6 +24,10 @@ export interface OperationDefaults {
   radialOffset: number;
   /** Outline: trochoidal adaptive slot clearing around the contour */
   adaptiveMode: boolean;
+  /** Standard outline layer entry strategy */
+  outlineEntryType: 'linear' | 'helix' | 'straight';
+  /** Linear outline ramp length as multiples of tool diameter */
+  rampLengthToolDiameters: number;
   /** Slot width as % of tool diameter (125–200%) — adaptive mode only */
   slotWidthPercent: number;
   /** Micro-retract / Z lift between trochoid passes (mm); 0 = no lift — adaptive mode only */
@@ -165,6 +169,8 @@ export const DEFAULT_SETTINGS: OperationDefaults = {
   zStartOffset: 1,
   radialOffset: 0,
   adaptiveMode: false,
+  outlineEntryType: 'linear',
+  rampLengthToolDiameters: 5,
   slotWidthPercent: 150,
   liftAmount: 0,
   boreDiameterPercent: 150,
@@ -219,6 +225,16 @@ export function isOutlineOperation(op: Pick<Operation, 'type' | 'settings'>): bo
 export function isAdaptiveOutlineOperation(op: Pick<Operation, 'type' | 'settings'>): boolean {
   return (
     (op.type === 'outline' && op.settings.adaptiveMode) || op.type === 'adaptive-outline'
+  );
+}
+
+/** Adaptive mode or standard outline with helix entry — uses bore start / join editing. */
+export function isOutlineHelixEntryOperation(op: Pick<Operation, 'type' | 'settings'>): boolean {
+  if (isAdaptiveOutlineOperation(op)) return true;
+  return (
+    isOutlineOperation(op) &&
+    !op.settings.adaptiveMode &&
+    (op.settings.outlineEntryType ?? 'linear') === 'helix'
   );
 }
 
