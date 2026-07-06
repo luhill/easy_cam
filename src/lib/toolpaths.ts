@@ -37,12 +37,10 @@ import {
   generateContinuousEntryTrochoidPath,
   resolveGuideTraverseSign,
   resolveOrbitRotSign,
-  wrapPathFromIndex,
 } from './adaptiveFourZone';
 import {
   buildSplineEntryGuide,
   adjustBoreRadiusToSlotWidth,
-  closestPointIndexOnPath,
   generateBoreBottomToLeadInTransition,
   generateFullRevolutionOrbit,
   generateHelixBorePoints,
@@ -379,30 +377,11 @@ function generateStandardHelixOutlinePath(
 
   if (settings.finishingPass) {
     const finishZ = layers[layers.length - 1];
-    const finishTraverse = contourTraverse(loop, settings, 0);
-    if (finishTraverse.length > 0) {
-      const finishPts: ToolpathPoint[] = finishTraverse.map((p) => ({
-        x: p.x,
-        y: p.y,
-        z: finishZ,
-        feedRate: cutFeed,
-      }));
-      finishPts.push({
-        x: finishTraverse[0].x,
-        y: finishTraverse[0].y,
-        z: finishZ,
-        feedRate: cutFeed,
-      });
-      const at = lastPathPoint(points);
-      if (at) {
-        appendClosedOutlinePath(points, finishPts, at);
-      } else {
-        appendPoints(points, finishPts);
-      }
-    }
+    appendConnectedFinishingPass(points, loop, settings, finishZ, safeZ, globals);
+  } else {
+    points.push({ x: entryStart.x, y: entryStart.y, z: safeZ, rapid: true });
   }
 
-  points.push({ x: entryStart.x, y: entryStart.y, z: safeZ, rapid: true });
   return points;
 }
 
@@ -508,30 +487,11 @@ function generateStandardOutlinePath(
 
   if (settings.finishingPass) {
     const finishZ = layers[layers.length - 1];
-    const finishTraverse = contourTraverse(loop, settings, 0);
-    if (finishTraverse.length > 0) {
-      const finishPts: ToolpathPoint[] = finishTraverse.map((p) => ({
-        x: p.x,
-        y: p.y,
-        z: finishZ,
-        feedRate: settings.feedRate,
-      }));
-      finishPts.push({
-        x: finishTraverse[0].x,
-        y: finishTraverse[0].y,
-        z: finishZ,
-        feedRate: settings.feedRate,
-      });
-      const at = lastPathPoint(points);
-      if (at) {
-        appendClosedOutlinePath(points, finishPts, at);
-      } else {
-        appendPoints(points, finishPts);
-      }
-    }
+    appendConnectedFinishingPass(points, loop, settings, finishZ, safeZ, globals);
+  } else {
+    points.push({ x: entryStart.x, y: entryStart.y, z: safeZ, rapid: true });
   }
 
-  points.push({ x: entryStart.x, y: entryStart.y, z: safeZ, rapid: true });
   return points;
 }
 
@@ -658,20 +618,73 @@ function appendGeneratedPath(
   return appendPoints(target, generated.slice(start));
 }
 
-function appendClosedOutlinePath(
-  target: ToolpathPoint[],
-  path: ToolpathPoint[],
-  from: { x: number; y: number }
+function appendConnectedFinishingPass(
+  points: ToolpathPoint[],
+  partLoop: LoopPoint[],
+  settings: Operation['settings'],
+  finishZ: number,
+  safeZ: number,
+  globals: ToolpathGlobalOptions,
+  finishPath?: ToolpathPoint[]
 ): boolean {
-  if (path.length < 2) return true;
+  const sampleSpacing = pathSampleSpacing(globals.resolution);
+  const stockAllowance = finishingStockAllowance(settings);
+  const feedRate = settings.feedRate;
 
-  const joinIdx = closestPointIndexOnPath(path, from);
-  const loop = wrapPathFromIndex(path, joinIdx);
+  const finishPts =
+    finishPath ??
+    contourTraverse(partLoop, settings, 0).map((p) => ({
+      x: p.x,
+      y: p.y,
+      z: finishZ,
+      feedRate,
+    }));
 
-  if (!appendGeneratedPath(target, loop)) return false;
+  if (finishPts.length === 0) return true;
 
-  const loopStart = loop[0];
-  return appendPoints(target, [{ x: loopStart.x, y: loopStart.y, z: loopStart.z }]);
+  const last = lastPathPoint(points);
+  if (last) {
+    const traverse = finishPts.map((p) => ({ x: p.x, y: p.y, z: finishZ }));
+    const startS = stationOnContour(traverse, last, sampleSpacing);
+    if (
+      !appendContourLoopFromArcS(
+        points,
+        traverse,
+        finishZ,
+        feedRate,
+        startS,
+        sampleSpacing,
+        true
+      )
+    ) {
+      return false;
+    }
+  } else if (!appendPoints(points, finishPts)) {
+    return false;
+  }
+
+  const endAt = lastPathPoint(points);
+  if (endAt) {
+    if (stockAllowance > 1e-4) {
+      const onPart = closestPointOnLoop2D(endAt.x, endAt.y, partLoop);
+      if (
+        !appendPoints(points, [
+          {
+            x: endAt.x + onPart.outX * stockAllowance,
+            y: endAt.y + onPart.outY * stockAllowance,
+            z: finishZ,
+            feedRate,
+          },
+        ])
+      ) {
+        return false;
+      }
+    }
+    const retractFrom = lastPathPoint(points) ?? endAt;
+    points.push({ x: retractFrom.x, y: retractFrom.y, z: safeZ, rapid: true });
+  }
+
+  return true;
 }
 
 function sampleFinishPoint(
@@ -1098,18 +1111,22 @@ function generateAdaptiveOutlinePath(
   if (settings.finishingPass) {
     const finishZ = layers.length > 0 ? layers[layers.length - 1] : finalZ;
     const finishPath = generateFinishingOutline(loop, settings, finishZ, globals);
-    if (finishPath.length > 0) {
-      const at = lastPathPoint(points);
-      if (at) {
-        if (!appendClosedOutlinePath(points, finishPath, at)) {
-          appendRetractViaSlotCenter(points, slotJoinCenter, safeZ, travelFeed);
-          return points;
-        }
-      } else if (!appendPoints(points, finishPath)) {
-        appendRetractViaSlotCenter(points, slotJoinCenter, safeZ, travelFeed);
-        return points;
-      }
+    if (
+      finishPath.length === 0 ||
+      !appendConnectedFinishingPass(
+        points,
+        loop,
+        settings,
+        finishZ,
+        safeZ,
+        globals,
+        finishPath
+      )
+    ) {
+      appendRetractViaSlotCenter(points, slotJoinCenter, safeZ, travelFeed);
+      return points;
     }
+    return points;
   }
 
   appendRetractViaSlotCenter(points, slotJoinCenter, safeZ, travelFeed);
