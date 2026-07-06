@@ -14,7 +14,6 @@ export interface StoredMaterialProfile {
   finishAllowancePercent: number;
   recommendedMilling: RecommendedMilling;
   millingNote: string;
-  isHard: boolean;
 }
 
 export interface FeedsMaterialRow {
@@ -38,7 +37,6 @@ export function materialProfileToStored(profile: MaterialProfile): StoredMateria
     finishAllowancePercent: profile.finishAllowancePercent,
     recommendedMilling: profile.recommendedMilling,
     millingNote: profile.millingNote ?? '',
-    isHard: profile.isHard,
   };
 }
 
@@ -83,7 +81,6 @@ export function normalizeStoredMaterialProfile(
     recommendedMilling:
       value.recommendedMilling === 'conventional' ? 'conventional' : 'climb',
     millingNote: typeof value.millingNote === 'string' ? value.millingNote : fallback.millingNote,
-    isHard: value.isHard === false ? false : fallback.isHard,
   };
 }
 
@@ -199,7 +196,6 @@ export function resolveMaterialProfile(
     pocketDocMinRatio: profile.pocketDocMinRatio,
     pocketDocMaxRatio: Math.max(profile.pocketDocMinRatio, profile.pocketDocMaxRatio),
     finishAllowancePercent: profile.finishAllowancePercent,
-    isHard: profile.isHard,
     recommendedMilling: profile.recommendedMilling,
     millingNote: profile.millingNote,
   };

@@ -16,19 +16,16 @@ interface FeedsMaterialEditorProps {
   onCancel: () => void;
 }
 
-type NumericField = Exclude<
-  keyof StoredMaterialProfile,
-  'millingNote' | 'recommendedMilling' | 'isHard'
->;
+type NumericField = Exclude<keyof StoredMaterialProfile, 'millingNote' | 'recommendedMilling'>;
 
 const COLUMNS: {
-  key: NumericField | 'recommendedMilling' | 'millingNote' | 'isHard';
+  key: NumericField | 'recommendedMilling' | 'millingNote';
   label: string;
   unit?: string;
   step?: number;
   min?: number;
   max?: number;
-  type: 'number' | 'select' | 'text' | 'checkbox';
+  type: 'number' | 'select' | 'note';
 }[] = [
   { key: 'chipLoad', label: 'Chip load', unit: 'mm/tooth', step: 0.001, min: 0.001, type: 'number' },
   { key: 'stepoverPercentage', label: 'Stepover', unit: '%', step: 1, min: 1, max: 100, type: 'number' },
@@ -48,8 +45,7 @@ const COLUMNS: {
     type: 'number',
   },
   { key: 'recommendedMilling', label: 'Cut direction', type: 'select' },
-  { key: 'isHard', label: 'Hard material', type: 'checkbox' },
-  { key: 'millingNote', label: 'Milling note', type: 'text' },
+  { key: 'millingNote', label: 'Milling note', type: 'note' },
 ];
 
 function updateDraftRow(
@@ -66,6 +62,11 @@ function updateDraftRow(
   });
 }
 
+interface NotePopoutState {
+  rowId: string;
+  materialName: string;
+}
+
 export function FeedsMaterialEditor({
   open,
   materialRows,
@@ -73,10 +74,13 @@ export function FeedsMaterialEditor({
   onCancel,
 }: FeedsMaterialEditorProps) {
   const [draft, setDraft] = useState<FeedsMaterialLibrary>(materialRows);
+  const [notePopout, setNotePopout] = useState<NotePopoutState | null>(null);
+  const [notePopoutDraft, setNotePopoutDraft] = useState('');
 
   useEffect(() => {
     if (open) {
       setDraft(materialRows);
+      setNotePopout(null);
     }
   }, [open, materialRows]);
 
@@ -95,6 +99,19 @@ export function FeedsMaterialEditor({
       if (prev.length <= 1) return prev;
       return prev.filter((row) => row.id !== rowId);
     });
+  };
+
+  const openNotePopout = (row: FeedsMaterialRow) => {
+    setNotePopout({ rowId: row.id, materialName: row.name });
+    setNotePopoutDraft(row.profile.millingNote);
+  };
+
+  const saveNotePopout = () => {
+    if (!notePopout) return;
+    setDraft((prev) =>
+      updateDraftRow(prev, notePopout.rowId, { profile: { millingNote: notePopoutDraft } })
+    );
+    setNotePopout(null);
   };
 
   return createPortal(
@@ -172,40 +189,25 @@ export function FeedsMaterialEditor({
                         );
                       }
 
-                      if (col.type === 'checkbox' && col.key === 'isHard') {
-                        return (
-                          <td key={col.key} className="feeds-material-editor-td feeds-material-editor-td--center">
-                            <input
-                              type="checkbox"
-                              checked={row.profile.isHard}
-                              onChange={(e) =>
-                                setDraft((prev) =>
-                                  updateDraftRow(prev, row.id, {
-                                    profile: { isHard: e.target.checked },
-                                  })
-                                )
-                              }
-                              aria-label={`Hard material: ${row.name}`}
-                            />
-                          </td>
-                        );
-                      }
-
-                      if (col.type === 'text' && col.key === 'millingNote') {
+                      if (col.type === 'note' && col.key === 'millingNote') {
                         return (
                           <td key={col.key} className="feeds-material-editor-td">
-                            <input
-                              type="text"
-                              className="feeds-material-editor-note-input"
-                              value={row.profile.millingNote}
-                              onChange={(e) =>
-                                setDraft((prev) =>
-                                  updateDraftRow(prev, row.id, {
-                                    profile: { millingNote: e.target.value },
-                                  })
-                                )
-                              }
-                            />
+                            <div className="feeds-material-editor-note-cell">
+                              <span
+                                className="feeds-material-editor-note-preview"
+                                title={row.profile.millingNote || undefined}
+                              >
+                                {row.profile.millingNote || '—'}
+                              </span>
+                              <button
+                                type="button"
+                                className="btn btn-small btn-secondary feeds-material-editor-note-edit-btn"
+                                onClick={() => openNotePopout(row)}
+                                aria-label={`Edit milling note for ${row.name}`}
+                              >
+                                Edit
+                              </button>
+                            </div>
                           </td>
                         );
                       }
@@ -251,6 +253,43 @@ export function FeedsMaterialEditor({
             </table>
           </div>
         </div>
+
+        {notePopout ? (
+          <div
+            className="feeds-material-editor-note-popout-overlay"
+            role="presentation"
+            onClick={() => setNotePopout(null)}
+          >
+            <div
+              className="feeds-material-editor-note-popout"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="feeds-material-note-popout-title"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <header className="feeds-material-editor-note-popout-header">
+                <h3 id="feeds-material-note-popout-title">
+                  Milling note — {notePopout.materialName}
+                </h3>
+              </header>
+              <textarea
+                className="feeds-material-editor-note-popout-textarea"
+                rows={8}
+                value={notePopoutDraft}
+                onChange={(e) => setNotePopoutDraft(e.target.value)}
+                autoFocus
+              />
+              <footer className="feeds-material-editor-note-popout-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setNotePopout(null)}>
+                  Cancel
+                </button>
+                <button type="button" className="btn btn-primary" onClick={saveNotePopout}>
+                  Done
+                </button>
+              </footer>
+            </div>
+          </div>
+        ) : null}
 
         <footer className="feeds-material-editor-footer">
           <button type="button" className="btn btn-secondary" onClick={handleAddRow}>

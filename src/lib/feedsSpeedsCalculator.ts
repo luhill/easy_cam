@@ -71,7 +71,6 @@ export interface MaterialProfile extends MaterialDefaults {
   pocketDocMinRatio: number;
   pocketDocMaxRatio: number;
   finishAllowancePercent: number;
-  isHard: boolean;
   recommendedMilling: RecommendedMilling;
   millingNote?: string;
 }
@@ -85,7 +84,6 @@ const MATERIAL_DOC_AND_MILLING: Record<
     | 'pocketDocMinRatio'
     | 'pocketDocMaxRatio'
     | 'finishAllowancePercent'
-    | 'isHard'
     | 'recommendedMilling'
     | 'millingNote'
   >
@@ -96,7 +94,6 @@ const MATERIAL_DOC_AND_MILLING: Record<
     pocketDocMinRatio: 0.25,
     pocketDocMaxRatio: 0.5,
     finishAllowancePercent: 3.7,
-    isHard: true,
     recommendedMilling: 'climb',
     millingNote: 'Keeps constant engagement in adaptive/trochoidal paths.',
   },
@@ -106,7 +103,6 @@ const MATERIAL_DOC_AND_MILLING: Record<
     pocketDocMinRatio: 0.4,
     pocketDocMaxRatio: 0.8,
     finishAllowancePercent: 6.2,
-    isHard: true,
     recommendedMilling: 'climb',
     millingNote: 'Improves chip evacuation and reduces rubbing/work hardening.',
   },
@@ -116,7 +112,6 @@ const MATERIAL_DOC_AND_MILLING: Record<
     pocketDocMinRatio: 0.25,
     pocketDocMaxRatio: 0.55,
     finishAllowancePercent: 10.0,
-    isHard: true,
     recommendedMilling: 'climb',
     millingNote: 'Cleaner skin finish; use sharp tooling and support sheet well.',
   },
@@ -126,7 +121,6 @@ const MATERIAL_DOC_AND_MILLING: Record<
     pocketDocMinRatio: 0.5,
     pocketDocMaxRatio: 1.0,
     finishAllowancePercent: 10.0,
-    isHard: false,
     recommendedMilling: 'climb',
     millingNote: 'Standard CNC router practice for most contour and adaptive cuts.',
   },
@@ -136,7 +130,6 @@ const MATERIAL_DOC_AND_MILLING: Record<
     pocketDocMinRatio: 0.75,
     pocketDocMaxRatio: 1.5,
     finishAllowancePercent: 12.5,
-    isHard: false,
     recommendedMilling: 'climb',
     millingNote: 'Try conventional on thin plywood if climb lifts veneer at exit.',
   },
@@ -146,7 +139,6 @@ const MATERIAL_DOC_AND_MILLING: Record<
     pocketDocMinRatio: 0.4,
     pocketDocMaxRatio: 0.8,
     finishAllowancePercent: 12.5,
-    isHard: false,
     recommendedMilling: 'climb',
     millingNote: 'Reduces heat buildup and melted swarf re-welding to the part.',
   },

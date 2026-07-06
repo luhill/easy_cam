@@ -880,6 +880,30 @@ body {
   color: var(--success);
 }
 
+.feeds-calculator-milling-note {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.feeds-calculator-milling-note-title {
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.feeds-calculator-milling-note-body {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+}
+
 .feeds-calculator-footnote {
   margin-top: 10px;
   font-size: 10px;
@@ -903,6 +927,7 @@ body {
 }
 
 .feeds-material-editor-dialog {
+  position: relative;
   width: min(920px, 100%);
   max-height: min(88vh, 900px);
   display: flex;
@@ -1042,6 +1067,81 @@ body {
 
 .feeds-material-editor-note-input {
   min-width: 160px;
+}
+
+.feeds-material-editor-note-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 180px;
+}
+
+.feeds-material-editor-note-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.feeds-material-editor-note-edit-btn {
+  flex-shrink: 0;
+}
+
+.feeds-material-editor-note-popout-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(8, 10, 14, 0.45);
+  border-radius: inherit;
+}
+
+.feeds-material-editor-note-popout {
+  width: min(520px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
+}
+
+.feeds-material-editor-note-popout-header h3 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.feeds-material-editor-note-popout-textarea {
+  width: 100%;
+  min-height: 160px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.feeds-material-editor-note-popout-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.feeds-material-editor-note-popout-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .feeds-material-editor-delete-btn {

@@ -280,11 +280,16 @@ export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSideba
                 <dd>{results.finishAllowanceLabel}</dd>
               </div>
             </dl>
+            {results.millingNote ? (
+              <div className="feeds-calculator-milling-note">
+                <h4 className="feeds-calculator-milling-note-title">Milling note</h4>
+                <p className="feeds-calculator-milling-note-body">{results.millingNote}</p>
+              </div>
+            ) : null}
             <p className="feeds-calculator-footnote">
-              {results.millingNote ? `${results.millingDirectionLabel}: ${results.millingNote} ` : ''}
               Adjusted feed applies chip thinning for {stepoverPct.toFixed(0)}% radial
               engagement ({results.stepoverMm.toFixed(2)} mm). Use adjusted value when stepover is
-              below ~50% tool Ø — especially on {profile.isHard ? 'hard materials' : 'softer stock'}.
+              below ~50% tool Ø.
             </p>
           </section>
         </div>
