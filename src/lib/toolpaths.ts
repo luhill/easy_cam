@@ -24,6 +24,9 @@ import {
   outlineRampLengthMm,
   resolveStandardHelixEntryLayout,
   resolveStandardOutlineEntryStart,
+  sampleContourLoopFromArcS,
+  sampleContourTravelBetween,
+  stationOnContour,
 } from './outlineEntry';
 import {
   adaptiveEntryOverridesFromGeometry,
@@ -160,45 +163,49 @@ function contourTraverse(
   return reverse ? [...toolLoop].reverse() : toolLoop;
 }
 
-function appendContourLoopFromPoint(
+function appendContourLoopFromArcS(
   points: ToolpathPoint[],
   traverse: LoopPoint[],
   layerZ: number,
   feedRate: number,
-  from: { x: number; y: number }
+  startS: number,
+  sampleSpacing: number,
+  forward = true
 ): boolean {
-  if (traverse.length === 0) return true;
-
-  const asPath = traverse.map((p) => ({ x: p.x, y: p.y, z: layerZ }));
-  const startIdx = closestPointIndexOnPath(asPath, from);
-
-  for (let i = 0; i < traverse.length; i++) {
-    const p = traverse[(startIdx + i) % traverse.length];
-    if (!appendPoints(points, [{ x: p.x, y: p.y, z: layerZ, feedRate }])) {
-      return false;
-    }
-  }
-
-  return appendPoints(points, [
-    { x: traverse[startIdx].x, y: traverse[startIdx].y, z: layerZ, feedRate },
-  ]);
+  const last = lastPathPoint(points);
+  const loopPts = sampleContourLoopFromArcS(
+    traverse,
+    layerZ,
+    feedRate,
+    startS,
+    sampleSpacing,
+    forward,
+    last ?? undefined
+  );
+  return appendPoints(points, loopPts);
 }
 
-function appendMoveToEntryStart(
+function appendContourTravelToEntry(
   points: ToolpathPoint[],
+  traverse: LoopPoint[],
   entryStart: { x: number; y: number },
   z: number,
-  feedRate: number
+  feedRate: number,
+  sampleSpacing: number,
+  forward = true
 ): boolean {
   const last = lastPathPoint(points);
   if (!last) return true;
-  if (Math.hypot(last.x - entryStart.x, last.y - entryStart.y) < 0.05) {
-    if (Math.abs(last.z - z) > 1e-4) {
-      return appendPoints(points, [{ x: entryStart.x, y: entryStart.y, z, feedRate }]);
-    }
-    return true;
-  }
-  return appendPoints(points, [{ x: entryStart.x, y: entryStart.y, z, feedRate }]);
+  const travel = sampleContourTravelBetween(
+    traverse,
+    last,
+    entryStart,
+    z,
+    feedRate,
+    sampleSpacing,
+    forward
+  );
+  return appendPoints(points, travel);
 }
 
 function appendOutlineApproachToStart(
@@ -228,13 +235,24 @@ function appendStraightOutlineEntry(
   atEntryStart: boolean
 ): boolean {
   if (!atEntryStart) {
-    if (!appendMoveToEntryStart(points, entryStart, fromZ, plungeRate)) return false;
+    return true;
   }
   if (Math.abs(fromZ - layerZ) < 1e-5) {
     return appendPoints(points, [{ x: entryStart.x, y: entryStart.y, z: layerZ, feedRate: plungeRate }]);
   }
+  const last = lastPathPoint(points);
+  if (
+    !last ||
+    Math.hypot(last.x - entryStart.x, last.y - entryStart.y) > 0.05 ||
+    Math.abs(last.z - fromZ) > 1e-4
+  ) {
+    if (
+      !appendPoints(points, [{ x: entryStart.x, y: entryStart.y, z: fromZ, feedRate: plungeRate }])
+    ) {
+      return false;
+    }
+  }
   return appendPoints(points, [
-    { x: entryStart.x, y: entryStart.y, z: fromZ, feedRate: plungeRate },
     { x: entryStart.x, y: entryStart.y, z: layerZ, feedRate: plungeRate },
   ]);
 }
@@ -317,7 +335,7 @@ function generateStandardHelixOutlinePath(
     } else {
       appendFreshSlotWidthBore(
         points,
-        joinPoint,
+        toolStart,
         layerPrevZ,
         layerZ,
         helixR,
@@ -328,7 +346,7 @@ function generateStandardHelixOutlinePath(
       if (
         !appendBoreBottomWidenAndLeadIn(
           points,
-          joinPoint,
+          toolStart,
           layerZ,
           helixR,
           helixRadiusTaperedFromStart(settings, layerZ, layerPrevZ, helixR),
@@ -343,7 +361,20 @@ function generateStandardHelixOutlinePath(
       }
     }
 
-    if (!appendContourLoopFromPoint(points, traverse, layerZ, cutFeed, joinPoint)) break;
+    const loopStartS = stationOnContour(traverse, joinPoint, pathSampleSpacing(globals.resolution));
+    if (
+      !appendContourLoopFromArcS(
+        points,
+        traverse,
+        layerZ,
+        cutFeed,
+        loopStartS,
+        pathSampleSpacing(globals.resolution),
+        true
+      )
+    ) {
+      break;
+    }
   }
 
   if (settings.finishingPass) {
@@ -407,15 +438,29 @@ function generateStandardOutlinePath(
 
   appendOutlineApproachToStart(points, entryStart, safeZ, approachZ, settings.plungeRate);
 
+  const climbForward = true;
+
   for (let li = 0; li < layers.length; li++) {
     const layerZ = layers[li];
     const fromZ = li === 0 ? approachZ : layers[li - 1];
 
     if (li > 0) {
-      if (!appendMoveToEntryStart(points, entryStart, fromZ, settings.feedRate)) break;
+      if (
+        !appendContourTravelToEntry(
+          points,
+          traverse,
+          entryStart,
+          fromZ,
+          settings.feedRate,
+          rampSampleSpacing,
+          climbForward
+        )
+      ) {
+        break;
+      }
     }
 
-    let loopStart = entryStart;
+    let loopStartS = stationOnContour(traverse, entryStart, rampSampleSpacing);
 
     if (entryType === 'straight') {
       if (
@@ -425,7 +470,7 @@ function generateStandardOutlinePath(
           fromZ,
           layerZ,
           settings.plungeRate,
-          li === 0
+          true
         )
       ) {
         break;
@@ -440,13 +485,23 @@ function generateStandardOutlinePath(
         settings.rampAngleDeg,
         settings.plungeRate,
         rampSampleSpacing,
-        true
+        climbForward
       );
       if (!appendPoints(points, ramp.points)) break;
-      loopStart = ramp.endPoint;
+      loopStartS = ramp.endS;
     }
 
-    if (!appendContourLoopFromPoint(points, traverse, layerZ, settings.feedRate, loopStart)) {
+    if (
+      !appendContourLoopFromArcS(
+        points,
+        traverse,
+        layerZ,
+        settings.feedRate,
+        loopStartS,
+        rampSampleSpacing,
+        climbForward
+      )
+    ) {
       break;
     }
   }

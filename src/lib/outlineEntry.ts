@@ -140,6 +140,103 @@ export function resolveStandardHelixEntryLayout(
 export interface ContourRampResult {
   points: ToolpathPoint[];
   endPoint: { x: number; y: number };
+  endS: number;
+}
+
+export function stationOnContour(
+  traverse: LoopPoint[],
+  point: { x: number; y: number },
+  sampleSpacing: number
+): number {
+  const guide = buildArcLengthGuide(traverse, Math.max(sampleSpacing, 0.25));
+  if (guide.totalLength <= 0) return 0;
+  return findClosestSOnGuide(guide, point).s;
+}
+
+/** One full contour loop sampled by arc length, starting/ending at startS. */
+export function sampleContourLoopFromArcS(
+  traverse: LoopPoint[],
+  layerZ: number,
+  feedRate: number,
+  startS: number,
+  sampleSpacing: number,
+  forward = true,
+  skipNear?: { x: number; y: number; z: number }
+): ToolpathPoint[] {
+  const guide = buildArcLengthGuide(traverse, Math.max(sampleSpacing, 0.25));
+  const total = guide.totalLength;
+  if (total <= 0) return [];
+
+  const steps = Math.max(8, Math.ceil(total / sampleSpacing));
+  const points: ToolpathPoint[] = [];
+  let begin = 0;
+
+  if (skipNear) {
+    const startFrame = sampleGuideAtS(guide, startS);
+    if (
+      Math.hypot(skipNear.x - startFrame.x, skipNear.y - startFrame.y) <
+        sampleSpacing * 0.75 &&
+      Math.abs(skipNear.z - layerZ) < 1e-4
+    ) {
+      begin = 1;
+    }
+  }
+
+  for (let i = begin; i <= steps; i++) {
+    const delta = (i / steps) * total;
+    const s = forward
+      ? advanceGuideArcLength(guide, startS, delta, true)
+      : advanceGuideArcLength(guide, startS, delta, false);
+    const frame = sampleGuideAtS(guide, s);
+    points.push({ x: frame.x, y: frame.y, z: layerZ, feedRate });
+  }
+
+  return points;
+}
+
+/** Walk along the contour between two XY points at constant Z (no straight chord). */
+export function sampleContourTravelBetween(
+  traverse: LoopPoint[],
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  z: number,
+  feedRate: number,
+  sampleSpacing: number,
+  forward = true
+): ToolpathPoint[] {
+  const guide = buildArcLengthGuide(traverse, Math.max(sampleSpacing, 0.25));
+  const total = guide.totalLength;
+  if (total <= 0) return [];
+
+  const fromS = findClosestSOnGuide(guide, from).s;
+  const toS = findClosestSOnGuide(guide, to).s;
+  const toFrame = sampleGuideAtS(guide, toS);
+
+  if (Math.hypot(from.x - toFrame.x, from.y - toFrame.y) < sampleSpacing * 0.75) {
+    return [];
+  }
+
+  let arcLen = forward
+    ? toS >= fromS - 1e-6
+      ? toS - fromS
+      : total - fromS + toS
+    : fromS >= toS - 1e-6
+      ? fromS - toS
+      : fromS + total - toS;
+
+  if (arcLen < 1e-3) return [];
+
+  const steps = Math.max(1, Math.ceil(arcLen / sampleSpacing));
+  const points: ToolpathPoint[] = [];
+
+  for (let i = 1; i <= steps; i++) {
+    const dist = (i / steps) * arcLen;
+    const s = advanceGuideArcLength(guide, fromS, dist, forward);
+    const frame = sampleGuideAtS(guide, s);
+    points.push({ x: frame.x, y: frame.y, z, feedRate });
+  }
+
+  return points;
 }
 
 /**
@@ -158,9 +255,14 @@ export function generateContourLinearRamp(
   traverseForward = true
 ): ContourRampResult {
   if (Math.abs(fromZ - toZ) < 1e-5) {
+    const s = findClosestSOnGuide(
+      buildArcLengthGuide(traverse, Math.max(sampleSpacing, 0.25)),
+      startPoint
+    ).s;
     return {
       points: [{ x: startPoint.x, y: startPoint.y, z: toZ, feedRate }],
       endPoint: { x: startPoint.x, y: startPoint.y },
+      endS: s,
     };
   }
 
@@ -169,6 +271,7 @@ export function generateContourLinearRamp(
     return {
       points: [{ x: startPoint.x, y: startPoint.y, z: toZ, feedRate }],
       endPoint: { x: startPoint.x, y: startPoint.y },
+      endS: 0,
     };
   }
 
@@ -179,6 +282,7 @@ export function generateContourLinearRamp(
     return {
       points: [{ x: startPoint.x, y: startPoint.y, z: toZ, feedRate }],
       endPoint: { x: startPoint.x, y: startPoint.y },
+      endS: startS,
     };
   }
 
@@ -227,5 +331,5 @@ export function generateContourLinearRamp(
     points.push({ x: endPoint.x, y: endPoint.y, z: toZ, feedRate });
   }
 
-  return { points, endPoint };
+  return { points, endPoint, endS: currentS };
 }
