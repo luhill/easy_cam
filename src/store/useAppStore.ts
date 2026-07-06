@@ -14,6 +14,7 @@ import {
   defaultSettingsForOperation,
   getOperationLabel,
 } from '../types/operations';
+import { operationSettingsFromFeedsCalculator } from '../lib/feedsSpeedsCalculator';
 import { clampOperationSettings } from '../lib/settingLimits';
 import { generateToolpaths } from '../lib/toolpaths';
 import type { ToolpathColorMode } from '../lib/toolpathColors';
@@ -163,6 +164,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   addOperation: (type) => {
+    const feedsCalculator = useSettingsStore.getState().feedsCalculator;
     const op: Operation = {
       id: uuidv4(),
       type,
@@ -170,7 +172,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       enabled: true,
       visible: true,
       collapsed: false,
-      settings: clampOperationSettings(defaultSettingsForOperation(type)),
+      settings: clampOperationSettings({
+        ...defaultSettingsForOperation(type),
+        ...operationSettingsFromFeedsCalculator(type, feedsCalculator),
+      }),
       geometry: null,
       ...(type === 'custom-gcode'
         ? { customGcode: '; Custom G-code\n; Insert Marlin commands below\n' }

@@ -253,7 +253,7 @@ export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSideba
                 <dd>{results.pocketDocLabel}</dd>
               </div>
               <div className="feeds-calculator-output-row">
-                <dt>Helix ramp angle</dt>
+                <dt>Ramp angle</dt>
                 <dd>{results.helixRampLabel}</dd>
               </div>
               <div className="feeds-calculator-output-row">

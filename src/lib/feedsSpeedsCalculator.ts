@@ -1,3 +1,5 @@
+import type { OperationDefaults, OperationType } from '../types/operations';
+
 export type MaterialId =
   | 'mild-steel'
   | 'solid-aluminium'
@@ -208,6 +210,7 @@ export interface FeedsSpeedsResults {
   adaptiveDocLabel: string;
   pocketDocLabel: string;
   helixRampLabel: string;
+  rampAngleDeg: number;
   plungeFeedLabel: string;
   plungeFeedMmMin: number;
   millingDirectionLabel: string;
@@ -240,6 +243,7 @@ export function calculateFeedsSpeeds(inputs: FeedsSpeedsInputs): FeedsSpeedsResu
     adaptiveDocLabel: `${(profile.adaptiveDocMinRatio * toolD).toFixed(2)}–${(profile.adaptiveDocMaxRatio * toolD).toFixed(2)} mm`,
     pocketDocLabel: `${(profile.pocketDocMinRatio * toolD).toFixed(2)}–${(profile.pocketDocMaxRatio * toolD).toFixed(2)} mm`,
     helixRampLabel: `${profile.rampAngle.toFixed(1)}°`,
+    rampAngleDeg: profile.rampAngle,
     plungeFeedLabel: `${Math.round(plungeFeedMmMin)} mm/min (${Math.round(profile.plungeRatio * 100)}% of cut feed)`,
     plungeFeedMmMin,
     millingDirectionLabel:
@@ -257,4 +261,33 @@ export function formatFeed(value: number): string {
 export function formatFactor(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return '—';
   return `${value.toFixed(2)}×`;
+}
+
+/** Map calculator inputs/outputs to operation setting defaults for new operations. */
+export function operationSettingsFromFeedsCalculator(
+  type: OperationType,
+  inputs: FeedsSpeedsInputs
+): Partial<OperationDefaults> {
+  const results = calculateFeedsSpeeds(inputs);
+  const toolD = Math.max(inputs.toolDiameterMm, 0.01);
+  const { profile } = results;
+
+  const partial: Partial<OperationDefaults> = {
+    toolDiameter: toolD,
+    spindleSpeed: Math.max(100, Math.round(inputs.rpm)),
+    feedRate: Math.max(1, Math.round(results.adjustedFeedMmMin)),
+    stepover: inputs.stepoverPct,
+    rampAngleDeg: results.rampAngleDeg,
+    plungeRate: Math.max(1, Math.round(results.plungeFeedMmMin)),
+    helixFeedRate: Math.max(1, Math.round(results.plungeFeedMmMin)),
+    climbMilling: profile.recommendedMilling === 'climb',
+  };
+
+  if (type === 'pocket') {
+    partial.stepDown = profile.pocketDocMinRatio * toolD;
+  } else if (type !== 'custom-gcode') {
+    partial.stepDown = profile.adaptiveDocMinRatio * toolD;
+  }
+
+  return partial;
 }
