@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { ToolOrigin } from '../lib/geometryProcessing';
+import type { UiTheme } from '../lib/uiTheme';
 import { DEFAULT_WCS_Z_ABOVE_STOCK } from '../lib/cutDepth';
 import {
   DEFAULT_SAFE_HEIGHT,
@@ -48,6 +49,7 @@ interface SettingsState {
   toolpathResolution: number;
   travelFeedRate: number;
   isometricProjection: boolean;
+  uiTheme: UiTheme;
   setGcodeTemplate: (key: keyof GcodeTemplates, value: string) => void;
   setGcodeOutputFormat: (format: GcodeOutputFormat) => void;
   resetGcodeTemplates: () => void;
@@ -56,6 +58,7 @@ interface SettingsState {
   setToolpathResolution: (factor: number) => void;
   setTravelFeedRate: (mmPerMin: number) => void;
   setIsometricProjection: (enabled: boolean) => void;
+  setUiTheme: (theme: UiTheme) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -68,6 +71,7 @@ export const useSettingsStore = create<SettingsState>()(
       toolpathResolution: DEFAULT_TOOLPATH_RESOLUTION,
       travelFeedRate: DEFAULT_TRAVEL_FEED_RATE,
       isometricProjection: false,
+      uiTheme: 'dark',
       setGcodeTemplate: (key, value) =>
         set((state) => ({
           gcodeTemplates: { ...state.gcodeTemplates, [key]: value },
@@ -96,13 +100,21 @@ export const useSettingsStore = create<SettingsState>()(
           ),
         }),
       setIsometricProjection: (enabled) => set({ isometricProjection: !!enabled }),
+      setUiTheme: (theme) => set({ uiTheme: theme === 'light' ? 'light' : 'dark' }),
     }),
-    { name: 'easy-cam-gcode-settings', version: 1, migrate: (persisted) => {
+    {
+      name: 'easy-cam-gcode-settings',
+      version: 2,
+      migrate: (persisted, version) => {
       const state = persisted as Record<string, unknown>;
       if (state.gcodeOutputFormat === 'marlin') {
         state.gcodeOutputFormat = 'fluidnc';
       }
+      if (version < 2 && state.uiTheme !== 'light' && state.uiTheme !== 'dark') {
+        state.uiTheme = 'dark';
+      }
       return state;
-    } }
+    },
+    }
   )
 );

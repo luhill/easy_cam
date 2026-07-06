@@ -66,6 +66,7 @@ import {
   resolveStandardOutlineEntryStart,
   snapStandardOutlineEntryPoint,
 } from '../../lib/outlineEntry';
+import { viewerThemeColors } from '../../lib/uiTheme';
 import { createViewerRenderer, detectWebGLSupport } from '../../lib/webglSupport';
 import { registerViewerCameraBridge, goHomeWithCamera, goToViewerHome } from '../../lib/viewerCamera';
 import {
@@ -772,6 +773,8 @@ function SceneContent({
   const toolpathResolution = useSettingsStore((s) => s.toolpathResolution);
   const travelFeedRate = useSettingsStore((s) => s.travelFeedRate);
   const toolpathColorMode = useAppStore((s) => s.toolpathColorMode);
+  const uiTheme = useSettingsStore((s) => s.uiTheme);
+  const viewerColors = viewerThemeColors(uiTheme);
   const controlsRef = useRef<OrbitControlsImpl>(null);
 
   const visiblePaths = useMemo(
@@ -952,17 +955,17 @@ function SceneContent({
 
   return (
     <>
-      <ambientLight intensity={0.5} />
-      <directionalLight position={[50, 50, 80]} intensity={1.2} />
-      <directionalLight position={[-30, -40, 40]} intensity={0.4} />
+      <ambientLight intensity={viewerColors.ambientLight} />
+      <directionalLight position={[50, 50, 80]} intensity={viewerColors.keyLight} />
+      <directionalLight position={[-30, -40, 40]} intensity={viewerColors.fillLight} />
       <Grid
         args={[200, 200]}
         cellSize={5}
         cellThickness={0.5}
-        cellColor="#2a2f38"
+        cellColor={viewerColors.gridCell}
         sectionSize={25}
         sectionThickness={1}
-        sectionColor="#3d4555"
+        sectionColor={viewerColors.gridSection}
         fadeDistance={300}
         rotation={[Math.PI / 2, 0, 0]}
         position={[0, 0, 0]}
@@ -1051,6 +1054,8 @@ export function StlViewer() {
 
   const toolOrigin = useSettingsStore((s) => s.toolOrigin);
   const safeHeight = useSettingsStore((s) => s.safeHeight);
+  const uiTheme = useSettingsStore((s) => s.uiTheme);
+  const viewerColors = viewerThemeColors(uiTheme);
 
   const { processedMesh, meshKey, loading, loadError, updateMesh, commitOrientationSource } =
     useProcessedStl(stlUrl);
@@ -1177,7 +1182,10 @@ export function StlViewer() {
           gl={createViewerRenderer as GLProps}
           dpr={[1, 1.5]}
           camera={{ fov: 45, near: 0.1, far: 1000, position: [60, -60, 60], up: [0, 0, 1] }}
-          style={{ background: '#0f1115', cursor: selectionMode ? 'crosshair' : 'default' }}
+          style={{
+            background: viewerColors.background,
+            cursor: selectionMode ? 'crosshair' : 'default',
+          }}
           onCreated={handleWebglCreated}
         >
           <SceneContent
