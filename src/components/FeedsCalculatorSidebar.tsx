@@ -91,7 +91,6 @@ export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSideba
     <aside
       className={`feeds-calculator-sidebar ${open ? 'feeds-calculator-sidebar--open' : 'feeds-calculator-sidebar--collapsed'}`}
       aria-label="CNC feeds and speeds calculator"
-      aria-hidden={!open}
     >
       <button
         type="button"
@@ -106,7 +105,11 @@ export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSideba
         <ChevronIcon collapsed={!open} />
       </button>
 
-      <div id="feeds-calculator-panel" className="feeds-calculator-panel">
+      <div
+        id="feeds-calculator-panel"
+        className="feeds-calculator-panel"
+        aria-hidden={!open}
+      >
         <header className="feeds-calculator-header">
           <h2 className="feeds-calculator-title">Feeds &amp; Speeds</h2>
           <p className="feeds-calculator-subtitle">Reference calculator — verify on scrap first.</p>
