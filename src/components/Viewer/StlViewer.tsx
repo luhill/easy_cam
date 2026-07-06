@@ -1072,12 +1072,34 @@ export function StlViewer() {
   });
   const [webglReady, setWebglReady] = useState<boolean | null>(null);
   const [webglError, setWebglError] = useState<string | null>(null);
+  const stlUrlRef = useRef(stlUrl);
+
+  useEffect(() => {
+    stlUrlRef.current = stlUrl;
+  }, [stlUrl]);
 
   useEffect(() => {
     const result = detectWebGLSupport();
     setWebglReady(result.supported);
     setWebglError(result.supported ? null : (result.message ?? 'WebGL is not available.'));
   }, []);
+
+  useEffect(() => {
+    if (!stlUrl) {
+      setIndexStatus({ ready: false });
+      return;
+    }
+
+    setIndexStatus({ ready: false });
+    const result = detectWebGLSupport();
+    if (result.supported) {
+      setWebglReady(true);
+      setWebglError(null);
+    } else {
+      setWebglReady(false);
+      setWebglError(result.message ?? 'WebGL is not available.');
+    }
+  }, [stlUrl]);
 
   useEffect(() => {
     if (webglReady === false && processedMesh) {
@@ -1093,6 +1115,7 @@ export function StlViewer() {
     const canvas = gl.domElement;
     const onLost = (event: Event) => {
       event.preventDefault();
+      if (!stlUrlRef.current) return;
       setWebglReady(false);
       setWebglError(
         'WebGL context was lost. Reload the page or close other 3D tabs, then try again.'
@@ -1137,7 +1160,7 @@ export function StlViewer() {
           <p>Analyzing mesh geometry…</p>
         </div>
       )}
-      {webglReady === false && (
+      {stlUrl && webglReady === false && (
         <div className="viewer-fallback-layout">
           <WebGLFallback
             message={webglError ?? 'WebGL is not available.'}

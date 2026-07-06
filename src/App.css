@@ -242,8 +242,14 @@ body {
   visibility: visible;
 }
 
+.hint-tooltip--top .hint-tooltip-bubble {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
 .operation-settings-footer {
   margin-top: 8px;
+  overflow: visible;
 }
 
 .part-setup-empty {
@@ -462,7 +468,7 @@ body {
   border-left: 3px solid var(--accent);
   border-radius: var(--radius);
   flex-shrink: 0;
-  overflow: hidden;
+  overflow: visible;
   transition: opacity 0.15s;
 }
 
@@ -526,11 +532,13 @@ body {
 .operation-body {
   padding: 0 12px 12px;
   border-top: 1px solid var(--border);
+  overflow: visible;
 }
 
 /* Settings */
 .operation-settings {
   padding-top: 10px;
+  overflow: visible;
 }
 
 .settings-grid {
@@ -538,18 +546,26 @@ body {
   grid-template-columns: 1fr 1fr;
   gap: 8px;
   margin-top: 8px;
+  align-items: start;
 }
 
 .setting-row {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  min-width: 0;
 }
 
 .setting-row label {
   font-size: 11px;
   color: var(--text-secondary);
   font-weight: 500;
+  min-height: 32px;
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 0 4px;
+  line-height: 1.25;
 }
 
 .setting-row .unit {

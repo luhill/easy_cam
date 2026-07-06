@@ -364,17 +364,26 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
 
       {adaptiveMode && (
         <div className="operation-settings-footer">
-          <HintTooltip text="Viewer debug: orange = slot centerline guide; green trochoid loops = samples classified as on-spur (scaled radius)." />
+          <HintTooltip
+            placement="top"
+            text="Viewer debug: orange = slot centerline guide; green trochoid loops = samples classified as on-spur (scaled radius)."
+          />
         </div>
       )}
       {operation.type === 'drill' && (
         <div className="operation-settings-footer">
-          <HintTooltip text="Click holes to add/remove. Multiple holes are drilled in selection order with rapid moves between them." />
+          <HintTooltip
+            placement="top"
+            text="Click holes to add/remove. Multiple holes are drilled in selection order with rapid moves between them."
+          />
         </div>
       )}
       {operation.type === 'helix' && (
         <div className="operation-settings-footer">
-          <HintTooltip text="Click holes to add/remove. Invalid holes (red) are skipped: hole diameter must exceed tool diameter, and taper must not collapse the helix radius before final depth." />
+          <HintTooltip
+            placement="top"
+            text="Click holes to add/remove. Invalid holes (red) are skipped: hole diameter must exceed tool diameter, and taper must not collapse the helix radius before final depth."
+          />
         </div>
       )}
     </div>

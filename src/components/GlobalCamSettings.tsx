@@ -41,7 +41,7 @@ export function GlobalCamSettings() {
         <div className="setting-row">
           <label>
             <LabelWithHint hint="1× is finest detail. 2× (default) uses half as many points. Values below 1× increase point count sharply — raise resolution if toolpaths look jagged or hit the point limit.">
-              Toolpath Resolution
+              Resolution
             </LabelWithHint>{' '}
             <span className="unit">(×)</span>
           </label>

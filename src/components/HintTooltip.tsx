@@ -2,11 +2,12 @@ import type { ReactNode } from 'react';
 
 interface HintTooltipProps {
   text: string;
+  placement?: 'top' | 'bottom';
 }
 
-export function HintTooltip({ text }: HintTooltipProps) {
+export function HintTooltip({ text, placement = 'bottom' }: HintTooltipProps) {
   return (
-    <span className="hint-tooltip">
+    <span className={`hint-tooltip${placement === 'top' ? ' hint-tooltip--top' : ''}`}>
       <button
         type="button"
         className="hint-tooltip-trigger"
