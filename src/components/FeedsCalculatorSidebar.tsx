@@ -4,8 +4,6 @@ import {
   formatFactor,
   formatFeed,
   getMaterialProfile,
-  MATERIAL_PROFILES,
-  type MaterialId,
 } from '../lib/feedsSpeedsCalculator';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { FeedsMaterialEditor } from './FeedsMaterialEditor';
@@ -61,14 +59,14 @@ function ChevronIcon({ collapsed }: { collapsed: boolean }) {
 
 export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSidebarProps) {
   const feedsCalculator = useSettingsStore((s) => s.feedsCalculator);
-  const feedsMaterialProfiles = useSettingsStore((s) => s.feedsMaterialProfiles);
+  const feedsMaterialRows = useSettingsStore((s) => s.feedsMaterialRows);
   const setFeedsCalculatorMaterial = useSettingsStore((s) => s.setFeedsCalculatorMaterial);
   const updateFeedsCalculator = useSettingsStore((s) => s.updateFeedsCalculator);
-  const setFeedsMaterialProfiles = useSettingsStore((s) => s.setFeedsMaterialProfiles);
+  const setFeedsMaterialRows = useSettingsStore((s) => s.setFeedsMaterialRows);
   const [materialEditorOpen, setMaterialEditorOpen] = useState(false);
 
   const { materialId, toolDiameterMm, fluteCount, rpm, chipLoadMm, stepoverPct } = feedsCalculator;
-  const profile = getMaterialProfile(materialId, feedsMaterialProfiles);
+  const profile = getMaterialProfile(materialId, feedsMaterialRows);
 
   const results = useMemo(
     () =>
@@ -81,9 +79,9 @@ export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSideba
           chipLoadMm,
           stepoverPct,
         },
-        feedsMaterialProfiles
+        feedsMaterialRows
       ),
-    [materialId, toolDiameterMm, fluteCount, rpm, chipLoadMm, stepoverPct, feedsMaterialProfiles]
+    [materialId, toolDiameterMm, fluteCount, rpm, chipLoadMm, stepoverPct, feedsMaterialRows]
   );
 
   return (
@@ -133,9 +131,9 @@ export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSideba
                 <select
                   id="fsc-material"
                   value={materialId}
-                  onChange={(e) => setFeedsCalculatorMaterial(e.target.value as MaterialId)}
+                  onChange={(e) => setFeedsCalculatorMaterial(e.target.value)}
                 >
-                  {MATERIAL_PROFILES.map((m) => (
+                  {feedsMaterialRows.map((m) => (
                     <option key={m.id} value={m.id}>
                       {m.name}
                     </option>
@@ -294,9 +292,9 @@ export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSideba
 
       <FeedsMaterialEditor
         open={materialEditorOpen}
-        storedProfiles={feedsMaterialProfiles}
-        onSave={(profiles) => {
-          setFeedsMaterialProfiles(profiles);
+        materialRows={feedsMaterialRows}
+        onSave={(rows) => {
+          setFeedsMaterialRows(rows);
           setMaterialEditorOpen(false);
         }}
         onCancel={() => setMaterialEditorOpen(false)}

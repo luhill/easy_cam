@@ -2,11 +2,11 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { ToolOrigin } from '../lib/geometryProcessing';
 import type { UiTheme } from '../lib/uiTheme';
-import { getMaterialDefaults, getMaterialProfile, MATERIAL_PROFILES, type MaterialId } from '../lib/feedsSpeedsCalculator';
+import { getMaterialProfile, MATERIAL_PROFILES } from '../lib/feedsSpeedsCalculator';
 import {
-  defaultStoredMaterialProfiles,
-  normalizeStoredMaterialProfiles,
-  type StoredMaterialProfiles,
+  defaultFeedsMaterialRows,
+  normalizeFeedsMaterialRows,
+  type FeedsMaterialLibrary,
 } from '../lib/feedsMaterialProfiles';
 import { DEFAULT_WCS_Z_ABOVE_STOCK } from '../lib/cutDepth';
 import {
@@ -48,7 +48,7 @@ M6; make sure M6 macro is setup in your machine
 };
 
 export interface FeedsCalculatorInputs {
-  materialId: MaterialId;
+  materialId: string;
   toolDiameterMm: number;
   fluteCount: number;
   rpm: number;
@@ -56,35 +56,27 @@ export interface FeedsCalculatorInputs {
   stepoverPct: number;
 }
 
-function defaultFeedsCalculatorInputs(): FeedsCalculatorInputs {
-  const materialId: MaterialId = 'hardwood';
-  const defaults = getMaterialDefaults(materialId);
+function defaultFeedsCalculatorInputs(rows: FeedsMaterialLibrary): FeedsCalculatorInputs {
+  const materialId = rows.find((row) => row.id === 'hardwood')?.id ?? rows[0]?.id ?? 'hardwood';
+  const profile = getMaterialProfile(materialId, rows);
   return {
     materialId,
     toolDiameterMm: 6,
     fluteCount: 2,
     rpm: 10000,
-    chipLoadMm: defaults.chipLoad,
-    stepoverPct: defaults.stepoverPercentage,
+    chipLoadMm: profile.chipLoad,
+    stepoverPct: profile.stepoverPercentage,
   };
 }
 
-const MATERIAL_IDS: MaterialId[] = [
-  'mild-steel',
-  'solid-aluminium',
-  'aluminium-composite',
-  'hardwood',
-  'softwood-plywood',
-  'plastics-acrylic',
-];
-
 function normalizeFeedsCalculatorInputs(
-  value: Partial<FeedsCalculatorInputs> | undefined
+  value: Partial<FeedsCalculatorInputs> | undefined,
+  rows: FeedsMaterialLibrary
 ): FeedsCalculatorInputs {
-  const defaults = defaultFeedsCalculatorInputs();
+  const defaults = defaultFeedsCalculatorInputs(rows);
   if (!value) return defaults;
-  const materialId = MATERIAL_IDS.includes(value.materialId as MaterialId)
-    ? (value.materialId as MaterialId)
+  const materialId = rows.some((row) => row.id === value.materialId)
+    ? (value.materialId as string)
     : defaults.materialId;
   return {
     materialId,
@@ -121,7 +113,7 @@ interface SettingsState {
   isometricProjection: boolean;
   uiTheme: UiTheme;
   feedsCalculator: FeedsCalculatorInputs;
-  feedsMaterialProfiles: StoredMaterialProfiles;
+  feedsMaterialRows: FeedsMaterialLibrary;
   setGcodeTemplate: (key: keyof GcodeTemplates, value: string) => void;
   setGcodeOutputFormat: (format: GcodeOutputFormat) => void;
   resetGcodeTemplates: () => void;
@@ -131,10 +123,12 @@ interface SettingsState {
   setTravelFeedRate: (mmPerMin: number) => void;
   setIsometricProjection: (enabled: boolean) => void;
   setUiTheme: (theme: UiTheme) => void;
-  setFeedsCalculatorMaterial: (materialId: MaterialId) => void;
+  setFeedsCalculatorMaterial: (materialId: string) => void;
   updateFeedsCalculator: (patch: Partial<FeedsCalculatorInputs>) => void;
-  setFeedsMaterialProfiles: (profiles: StoredMaterialProfiles) => void;
+  setFeedsMaterialRows: (rows: FeedsMaterialLibrary) => void;
 }
+
+const defaultRows = defaultFeedsMaterialRows(MATERIAL_PROFILES);
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
@@ -147,8 +141,8 @@ export const useSettingsStore = create<SettingsState>()(
       travelFeedRate: DEFAULT_TRAVEL_FEED_RATE,
       isometricProjection: false,
       uiTheme: 'dark',
-      feedsCalculator: defaultFeedsCalculatorInputs(),
-      feedsMaterialProfiles: defaultStoredMaterialProfiles(MATERIAL_PROFILES),
+      feedsCalculator: defaultFeedsCalculatorInputs(defaultRows),
+      feedsMaterialRows: defaultRows,
       setGcodeTemplate: (key, value) =>
         set((state) => ({
           gcodeTemplates: { ...state.gcodeTemplates, [key]: value },
@@ -180,7 +174,7 @@ export const useSettingsStore = create<SettingsState>()(
       setUiTheme: (theme) => set({ uiTheme: theme === 'light' ? 'light' : 'dark' }),
       setFeedsCalculatorMaterial: (materialId) =>
         set((state) => {
-          const profile = getMaterialProfile(materialId, state.feedsMaterialProfiles);
+          const profile = getMaterialProfile(materialId, state.feedsMaterialRows);
           return {
             feedsCalculator: {
               ...state.feedsCalculator,
@@ -192,40 +186,82 @@ export const useSettingsStore = create<SettingsState>()(
         }),
       updateFeedsCalculator: (patch) =>
         set((state) => ({
-          feedsCalculator: normalizeFeedsCalculatorInputs({
-            ...state.feedsCalculator,
-            ...patch,
-          }),
+          feedsCalculator: normalizeFeedsCalculatorInputs(
+            {
+              ...state.feedsCalculator,
+              ...patch,
+            },
+            state.feedsMaterialRows
+          ),
         })),
-      setFeedsMaterialProfiles: (profiles) =>
-        set({
-          feedsMaterialProfiles: normalizeStoredMaterialProfiles(profiles, MATERIAL_PROFILES),
+      setFeedsMaterialRows: (rows) =>
+        set((state) => {
+          const feedsMaterialRows = normalizeFeedsMaterialRows(rows, MATERIAL_PROFILES);
+          const materialStillExists = feedsMaterialRows.some(
+            (row) => row.id === state.feedsCalculator.materialId
+          );
+          const nextMaterialId = materialStillExists
+            ? state.feedsCalculator.materialId
+            : (feedsMaterialRows[0]?.id ?? state.feedsCalculator.materialId);
+          const profile = getMaterialProfile(nextMaterialId, feedsMaterialRows);
+          return {
+            feedsMaterialRows,
+            feedsCalculator: materialStillExists
+              ? state.feedsCalculator
+              : {
+                  ...state.feedsCalculator,
+                  materialId: nextMaterialId,
+                  chipLoadMm: profile.chipLoad,
+                  stepoverPct: profile.stepoverPercentage,
+                },
+          };
         }),
     }),
     {
       name: 'easy-cam-gcode-settings',
-      version: 4,
+      version: 5,
       migrate: (persisted, version) => {
-      const state = persisted as Record<string, unknown>;
-      if (state.gcodeOutputFormat === 'marlin') {
-        state.gcodeOutputFormat = 'fluidnc';
-      }
-      if (version < 2 && state.uiTheme !== 'light' && state.uiTheme !== 'dark') {
-        state.uiTheme = 'dark';
-      }
-      if (version < 3) {
-        state.feedsCalculator = normalizeFeedsCalculatorInputs(
-          state.feedsCalculator as Partial<FeedsCalculatorInputs> | undefined
-        );
-      }
-      if (version < 4) {
-        state.feedsMaterialProfiles = normalizeStoredMaterialProfiles(
-          state.feedsMaterialProfiles as Partial<StoredMaterialProfiles> | undefined,
-          MATERIAL_PROFILES
-        );
-      }
-      return state;
-    },
+        const state = persisted as Record<string, unknown>;
+        if (state.gcodeOutputFormat === 'marlin') {
+          state.gcodeOutputFormat = 'fluidnc';
+        }
+        if (version < 2 && state.uiTheme !== 'light' && state.uiTheme !== 'dark') {
+          state.uiTheme = 'dark';
+        }
+
+        let rows = defaultFeedsMaterialRows(MATERIAL_PROFILES);
+        if (version >= 4 && state.feedsMaterialRows) {
+          rows = normalizeFeedsMaterialRows(
+            state.feedsMaterialRows as FeedsMaterialLibrary,
+            MATERIAL_PROFILES
+          );
+        } else if (version >= 4 && state.feedsMaterialProfiles) {
+          rows = normalizeFeedsMaterialRows(
+            state.feedsMaterialProfiles as FeedsMaterialLibrary,
+            MATERIAL_PROFILES
+          );
+        } else if (state.feedsMaterialProfiles) {
+          rows = normalizeFeedsMaterialRows(
+            state.feedsMaterialProfiles as FeedsMaterialLibrary,
+            MATERIAL_PROFILES
+          );
+        }
+        state.feedsMaterialRows = rows;
+        delete state.feedsMaterialProfiles;
+
+        if (version < 3) {
+          state.feedsCalculator = normalizeFeedsCalculatorInputs(
+            state.feedsCalculator as Partial<FeedsCalculatorInputs> | undefined,
+            rows
+          );
+        } else {
+          state.feedsCalculator = normalizeFeedsCalculatorInputs(
+            state.feedsCalculator as Partial<FeedsCalculatorInputs> | undefined,
+            rows
+          );
+        }
+        return state;
+      },
     }
   )
 );
