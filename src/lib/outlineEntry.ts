@@ -2,7 +2,7 @@ import type { LoopPoint, OperationDefaults, SelectedGeometry, ToolpathPoint } fr
 import type { ToolOrigin } from './geometryProcessing';
 import {
   closestPointOnLoop2D,
-  offsetLoop2D,
+  offsetLoop2DMinkowski,
   signedLoopArea2D,
 } from './geometryProcessing';
 import {
@@ -45,10 +45,11 @@ function innerToolCenterOffset(settings: OperationDefaults, stockAllowance = 0):
 export function buildOutlineToolCenterline(
   partLoop: LoopPoint[],
   settings: OperationDefaults,
-  stockAllowance = 0
+  stockAllowance = 0,
+  maxSegmentLen = 0.3
 ): LoopPoint[] {
   const offset = innerToolCenterOffset(settings, stockAllowance);
-  const toolLoop = offsetLoop2D(partLoop, offset);
+  const toolLoop = offsetLoop2DMinkowski(partLoop, offset, maxSegmentLen);
   const ccw = signedLoopArea2D(partLoop) >= 0;
   const reverse = settings.climbMilling ? ccw : !ccw;
   return reverse ? [...toolLoop].reverse() : toolLoop;
@@ -182,7 +183,7 @@ export function stationOnContour(
   return findClosestSOnGuide(guide, point).s;
 }
 
-/** One full contour loop sampled by arc length, starting/ending at startS. */
+/** One contour loop sampled by arc length, starting at startS for up to arcLengthToCut. */
 export function sampleContourLoopFromArcS(
   traverse: LoopPoint[],
   layerZ: number,
@@ -190,13 +191,17 @@ export function sampleContourLoopFromArcS(
   startS: number,
   sampleSpacing: number,
   forward = true,
-  skipNear?: { x: number; y: number; z: number }
+  skipNear?: { x: number; y: number; z: number },
+  arcLengthToCut?: number
 ): ToolpathPoint[] {
   const guide = buildArcLengthGuide(traverse, Math.max(sampleSpacing, 0.25));
   const total = guide.totalLength;
   if (total <= 0) return [];
 
-  const steps = Math.max(8, Math.ceil(total / sampleSpacing));
+  const cutLength = Math.min(Math.max(arcLengthToCut ?? total, 0), total);
+  if (cutLength <= 1e-6) return [];
+
+  const steps = Math.max(8, Math.ceil(cutLength / sampleSpacing));
   const points: ToolpathPoint[] = [];
   const startFrame = sampleGuideAtS(guide, startS);
 
@@ -215,9 +220,8 @@ export function sampleContourLoopFromArcS(
     });
   }
 
-  // Always march the full perimeter: deltas from (1/steps)*total through total.
   for (let i = 1; i <= steps; i++) {
-    const delta = (i / steps) * total;
+    const delta = (i / steps) * cutLength;
     const s = forward
       ? advanceGuideArcLength(guide, startS, delta, true)
       : advanceGuideArcLength(guide, startS, delta, false);

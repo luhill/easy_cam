@@ -6,7 +6,6 @@ import { DEFAULT_SETTINGS } from '../types/operations';
 import type { PartBounds } from './geometryProcessing';
 import {
   closestPointOnLoop2D,
-  offsetLoop2D,
   offsetLoop2DMinkowski,
   signedLoopArea2D,
 } from './geometryProcessing';
@@ -25,7 +24,6 @@ import {
   resolveStandardHelixEntryLayout,
   resolveStandardOutlineEntryStart,
   sampleContourLoopFromArcS,
-  sampleContourTravelBetween,
   stationOnContour,
 } from './outlineEntry';
 import {
@@ -56,6 +54,8 @@ import {
 } from './entryPath';
 import {
   adaptiveForwardIncrement,
+  buildArcLengthGuide,
+  guideArcLengthBetween,
   sampleGuideAtS,
 } from './trochoidalPath';
 import {
@@ -164,10 +164,11 @@ function appendPoints(target: ToolpathPoint[], points: ToolpathPoint[]): boolean
 function contourTraverse(
   loop: LoopPoint[],
   settings: Operation['settings'],
-  extraRadialStock = 0
+  extraRadialStock = 0,
+  resolution = DEFAULT_TOOLPATH_RESOLUTION
 ): LoopPoint[] {
   const offset = toolRadius(settings) + (settings.radialOffset ?? 0) + extraRadialStock;
-  const toolLoop = offsetLoop2D(loop, offset);
+  const toolLoop = offsetLoop2DMinkowski(loop, offset, minkowskiSegmentLen(resolution));
   const ccw = signedLoopArea2D(loop) >= 0;
   const reverse = settings.climbMilling ? ccw : !ccw;
   return reverse ? [...toolLoop].reverse() : toolLoop;
@@ -181,7 +182,8 @@ function appendContourLoopFromArcS(
   startS: number,
   sampleSpacing: number,
   forward = true,
-  skipNear?: { x: number; y: number; z: number }
+  skipNear?: { x: number; y: number; z: number },
+  arcLengthToCut?: number
 ): boolean {
   const skip = skipNear ?? lastPathPoint(points) ?? undefined;
   const loopPts = sampleContourLoopFromArcS(
@@ -191,32 +193,10 @@ function appendContourLoopFromArcS(
     startS,
     sampleSpacing,
     forward,
-    skip
+    skip,
+    arcLengthToCut
   );
   return appendPoints(points, loopPts);
-}
-
-function appendContourTravelToEntry(
-  points: ToolpathPoint[],
-  traverse: LoopPoint[],
-  entryStart: { x: number; y: number },
-  z: number,
-  feedRate: number,
-  sampleSpacing: number,
-  forward = true
-): boolean {
-  const last = lastPathPoint(points);
-  if (!last) return true;
-  const travel = sampleContourTravelBetween(
-    traverse,
-    last,
-    entryStart,
-    z,
-    feedRate,
-    sampleSpacing,
-    forward
-  );
-  return appendPoints(points, travel);
 }
 
 function appendOutlineApproachToStart(
@@ -283,7 +263,7 @@ function generateStandardHelixOutlinePath(
   if (loop.length === 0 || layers.length === 0) return points;
 
   const stockAllowance = finishingStockAllowance(settings);
-  const traverse = contourTraverse(loop, settings, stockAllowance);
+  const traverse = contourTraverse(loop, settings, stockAllowance, globals.resolution);
   if (traverse.length === 0) return points;
 
   const entryLayout = resolveStandardHelixEntryLayout(
@@ -426,7 +406,7 @@ function generateStandardOutlinePath(
   if (loop.length === 0 || layers.length === 0) return points;
 
   const stockAllowance = finishingStockAllowance(settings);
-  const traverse = contourTraverse(loop, settings, stockAllowance);
+  const traverse = contourTraverse(loop, settings, stockAllowance, globals.resolution);
   if (traverse.length === 0) return points;
 
   const entryStart = resolveStandardOutlineEntryStart(
@@ -439,6 +419,8 @@ function generateStandardOutlinePath(
   const approachZ = outlineApproachWorldZ(topZ, globals.safeHeight, settings.zStartOffset);
   const rampSampleSpacing = pathSampleSpacing(globals.resolution);
   const rampLength = outlineRampLengthMm(settings);
+  const traverseGuide = buildArcLengthGuide(traverse, Math.max(rampSampleSpacing, 0.25));
+  const traverseLength = traverseGuide.totalLength;
 
   appendOutlineApproachToStart(points, entryStart, safeZ, approachZ, settings.plungeRate);
 
@@ -447,24 +429,9 @@ function generateStandardOutlinePath(
   for (let li = 0; li < layers.length; li++) {
     const layerZ = layers[li];
     const fromZ = li === 0 ? approachZ : layers[li - 1];
-
-    if (li > 0) {
-      if (
-        !appendContourTravelToEntry(
-          points,
-          traverse,
-          entryStart,
-          fromZ,
-          settings.feedRate,
-          rampSampleSpacing,
-          climbForward
-        )
-      ) {
-        break;
-      }
-    }
-
-    let loopStartS = stationOnContour(traverse, entryStart, rampSampleSpacing);
+    const entryStartS = stationOnContour(traverse, entryStart, rampSampleSpacing);
+    let loopStartS = entryStartS;
+    let loopArcLength = traverseLength;
 
     if (entryType === 'straight') {
       if (
@@ -493,6 +460,13 @@ function generateStandardOutlinePath(
       );
       if (!appendPoints(points, ramp.points)) break;
       loopStartS = ramp.endS;
+      const coveredArc = guideArcLengthBetween(
+        traverseLength,
+        entryStartS,
+        ramp.endS,
+        climbForward
+      );
+      loopArcLength = Math.max(traverseLength - coveredArc, 0);
     }
 
     if (
@@ -503,7 +477,9 @@ function generateStandardOutlinePath(
         settings.feedRate,
         loopStartS,
         rampSampleSpacing,
-        climbForward
+        climbForward,
+        undefined,
+        loopArcLength
       )
     ) {
       break;
@@ -673,7 +649,7 @@ function appendConnectedFinishingPass(
 
   const finishPts =
     finishPath ??
-    contourTraverse(partLoop, settings, 0).map((p) => ({
+    contourTraverse(partLoop, settings, 0, globals.resolution).map((p) => ({
       x: p.x,
       y: p.y,
       z: finishZ,
