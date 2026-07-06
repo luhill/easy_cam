@@ -274,7 +274,13 @@ function generateStandardHelixOutlinePath(
   const traverse = contourTraverse(loop, settings, stockAllowance);
   if (traverse.length === 0) return points;
 
-  const entryLayout = resolveStandardHelixEntryLayout(loop, settings, stockAllowance, geometry);
+  const entryLayout = resolveStandardHelixEntryLayout(
+    loop,
+    settings,
+    stockAllowance,
+    geometry,
+    globals.toolOrigin
+  );
   if (!entryLayout) {
     return generateStandardOutlinePath(loop, settings, ctx, globals, geometry, 'straight');
   }
@@ -411,7 +417,13 @@ function generateStandardOutlinePath(
   const traverse = contourTraverse(loop, settings, stockAllowance);
   if (traverse.length === 0) return points;
 
-  const entryStart = resolveStandardOutlineEntryStart(loop, settings, stockAllowance, geometry);
+  const entryStart = resolveStandardOutlineEntryStart(
+    loop,
+    settings,
+    stockAllowance,
+    geometry,
+    globals.toolOrigin
+  );
   const approachZ = outlineApproachWorldZ(topZ, globals.safeHeight, settings.zStartOffset);
   const rampSampleSpacing = pathSampleSpacing(globals.resolution);
   const rampLength = outlineRampLengthMm(settings);
@@ -996,7 +1008,8 @@ function generateAdaptiveOutlinePath(
     adaptiveEntryOverridesFromGeometry(geometry),
     segLen,
     trochSampleSpacing,
-    globals.resolution
+    globals.resolution,
+    globals.toolOrigin
   );
   if (!entryLayout) {
     return generateStandardOutlinePath(loop, settings, ctx, globals, geometry);

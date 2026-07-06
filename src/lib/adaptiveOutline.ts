@@ -1,4 +1,5 @@
 import type { LoopPoint, OperationDefaults } from '../types/operations';
+import type { ToolOrigin } from './geometryProcessing';
 import type { CornerSpurOptions } from './cornerSpurs';
 import { offsetLoop2DMinkowski, distanceToLoop2D, closestPointOnLoop2D } from './geometryProcessing';
 import { adaptiveForwardIncrement } from './trochoidalPath';
@@ -123,9 +124,10 @@ export function boreCenterOffsetFromInnerGuide(settings: OperationDefaults): num
 /** Default helix entry: bore hugging inner slot path, as close to the part as allowed. */
 export function computeDefaultEntryPoint(
   partLoop: LoopPoint[],
-  settings: OperationDefaults
+  settings: OperationDefaults,
+  toolOrigin?: Pick<ToolOrigin, 'x' | 'y'> | null
 ): { x: number; y: number } {
-  if (partLoop.length < 2) return { x: 0, y: 0 };
+  if (partLoop.length < 2) return { x: toolOrigin?.x ?? 0, y: toolOrigin?.y ?? 0 };
 
   const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
   const guide = offsetLoop2DMinkowski(partLoop, slot.innerCenterOffset);
@@ -134,13 +136,24 @@ export function computeDefaultEntryPoint(
   const outwardOffset = boreCenterOffsetFromInnerGuide(settings);
 
   let bestGuide = guide[0];
-  let bestScore = Infinity;
-  for (const p of guide) {
-    const d = distanceToLoop2D(p.x, p.y, partLoop);
-    const score = Math.abs(d - innerDist);
-    if (score < bestScore) {
-      bestScore = score;
-      bestGuide = p;
+  if (toolOrigin) {
+    let bestDist = Infinity;
+    for (const p of guide) {
+      const d = Math.hypot(p.x - toolOrigin.x, p.y - toolOrigin.y);
+      if (d < bestDist) {
+        bestDist = d;
+        bestGuide = p;
+      }
+    }
+  } else {
+    let bestScore = Infinity;
+    for (const p of guide) {
+      const d = distanceToLoop2D(p.x, p.y, partLoop);
+      const score = Math.abs(d - innerDist);
+      if (score < bestScore) {
+        bestScore = score;
+        bestGuide = p;
+      }
     }
   }
 
@@ -158,11 +171,12 @@ export function computeDefaultEntryPoint(
 export function resolveAdaptiveEntryPoint(
   partLoop: LoopPoint[],
   settings: OperationDefaults,
-  entry?: { x: number; y: number } | null
+  entry?: { x: number; y: number } | null,
+  toolOrigin?: Pick<ToolOrigin, 'x' | 'y'> | null
 ): { x: number; y: number } {
   const minDist = minimumEntryCenterDist(settings);
   if (entry) {
     return ensureEntryOutsidePart(partLoop, entry, minDist);
   }
-  return computeDefaultEntryPoint(partLoop, settings);
+  return computeDefaultEntryPoint(partLoop, settings, toolOrigin);
 }

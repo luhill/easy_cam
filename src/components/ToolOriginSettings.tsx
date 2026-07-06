@@ -1,9 +1,11 @@
+import { useAppStore } from '../store/useAppStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { LabelWithHint } from './HintTooltip';
 
 export function ToolOriginSettings() {
   const toolOrigin = useSettingsStore((s) => s.toolOrigin);
   const setToolOrigin = useSettingsStore((s) => s.setToolOrigin);
+  const regenerateToolpaths = useAppStore((s) => s.regenerateToolpaths);
 
   return (
     <div className="tool-origin-settings">
@@ -24,9 +26,10 @@ export function ToolOriginSettings() {
               type="number"
               value={toolOrigin[axis]}
               step={0.1}
-              onChange={(e) =>
-                setToolOrigin({ [axis]: parseFloat(e.target.value) || 0 })
-              }
+              onChange={(e) => {
+                setToolOrigin({ [axis]: parseFloat(e.target.value) || 0 });
+                regenerateToolpaths();
+              }}
             />
           </div>
         ))}

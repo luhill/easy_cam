@@ -798,7 +798,12 @@ function SceneContent({
 
   const adaptiveDebugGuides = useMemo(() => {
     if (!partBounds) return null;
-    const globals = { safeHeight, resolution: toolpathResolution, travelFeedRate };
+    const globals = {
+      safeHeight,
+      resolution: toolpathResolution,
+      travelFeedRate,
+      toolOrigin,
+    };
     const adaptiveOps = operations.filter(
       (op) => op.visible && op.enabled && isAdaptiveOutlineOperation(op) && op.geometry?.loops?.[0]
     );
@@ -814,6 +819,7 @@ function SceneContent({
     safeHeight,
     toolpathResolution,
     travelFeedRate,
+    toolOrigin,
   ]);
 
   const adaptiveEntry = useMemo(() => {
@@ -843,7 +849,8 @@ function SceneContent({
         adaptiveEntryOverridesFromGeometry(op.geometry),
         segLen,
         trochSampleSpacing,
-        toolpathResolution
+        toolpathResolution,
+        toolOrigin
       );
       if (!layout) return null;
 
@@ -869,7 +876,8 @@ function SceneContent({
       loop,
       op.settings,
       stockAllowance,
-      op.geometry
+      op.geometry,
+      toolOrigin
     );
     const toolStartArcGuide = buildOutlineEntryArcGuide(
       loop,
@@ -894,6 +902,7 @@ function SceneContent({
     safeHeight,
     toolpathResolution,
     travelFeedRate,
+    toolOrigin,
   ]);
 
   const handleToolStartChange = useCallback(

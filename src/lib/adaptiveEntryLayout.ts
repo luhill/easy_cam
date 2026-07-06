@@ -1,4 +1,5 @@
 import type { LoopPoint, OperationDefaults } from '../types/operations';
+import type { ToolOrigin } from './geometryProcessing';
 import { resolveGuideTraverseSign } from './adaptiveFourZone';
 import {
   buildSlotCenterGuideWithCornerSpurs,
@@ -55,7 +56,8 @@ export function resolveAdaptiveEntryLayout(
   overrides: AdaptiveEntryOverrides | null | undefined,
   centerGuideSegLen: number,
   trochSampleSpacing: number,
-  resolution = 2
+  resolution = 2,
+  toolOrigin?: Pick<ToolOrigin, 'x' | 'y'> | null
 ): AdaptiveEntryLayout | null {
   if (partLoop.length < 2) return null;
 
@@ -86,12 +88,14 @@ export function resolveAdaptiveEntryLayout(
 
   const toolStartOverride = overrides?.toolStartPoint ?? overrides?.entryPoint ?? null;
   const toolStart = toolStartOverride
-    ? resolveAdaptiveEntryPoint(partLoop, settings, toolStartOverride)
-    : computeDefaultEntryPoint(partLoop, settings);
+    ? resolveAdaptiveEntryPoint(partLoop, settings, toolStartOverride, toolOrigin)
+    : computeDefaultEntryPoint(partLoop, settings, toolOrigin);
 
   const slotJoinSnap = overrides?.slotJoinPoint
     ? findClosestSOnGuide(arcGuide, overrides.slotJoinPoint)
-    : findClosestSOnGuide(arcGuide, toolStart);
+    : toolOrigin
+      ? findClosestSOnGuide(arcGuide, toolOrigin)
+      : findClosestSOnGuide(arcGuide, toolStart);
   const slotJoinS = slotJoinSnap.s;
   const slotJoinFrame = sampleGuideAtS(arcGuide, slotJoinS);
 

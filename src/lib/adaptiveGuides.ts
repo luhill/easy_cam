@@ -47,7 +47,8 @@ function resolveGuideContext(
     adaptiveEntryOverridesFromGeometry(geometry),
     segLen,
     trochSampleSpacing,
-    globals.resolution
+    globals.resolution,
+    globals.toolOrigin
   );
   const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
   const finalZ = finalCutWorldZ(ctx, settings.depthOffset);

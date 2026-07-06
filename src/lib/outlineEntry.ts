@@ -1,4 +1,5 @@
 import type { LoopPoint, OperationDefaults, SelectedGeometry, ToolpathPoint } from '../types/operations';
+import type { ToolOrigin } from './geometryProcessing';
 import {
   closestPointOnLoop2D,
   offsetLoop2D,
@@ -65,20 +66,41 @@ export function buildOutlineEntryArcGuide(
   );
 }
 
+export type ToolOriginXY = Pick<ToolOrigin, 'x' | 'y'>;
+
+/** Closest point on a closed loop to the tool origin XY. */
+export function closestPointOnLoopToOrigin(
+  loop: LoopPoint[],
+  origin: ToolOriginXY,
+  sampleSpacing = 0.25
+): { x: number; y: number } {
+  if (loop.length === 0) return { x: origin.x, y: origin.y };
+  const guide = buildArcLengthGuide(loop, Math.max(sampleSpacing, 0.25));
+  if (guide.totalLength <= 0) return { x: loop[0].x, y: loop[0].y };
+  const hit = findClosestSOnGuide(guide, origin);
+  const frame = sampleGuideAtS(guide, hit.s);
+  return { x: frame.x, y: frame.y };
+}
+
 /** Contour point where linear ramp, straight plunge, or helix tangent begins. */
 export function resolveStandardOutlineEntryStart(
   partLoop: LoopPoint[],
   settings: OperationDefaults,
   stockAllowance: number,
-  geometry: SelectedGeometry | null | undefined
+  geometry: SelectedGeometry | null | undefined,
+  toolOrigin?: ToolOriginXY | null
 ): { x: number; y: number } {
   const traverse = buildOutlineToolCenterline(partLoop, settings, stockAllowance);
-  if (traverse.length === 0) return { x: 0, y: 0 };
+  if (traverse.length === 0) return { x: toolOrigin?.x ?? 0, y: toolOrigin?.y ?? 0 };
 
   const override = geometry?.toolStartPoint ?? geometry?.entryPoint ?? null;
   if (override) {
     const hit = closestPointOnLoop2D(override.x, override.y, traverse);
     return { x: hit.x, y: hit.y };
+  }
+
+  if (toolOrigin) {
+    return closestPointOnLoopToOrigin(traverse, toolOrigin);
   }
 
   return { x: traverse[0].x, y: traverse[0].y };
@@ -115,11 +137,18 @@ export function resolveStandardHelixEntryLayout(
   partLoop: LoopPoint[],
   settings: OperationDefaults,
   stockAllowance: number,
-  geometry: SelectedGeometry | null | undefined
+  geometry: SelectedGeometry | null | undefined,
+  toolOrigin?: ToolOriginXY | null
 ): StandardHelixEntryLayout | null {
   if (partLoop.length < 2) return null;
 
-  const entryStart = resolveStandardOutlineEntryStart(partLoop, settings, stockAllowance, geometry);
+  const entryStart = resolveStandardOutlineEntryStart(
+    partLoop,
+    settings,
+    stockAllowance,
+    geometry,
+    toolOrigin
+  );
   const joinPoint = entryStart;
   const minDist = minimumStandardHelixEntryCenterDist(settings, stockAllowance);
   const helixR = resolveHelixRadius(settings);

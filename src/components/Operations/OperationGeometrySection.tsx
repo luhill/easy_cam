@@ -59,11 +59,13 @@ function formatGeometrySummary(operation: Operation, cutZContext: CutZContext): 
     if (!hasOutline) return 'None selected';
     const loop = geo.loops![0];
     const stockAllowance = finishingStockAllowance(operation.settings);
+    const toolOrigin = useSettingsStore.getState().toolOrigin;
     const entryStart = resolveStandardOutlineEntryStart(
       loop,
       operation.settings,
       stockAllowance,
-      geo
+      geo,
+      toolOrigin
     );
     const entryLabel =
       operation.settings.outlineEntryType === 'helix' ? 'entry' : 'start';
@@ -83,13 +85,15 @@ function formatGeometrySummary(operation: Operation, cutZContext: CutZContext): 
       roughSlot.trochoidRadius,
       resolution
     );
+    const toolOrigin = useSettingsStore.getState().toolOrigin;
     const layout = resolveAdaptiveEntryLayout(
       loop,
       operation.settings,
       adaptiveEntryOverridesFromGeometry(geo),
       segLen,
       trochSampleSpacing,
-      resolution
+      resolution,
+      toolOrigin
     );
     if (layout) {
       parts.push(`start (${layout.toolStart.x.toFixed(1)}, ${layout.toolStart.y.toFixed(1)})`);
@@ -142,7 +146,9 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
   const isEditingEntry = isActive && selectionMode && selectionSubMode === 'entry-point';
   const isSelectingGeometry = isActive && selectionMode && selectionSubMode !== 'entry-point';
 
-  const entryLayout = (() => {
+  const toolOrigin = useSettingsStore((s) => s.toolOrigin);
+
+  const entryLayout = useMemo(() => {
     if (!hasEditableEntry || !operation.geometry?.loops?.[0]) return null;
     const loop = operation.geometry.loops[0];
     if (isAdaptiveOutlineOperation(operation)) {
@@ -160,7 +166,8 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
         adaptiveEntryOverridesFromGeometry(operation.geometry),
         segLen,
         trochSampleSpacing,
-        resolution
+        resolution,
+        toolOrigin
       );
     }
     const stockAllowance = finishingStockAllowance(operation.settings);
@@ -168,10 +175,11 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
       loop,
       operation.settings,
       stockAllowance,
-      operation.geometry
+      operation.geometry,
+      toolOrigin
     );
     return { entryStart };
-  })();
+  }, [hasEditableEntry, operation, toolOrigin]);
 
   const toolStartX =
     operation.geometry?.toolStartPoint?.x ??

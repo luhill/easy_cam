@@ -316,11 +316,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   regenerateToolpaths: () => {
     const { operations, partBounds } = get();
-    const { safeHeight, toolpathResolution, travelFeedRate } = useSettingsStore.getState();
+    const { safeHeight, toolpathResolution, travelFeedRate, toolOrigin } = useSettingsStore.getState();
     const { segments, warnings } = generateToolpaths(operations, partBounds, {
       safeHeight,
       resolution: toolpathResolution,
       travelFeedRate,
+      toolOrigin,
     });
     set({ toolpaths: segments, toolpathWarnings: warnings, simulationDistance: 0, simulationPlaying: false, simulationWindowStart: 0, simulationWindowEnd: 1 });
   },
