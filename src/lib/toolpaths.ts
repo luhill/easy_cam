@@ -168,9 +168,10 @@ function appendContourLoopFromArcS(
   feedRate: number,
   startS: number,
   sampleSpacing: number,
-  forward = true
+  forward = true,
+  skipNear?: { x: number; y: number; z: number }
 ): boolean {
-  const last = lastPathPoint(points);
+  const skip = skipNear ?? lastPathPoint(points) ?? undefined;
   const loopPts = sampleContourLoopFromArcS(
     traverse,
     layerZ,
@@ -178,7 +179,7 @@ function appendContourLoopFromArcS(
     startS,
     sampleSpacing,
     forward,
-    last ?? undefined
+    skip
   );
   return appendPoints(points, loopPts);
 }
@@ -379,7 +380,7 @@ function generateStandardHelixOutlinePath(
     const finishZ = layers[layers.length - 1];
     appendConnectedFinishingPass(points, loop, settings, finishZ, safeZ, globals);
   } else {
-    points.push({ x: entryStart.x, y: entryStart.y, z: safeZ, rapid: true });
+    appendStraightRetractToSafe(points, safeZ);
   }
 
   return points;
@@ -489,7 +490,7 @@ function generateStandardOutlinePath(
     const finishZ = layers[layers.length - 1];
     appendConnectedFinishingPass(points, loop, settings, finishZ, safeZ, globals);
   } else {
-    points.push({ x: entryStart.x, y: entryStart.y, z: safeZ, rapid: true });
+    appendStraightRetractToSafe(points, safeZ);
   }
 
   return points;
@@ -618,6 +619,30 @@ function appendGeneratedPath(
   return appendPoints(target, generated.slice(start));
 }
 
+function appendStraightRetractToSafe(
+  points: ToolpathPoint[],
+  safeZ: number
+): void {
+  const last = lastPathPoint(points);
+  if (!last) return;
+  if (Math.abs(last.z - safeZ) > 1e-4) {
+    points.push({ x: last.x, y: last.y, z: safeZ, rapid: true });
+  }
+}
+
+function finishContourPointFromToolPosition(
+  partLoop: LoopPoint[],
+  settings: Operation['settings'],
+  toolPos: { x: number; y: number }
+): { x: number; y: number } {
+  const offset = toolRadius(settings) + (settings.radialOffset ?? 0);
+  const onPart = closestPointOnLoop2D(toolPos.x, toolPos.y, partLoop);
+  return {
+    x: onPart.x + onPart.outX * offset,
+    y: onPart.y + onPart.outY * offset,
+  };
+}
+
 function appendConnectedFinishingPass(
   points: ToolpathPoint[],
   partLoop: LoopPoint[],
@@ -645,7 +670,24 @@ function appendConnectedFinishingPass(
   const last = lastPathPoint(points);
   if (last) {
     const traverse = finishPts.map((p) => ({ x: p.x, y: p.y, z: finishZ }));
-    const startS = stationOnContour(traverse, last, sampleSpacing);
+    const finishEntry = finishContourPointFromToolPosition(partLoop, settings, last);
+
+    if (Math.hypot(last.x - finishEntry.x, last.y - finishEntry.y) > 0.05) {
+      if (
+        !appendPoints(points, [
+          { x: finishEntry.x, y: finishEntry.y, z: finishZ, feedRate },
+        ])
+      ) {
+        return false;
+      }
+    }
+
+    const loopAnchor = lastPathPoint(points) ?? {
+      x: finishEntry.x,
+      y: finishEntry.y,
+      z: finishZ,
+    };
+    const startS = stationOnContour(traverse, finishEntry, sampleSpacing);
     if (
       !appendContourLoopFromArcS(
         points,
@@ -654,7 +696,8 @@ function appendConnectedFinishingPass(
         feedRate,
         startS,
         sampleSpacing,
-        true
+        true,
+        loopAnchor
       )
     ) {
       return false;

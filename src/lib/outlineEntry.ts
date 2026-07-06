@@ -169,20 +169,25 @@ export function sampleContourLoopFromArcS(
 
   const steps = Math.max(8, Math.ceil(total / sampleSpacing));
   const points: ToolpathPoint[] = [];
-  let begin = 0;
+  const startFrame = sampleGuideAtS(guide, startS);
 
-  if (skipNear) {
-    const startFrame = sampleGuideAtS(guide, startS);
-    if (
-      Math.hypot(skipNear.x - startFrame.x, skipNear.y - startFrame.y) <
-        sampleSpacing * 0.75 &&
-      Math.abs(skipNear.z - layerZ) < 1e-4
-    ) {
-      begin = 1;
-    }
+  const skipFirstSample =
+    !!skipNear &&
+    Math.hypot(skipNear.x - startFrame.x, skipNear.y - startFrame.y) <
+      sampleSpacing * 0.75 &&
+    Math.abs(skipNear.z - layerZ) < 1e-4;
+
+  if (!skipFirstSample) {
+    points.push({
+      x: startFrame.x,
+      y: startFrame.y,
+      z: layerZ,
+      feedRate,
+    });
   }
 
-  for (let i = begin; i <= steps; i++) {
+  // Always march the full perimeter: deltas from (1/steps)*total through total.
+  for (let i = 1; i <= steps; i++) {
     const delta = (i / steps) * total;
     const s = forward
       ? advanceGuideArcLength(guide, startS, delta, true)
