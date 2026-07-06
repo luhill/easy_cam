@@ -62,7 +62,7 @@ export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSideba
   const [materialId, setMaterialId] = useState<MaterialId>('hardwood');
   const [toolDiameterMm, setToolDiameterMm] = useState(6);
   const [fluteCount, setFluteCount] = useState(2);
-  const [rpm, setRpm] = useState(18000);
+  const [rpm, setRpm] = useState(10000);
   const [chipLoadOverride, setChipLoadOverride] = useState<number | null>(null);
   const [stepoverPct, setStepoverPct] = useState<number | null>(null);
 
@@ -229,6 +229,10 @@ export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSideba
                 <dt>Adjusted feed</dt>
                 <dd>{formatFeed(results.adjustedFeedMmMin)}</dd>
               </div>
+              <div className="feeds-calculator-output-row feeds-calculator-output-row--direction">
+                <dt>Cut direction</dt>
+                <dd>{results.millingDirectionLabel}</dd>
+              </div>
               <div className="feeds-calculator-output-row">
                 <dt>Stepover @ {effectiveStepoverPct.toFixed(0)}%</dt>
                 <dd>{results.stepoverMm.toFixed(2)} mm</dd>
@@ -255,6 +259,7 @@ export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSideba
               </div>
             </dl>
             <p className="feeds-calculator-footnote">
+              {results.millingNote ? `${results.millingDirectionLabel}: ${results.millingNote} ` : ''}
               Adjusted feed applies chip thinning for {effectiveStepoverPct.toFixed(0)}% radial
               engagement ({results.stepoverMm.toFixed(2)} mm). Use adjusted value when stepover is
               below ~50% tool Ø — especially on {profile.isHard ? 'hard materials' : 'softer stock'}.

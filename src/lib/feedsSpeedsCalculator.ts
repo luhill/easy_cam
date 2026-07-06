@@ -1,8 +1,12 @@
 export type MaterialId =
   | 'mild-steel'
+  | 'solid-aluminium'
+  | 'aluminium-composite'
   | 'hardwood'
   | 'softwood-plywood'
   | 'plastics-acrylic';
+
+export type RecommendedMilling = 'climb' | 'conventional';
 
 export interface MaterialProfile {
   id: MaterialId;
@@ -20,6 +24,8 @@ export interface MaterialProfile {
   plungeFeedMinPct: number;
   plungeFeedMaxPct: number;
   isHard: boolean;
+  recommendedMilling: RecommendedMilling;
+  millingNote?: string;
 }
 
 export const MATERIAL_PROFILES: MaterialProfile[] = [
@@ -38,6 +44,44 @@ export const MATERIAL_PROFILES: MaterialProfile[] = [
     plungeFeedMinPct: 20,
     plungeFeedMaxPct: 30,
     isHard: true,
+    recommendedMilling: 'climb',
+    millingNote: 'Keeps constant engagement in adaptive/trochoidal paths.',
+  },
+  {
+    id: 'solid-aluminium',
+    label: 'Solid Aluminium',
+    defaultChipLoadMm: 0.032,
+    stepoverMinPct: 8,
+    stepoverMaxPct: 15,
+    adaptiveDocMinRatio: 0.75,
+    adaptiveDocMaxRatio: 1.5,
+    pocketDocMinRatio: 0.4,
+    pocketDocMaxRatio: 0.8,
+    helixRampMinDeg: 1,
+    helixRampMaxDeg: 1.5,
+    plungeFeedMinPct: 20,
+    plungeFeedMaxPct: 30,
+    isHard: true,
+    recommendedMilling: 'climb',
+    millingNote: 'Improves chip evacuation and reduces rubbing/work hardening.',
+  },
+  {
+    id: 'aluminium-composite',
+    label: 'Aluminium Composite Panel',
+    defaultChipLoadMm: 0.045,
+    stepoverMinPct: 25,
+    stepoverMaxPct: 40,
+    adaptiveDocMinRatio: 0.4,
+    adaptiveDocMaxRatio: 0.9,
+    pocketDocMinRatio: 0.25,
+    pocketDocMaxRatio: 0.55,
+    helixRampMinDeg: 1.5,
+    helixRampMaxDeg: 2,
+    plungeFeedMinPct: 25,
+    plungeFeedMaxPct: 35,
+    isHard: true,
+    recommendedMilling: 'climb',
+    millingNote: 'Cleaner skin finish; use sharp tooling and support sheet well.',
   },
   {
     id: 'hardwood',
@@ -54,6 +98,8 @@ export const MATERIAL_PROFILES: MaterialProfile[] = [
     plungeFeedMinPct: 40,
     plungeFeedMaxPct: 50,
     isHard: false,
+    recommendedMilling: 'climb',
+    millingNote: 'Standard CNC router practice for most contour and adaptive cuts.',
   },
   {
     id: 'softwood-plywood',
@@ -70,6 +116,8 @@ export const MATERIAL_PROFILES: MaterialProfile[] = [
     plungeFeedMinPct: 40,
     plungeFeedMaxPct: 50,
     isHard: false,
+    recommendedMilling: 'climb',
+    millingNote: 'Try conventional on thin plywood if climb lifts veneer at exit.',
   },
   {
     id: 'plastics-acrylic',
@@ -86,6 +134,8 @@ export const MATERIAL_PROFILES: MaterialProfile[] = [
     plungeFeedMinPct: 30,
     plungeFeedMaxPct: 40,
     isHard: false,
+    recommendedMilling: 'climb',
+    millingNote: 'Reduces heat buildup and melted swarf re-welding to the part.',
   },
 ];
 
@@ -147,6 +197,8 @@ export interface FeedsSpeedsResults {
   plungeFeedLabel: string;
   plungeFeedMin: number;
   plungeFeedMax: number;
+  millingDirectionLabel: string;
+  millingNote?: string;
   lowRpmWarning: boolean;
 }
 
@@ -180,6 +232,9 @@ export function calculateFeedsSpeeds(inputs: FeedsSpeedsInputs): FeedsSpeedsResu
     plungeFeedLabel: `${Math.round(plungeMin)}–${Math.round(plungeMax)} mm/min`,
     plungeFeedMin: plungeMin,
     plungeFeedMax: plungeMax,
+    millingDirectionLabel:
+      profile.recommendedMilling === 'climb' ? 'Climb milling' : 'Conventional milling',
+    millingNote: profile.millingNote,
     lowRpmWarning: rpm > 0 && rpm < 10000,
   };
 }
