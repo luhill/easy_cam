@@ -27,6 +27,7 @@ import {
   resolveStandardHelixEntryLayout,
   sampleContourLoopFromArcS,
   standardEntryNeedsLeadIn,
+  standardSplineLeadInFeed,
   stationOnContour,
 } from './outlineEntry';
 import {
@@ -58,6 +59,7 @@ import {
 import {
   adaptiveForwardIncrement,
   sampleGuideAtS,
+  type ArcLengthGuide,
 } from './trochoidalPath';
 import {
   createCutZContext,
@@ -184,7 +186,8 @@ function appendContourLoopFromArcS(
   sampleSpacing: number,
   forward = true,
   skipNear?: { x: number; y: number; z: number },
-  arcLengthToCut?: number
+  arcLengthToCut?: number,
+  cachedGuide?: ArcLengthGuide
 ): boolean {
   const skip = skipNear ?? lastPathPoint(points) ?? undefined;
   const loopPts = sampleContourLoopFromArcS(
@@ -195,7 +198,8 @@ function appendContourLoopFromArcS(
     sampleSpacing,
     forward,
     skip,
-    arcLengthToCut
+    arcLengthToCut,
+    cachedGuide
   );
   return appendPoints(points, loopPts);
 }
@@ -278,7 +282,7 @@ function generateStandardHelixOutlinePath(
     return generateStandardOutlinePath(loop, settings, ctx, globals, geometry, 'straight');
   }
 
-  const { toolStart, joinPoint, entryStart } = entryLayout;
+  const { toolStart, joinPoint, layout } = entryLayout;
   const approachZ = outlineApproachWorldZ(topZ, globals.safeHeight, settings.zStartOffset);
   const helixR = resolveHelixRadius(settings);
   const helixOpts = { stockTopZ: topZ, globals };
@@ -287,14 +291,9 @@ function generateStandardHelixOutlinePath(
   const rotDir = resolveHelixRotationDir(settings.climbMilling);
   const segmentsPerRev = helixSegmentsPerRev(globals.resolution);
   const stepoverIncrement = adaptiveForwardIncrement(settings.toolDiameter, settings.stepover);
-  const firstContourPoint: ToolpathPoint = {
-    x: joinPoint.x,
-    y: joinPoint.y,
-    z: layers[0],
-    feedRate: cutFeed,
-  };
+  const sampleSpacing = pathSampleSpacing(globals.resolution);
 
-  appendOutlineApproachToStart(points, entryStart, safeZ, approachZ, plungeFeed);
+  appendOutlineApproachToStart(points, toolStart, safeZ, approachZ, plungeFeed);
 
   let boreHelixAngle = 0;
   const boreStartZ = approachZ;
@@ -315,20 +314,17 @@ function generateStandardHelixOutlinePath(
       boreHelixAngle = initialBore.endAngle;
 
       if (
-        !appendBoreBottomWidenAndLeadIn(
-          points,
-          toolStart,
-          layerZ,
-          helixR,
-          helixRadiusAtZ(settings, layerZ, topZ),
-          stepoverIncrement,
-          rotDir,
-          segmentsPerRev,
-          plungeFeed,
-          firstContourPoint
-        )
+        Math.hypot(toolStart.x - joinPoint.x, toolStart.y - joinPoint.y) > 0.5
       ) {
-        break;
+        const leadIn = standardSplineLeadInFeed(
+          layout,
+          layerZ,
+          cutFeed,
+          sampleSpacing,
+          lastPathPoint(points) ?? undefined,
+          toolStart
+        );
+        if (!appendPoints(points, leadIn)) break;
       }
     } else {
       appendFreshSlotWidthBore(
@@ -352,14 +348,14 @@ function generateStandardHelixOutlinePath(
           rotDir,
           segmentsPerRev,
           plungeFeed,
-          firstContourPoint
+          { x: joinPoint.x, y: joinPoint.y, z: layerZ, feedRate: cutFeed }
         )
       ) {
         break;
       }
     }
 
-    const loopStartS = stationOnContour(traverse, joinPoint, pathSampleSpacing(globals.resolution));
+    const loopStartS = stationOnContour(traverse, joinPoint, sampleSpacing);
     if (
       !appendContourLoopFromArcS(
         points,
@@ -367,8 +363,11 @@ function generateStandardHelixOutlinePath(
         layerZ,
         cutFeed,
         loopStartS,
-        pathSampleSpacing(globals.resolution),
-        true
+        sampleSpacing,
+        layout.guideTraverseSign >= 0,
+        lastPathPoint(points) ?? undefined,
+        undefined,
+        layout.arcGuide
       )
     ) {
       break;
@@ -422,11 +421,11 @@ function generateStandardOutlinePath(
   );
   if (!layout) return points;
 
-  const { toolStart, contourJoin, traverse, arcGuide } = layout;
+  const { toolStart, contourJoin, traverse, arcGuide, guideTraverseSign } = layout;
   const traverseLength = arcGuide.totalLength;
   const needsLeadIn = standardEntryNeedsLeadIn(layout);
   const approachZ = outlineApproachWorldZ(topZ, globals.safeHeight, settings.zStartOffset);
-  const climbForward = true;
+  const climbForward = guideTraverseSign >= 0;
 
   appendOutlineApproachToStart(points, toolStart, safeZ, approachZ, settings.plungeRate);
 
@@ -438,19 +437,7 @@ function generateStandardOutlinePath(
     let loopSkipNear: { x: number; y: number; z: number } | undefined;
 
     if (entryType === 'straight') {
-      if (li === 0 && needsLeadIn) {
-        const leadIn = buildStandardSplineLeadIn(layout, approachZ, rampSampleSpacing).map((p) => ({
-          ...p,
-          feedRate: settings.feedRate,
-        }));
-        if (!appendPoints(points, leadIn)) break;
-      }
-      const plungeAt =
-        li === 0
-          ? needsLeadIn
-            ? contourJoin
-            : toolStart
-          : (lastBeforeLayer ?? contourJoin);
+      const plungeAt = li === 0 ? toolStart : (lastBeforeLayer ?? toolStart);
       if (
         !appendStraightOutlineEntry(
           points,
@@ -463,7 +450,18 @@ function generateStandardOutlinePath(
       ) {
         break;
       }
+      if (needsLeadIn) {
+        const leadIn = standardSplineLeadInFeed(
+          layout,
+          layerZ,
+          settings.feedRate,
+          rampSampleSpacing,
+          lastPathPoint(points) ?? undefined
+        );
+        if (!appendPoints(points, leadIn)) break;
+      }
       loopStartS = stationOnContour(traverse, contourJoin, rampSampleSpacing);
+      loopSkipNear = lastPathPoint(points) ?? undefined;
     } else {
       const rampStart =
         li === 0
@@ -513,7 +511,8 @@ function generateStandardOutlinePath(
         rampSampleSpacing,
         climbForward,
         loopSkipNear,
-        traverseLength
+        traverseLength,
+        arcGuide
       )
     ) {
       break;

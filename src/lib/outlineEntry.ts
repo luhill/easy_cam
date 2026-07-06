@@ -20,6 +20,7 @@ import {
   ensureEntryOutsidePart,
   resolveHelixRadius,
 } from './entryPath';
+import { resolveGuideTraverseSign } from './adaptiveFourZone';
 
 export type OutlineEntryType = 'linear' | 'helix' | 'straight';
 
@@ -146,6 +147,7 @@ export interface StandardEntryLayout {
   contourJoin: { x: number; y: number };
   contourJoinS: number;
   traverseTangent: { x: number; y: number };
+  guideTraverseSign: number;
   arcGuide: ArcLengthGuide;
   traverse: LoopPoint[];
 }
@@ -168,9 +170,8 @@ export function resolveStandardEntryLayout(
   const arcGuide = buildArcLengthGuide(traverse, Math.max(sampleSpacing, 0.25));
   if (arcGuide.totalLength <= 0) return null;
 
-  const ccw = signedLoopArea2D(traverse) >= 0;
-  const climbForward = settings.climbMilling ? ccw : !ccw;
-  const tangentSign = climbForward ? 1 : -1;
+  const guideTraverseSign = resolveGuideTraverseSign(traverse, settings.climbMilling, 'exterior');
+  const tangentSign = guideTraverseSign >= 0 ? 1 : -1;
 
   const joinSnap = geometry?.slotJoinPoint
     ? findClosestSOnGuide(arcGuide, geometry.slotJoinPoint)
@@ -196,6 +197,7 @@ export function resolveStandardEntryLayout(
     contourJoin,
     contourJoinS,
     traverseTangent,
+    guideTraverseSign,
     arcGuide,
     traverse,
   };
@@ -225,6 +227,34 @@ export function buildStandardSplineLeadIn(
   return spline.map((p) => ({ x: p.x, y: p.y, z }));
 }
 
+export function standardSplineLeadInFeed(
+  layout: StandardEntryLayout,
+  z: number,
+  feedRate: number,
+  sampleSpacing: number,
+  skipNear?: { x: number; y: number; z: number },
+  toolStartOverride?: { x: number; y: number }
+): ToolpathPoint[] {
+  const start = toolStartOverride ?? layout.toolStart;
+  const spline = buildSplineEntryGuide(
+    start,
+    layout.contourJoin,
+    layout.traverseTangent,
+    sampleSpacing,
+    z
+  );
+  const pts = spline.map((p) => ({ x: p.x, y: p.y, z, feedRate }));
+  if (!pts.length || !skipNear) return pts;
+  const first = pts[0];
+  if (
+    Math.hypot(first.x - skipNear.x, first.y - skipNear.y) < sampleSpacing * 0.75 &&
+    Math.abs(first.z - skipNear.z) < 1e-4
+  ) {
+    return pts.slice(1);
+  }
+  return pts;
+}
+
 /** Minimum bore-center distance from part outline for standard helix entry. */
 export function minimumStandardHelixEntryCenterDist(
   settings: OperationDefaults,
@@ -237,6 +267,7 @@ export interface StandardHelixEntryLayout {
   entryStart: { x: number; y: number };
   toolStart: { x: number; y: number };
   joinPoint: { x: number; y: number };
+  layout: StandardEntryLayout;
 }
 
 export function resolveStandardHelixEntryLayout(
@@ -257,27 +288,29 @@ export function resolveStandardHelixEntryLayout(
     0.3,
     toolOrigin
   );
-  const entryStart = layout?.contourJoin ?? resolveStandardOutlineEntryStart(
-    partLoop,
-    settings,
-    stockAllowance,
-    geometry,
-    toolOrigin
-  );
-  const joinPoint = entryStart;
-  const minDist = minimumStandardHelixEntryCenterDist(settings, stockAllowance);
-  const helixR = resolveHelixRadius(settings);
+  if (!layout) return null;
 
-  const outward = closestPointOnLoop2D(joinPoint.x, joinPoint.y, partLoop);
-  const candidate = {
-    x: joinPoint.x + outward.outX * helixR,
-    y: joinPoint.y + outward.outY * helixR,
-  };
+  const joinPoint = layout.contourJoin;
+  const toolStartOverride = geometry?.toolStartPoint ?? geometry?.entryPoint ?? null;
+  let toolStart: { x: number; y: number };
+  if (toolStartOverride) {
+    toolStart = { x: toolStartOverride.x, y: toolStartOverride.y };
+  } else {
+    const minDist = minimumStandardHelixEntryCenterDist(settings, stockAllowance);
+    const helixR = resolveHelixRadius(settings);
+    const outward = closestPointOnLoop2D(joinPoint.x, joinPoint.y, partLoop);
+    const candidate = {
+      x: joinPoint.x + outward.outX * helixR,
+      y: joinPoint.y + outward.outY * helixR,
+    };
+    toolStart = ensureEntryOutsidePart(partLoop, candidate, minDist * 0.98);
+  }
 
   return {
-    entryStart,
-    toolStart: ensureEntryOutsidePart(partLoop, candidate, minDist * 0.98),
+    entryStart: toolStart,
+    toolStart,
     joinPoint,
+    layout,
   };
 }
 
@@ -297,7 +330,24 @@ export function stationOnContour(
   return findClosestSOnGuide(guide, point).s;
 }
 
-function collectVertexAnchorStations(
+function vertexInteriorAngleDeg(traverse: LoopPoint[], index: number): number {
+  const n = traverse.length;
+  if (n < 3) return 180;
+  const prev = traverse[(index - 1 + n) % n];
+  const curr = traverse[index];
+  const next = traverse[(index + 1) % n];
+  const v1x = prev.x - curr.x;
+  const v1y = prev.y - curr.y;
+  const v2x = next.x - curr.x;
+  const v2y = next.y - curr.y;
+  const len1 = Math.hypot(v1x, v1y) || 1;
+  const len2 = Math.hypot(v2x, v2y) || 1;
+  const dot = (v1x / len1) * (v2x / len2) + (v1y / len1) * (v2y / len2);
+  return (Math.acos(Math.min(1, Math.max(-1, dot))) * 180) / Math.PI;
+}
+
+/** Anchor only sharp polyline vertices (interior miters + arc joins), not dense arc samples. */
+function collectSharpCornerStations(
   guide: ArcLengthGuide,
   traverse: LoopPoint[],
   startS: number,
@@ -305,13 +355,14 @@ function collectVertexAnchorStations(
   forward: boolean
 ): number[] {
   const total = guide.totalLength;
-  if (total <= 0) return [];
+  if (total <= 0 || traverse.length < 3) return [];
 
   const seen = new Set<number>();
   const anchors: number[] = [];
 
-  for (const pt of traverse) {
-    const s = findClosestSOnGuide(guide, pt).s;
+  for (let i = 0; i < traverse.length; i++) {
+    if (vertexInteriorAngleDeg(traverse, i) > 165) continue;
+    const s = findClosestSOnGuide(guide, traverse[i]).s;
     const key = Math.round(s * 1000);
     if (seen.has(key)) continue;
     const delta = guideArcLengthBetween(total, startS, s, forward);
@@ -370,9 +421,10 @@ export function sampleContourLoopFromArcS(
   sampleSpacing: number,
   forward = true,
   skipNear?: { x: number; y: number; z: number },
-  arcLengthToCut?: number
+  arcLengthToCut?: number,
+  cachedGuide?: ArcLengthGuide
 ): ToolpathPoint[] {
-  const guide = buildArcLengthGuide(traverse, Math.max(sampleSpacing, 0.25));
+  const guide = cachedGuide ?? buildArcLengthGuide(traverse, Math.max(sampleSpacing, 0.25));
   const total = guide.totalLength;
   if (total <= 0) return [];
 
@@ -380,7 +432,7 @@ export function sampleContourLoopFromArcS(
   if (cutLength <= 1e-6) return [];
 
   const uniformSteps = Math.max(8, Math.ceil(cutLength / sampleSpacing));
-  const anchorStations = collectVertexAnchorStations(
+  const anchorStations = collectSharpCornerStations(
     guide,
     traverse,
     startS,
