@@ -1,13 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import {
   calculateFeedsSpeeds,
   formatFactor,
   formatFeed,
-  getMaterialDefaults,
   getMaterialProfile,
   MATERIAL_PROFILES,
   type MaterialId,
 } from '../lib/feedsSpeedsCalculator';
+import { useSettingsStore } from '../store/useSettingsStore';
 
 interface FeedsCalculatorSidebarProps {
   open: boolean;
@@ -59,20 +59,12 @@ function ChevronIcon({ collapsed }: { collapsed: boolean }) {
 }
 
 export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSidebarProps) {
-  const [materialId, setMaterialId] = useState<MaterialId>('hardwood');
-  const [toolDiameterMm, setToolDiameterMm] = useState(6);
-  const [fluteCount, setFluteCount] = useState(2);
-  const [rpm, setRpm] = useState(10000);
-  const [chipLoadMm, setChipLoadMm] = useState(() => getMaterialDefaults('hardwood').chipLoad);
-  const [stepoverPct, setStepoverPct] = useState(() => getMaterialDefaults('hardwood').stepoverPercentage);
+  const feedsCalculator = useSettingsStore((s) => s.feedsCalculator);
+  const setFeedsCalculatorMaterial = useSettingsStore((s) => s.setFeedsCalculatorMaterial);
+  const updateFeedsCalculator = useSettingsStore((s) => s.updateFeedsCalculator);
 
+  const { materialId, toolDiameterMm, fluteCount, rpm, chipLoadMm, stepoverPct } = feedsCalculator;
   const profile = getMaterialProfile(materialId);
-
-  useEffect(() => {
-    const defaults = getMaterialDefaults(materialId);
-    setChipLoadMm(defaults.chipLoad);
-    setStepoverPct(defaults.stepoverPercentage);
-  }, [materialId]);
 
   const results = useMemo(
     () =>
@@ -124,7 +116,7 @@ export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSideba
                 <select
                   id="fsc-material"
                   value={materialId}
-                  onChange={(e) => setMaterialId(e.target.value as MaterialId)}
+                  onChange={(e) => setFeedsCalculatorMaterial(e.target.value as MaterialId)}
                 >
                   {MATERIAL_PROFILES.map((m) => (
                     <option key={m.id} value={m.id}>
@@ -144,7 +136,9 @@ export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSideba
                   min={0.1}
                   step={0.1}
                   value={toolDiameterMm}
-                  onChange={(e) => setToolDiameterMm(parseFloat(e.target.value) || 0.1)}
+                  onChange={(e) =>
+                    updateFeedsCalculator({ toolDiameterMm: parseFloat(e.target.value) || 0.1 })
+                  }
                 />
               </div>
 
@@ -157,7 +151,11 @@ export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSideba
                   max={8}
                   step={1}
                   value={fluteCount}
-                  onChange={(e) => setFluteCount(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  onChange={(e) =>
+                    updateFeedsCalculator({
+                      fluteCount: Math.max(1, parseInt(e.target.value, 10) || 1),
+                    })
+                  }
                 />
               </div>
 
@@ -169,7 +167,7 @@ export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSideba
                   min={0}
                   step={500}
                   value={rpm}
-                  onChange={(e) => setRpm(Math.max(0, parseFloat(e.target.value) || 0))}
+                  onChange={(e) => updateFeedsCalculator({ rpm: Math.max(0, parseFloat(e.target.value) || 0) })}
                 />
               </div>
 
@@ -183,7 +181,9 @@ export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSideba
                   min={0.001}
                   step={0.001}
                   value={chipLoadMm}
-                  onChange={(e) => setChipLoadMm(parseFloat(e.target.value) || profile.chipLoad)}
+                  onChange={(e) =>
+                    updateFeedsCalculator({ chipLoadMm: parseFloat(e.target.value) || profile.chipLoad })
+                  }
                 />
               </div>
 
@@ -199,7 +199,9 @@ export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSideba
                   step={1}
                   value={stepoverPct}
                   onChange={(e) =>
-                    setStepoverPct(Math.max(1, parseFloat(e.target.value) || profile.stepoverPercentage))
+                    updateFeedsCalculator({
+                      stepoverPct: Math.max(1, parseFloat(e.target.value) || profile.stepoverPercentage),
+                    })
                   }
                 />
                 <span className="feeds-calculator-hint">

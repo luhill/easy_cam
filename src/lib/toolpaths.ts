@@ -131,7 +131,19 @@ function getBounds(geometry: Operation['geometry']): {
     return { minX, maxX, minY, maxY };
   }
 
+  if (geometry?.faceIndices && geometry.faceIndices.length > 0) {
+    return { minX: -25, maxX: 25, minY: -25, maxY: 25 };
+  }
+
   return { minX: -25, maxX: 25, minY: -25, maxY: 25 };
+}
+
+function hasOutlineLoopGeometry(geometry: Operation['geometry'] | null | undefined): boolean {
+  return !!(geometry?.loops?.[0] && geometry.loops[0].length >= 2);
+}
+
+function hasRegionGeometry(geometry: Operation['geometry'] | null | undefined): boolean {
+  return (geometry?.faceIndices?.length ?? 0) > 0;
 }
 
 function appendPoints(target: ToolpathPoint[], points: ToolpathPoint[]): boolean {
@@ -519,20 +531,11 @@ function generateOutlinePath(
     return generateAdaptiveOutlinePath(op, ctx, globals);
   }
 
-  const topZ = stockTopWorldZ(ctx);
-
-  if (geometry?.loops && geometry.loops.length > 0) {
-    return generateStandardOutlinePath(geometry.loops[0], settings, ctx, globals, geometry);
+  if (!hasOutlineLoopGeometry(geometry)) {
+    return [];
   }
 
-  const { minX, maxX, minY, maxY } = getBounds(geometry);
-  const fallbackLoop: LoopPoint[] = [
-    { x: minX, y: minY, z: topZ },
-    { x: maxX, y: minY, z: topZ },
-    { x: maxX, y: maxY, z: topZ },
-    { x: minX, y: maxY, z: topZ },
-  ];
-  return generateStandardOutlinePath(fallbackLoop, settings, ctx, globals, geometry);
+  return generateStandardOutlinePath(geometry!.loops![0], settings, ctx, globals, geometry);
 }
 
 function trochoidParams(
@@ -978,15 +981,7 @@ function generateAdaptiveOutlinePath(
   const loop = geometry?.loops?.[0];
 
   if (!loop) {
-    const topZ = stockTopWorldZ(ctx);
-    const { minX, maxX, minY, maxY } = getBounds(geometry);
-    const fallbackLoop: LoopPoint[] = [
-      { x: minX, y: minY, z: topZ },
-      { x: maxX, y: minY, z: topZ },
-      { x: maxX, y: maxY, z: topZ },
-      { x: minX, y: maxY, z: topZ },
-    ];
-    return generateStandardOutlinePath(fallbackLoop, settings, ctx, globals, geometry);
+    return [];
   }
 
   const topZ = stockTopWorldZ(ctx);
@@ -1374,6 +1369,10 @@ function generatePocketPath(
   globals: ToolpathGlobalOptions
 ): ToolpathPoint[] {
   const { settings, geometry } = op;
+  if (!hasRegionGeometry(geometry)) {
+    return [];
+  }
+
   const { minX, maxX, minY, maxY } = getBounds(geometry);
   const stepover = settings.toolDiameter * (settings.stepover / 100);
   const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
@@ -1409,6 +1408,10 @@ function generateContourPath(
   globals: ToolpathGlobalOptions
 ): ToolpathPoint[] {
   const { settings, geometry } = op;
+  if (!hasRegionGeometry(geometry)) {
+    return [];
+  }
+
   const { minX, maxX, minY, maxY } = getBounds(geometry);
   const topZ = stockTopWorldZ(ctx);
   const finalZ = finalCutWorldZ(ctx, settings.depthOffset);
