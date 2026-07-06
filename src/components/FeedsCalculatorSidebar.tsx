@@ -102,7 +102,7 @@ export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSideba
       >
         <CalculatorIcon />
         <span className="feeds-calculator-toggle-label">F&amp;S</span>
-        <ChevronIcon collapsed={!open} />
+        <ChevronIcon collapsed={open} />
       </button>
 
       <div

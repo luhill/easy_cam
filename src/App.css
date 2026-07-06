@@ -106,7 +106,8 @@ body {
 .app-main {
   display: flex;
   flex: 1;
-  overflow: hidden;
+  overflow-x: visible;
+  overflow-y: hidden;
 }
 
 .sidebar-stack {
@@ -116,6 +117,14 @@ body {
   height: 100%;
   position: relative;
   overflow: visible;
+  z-index: 5;
+}
+
+.viewer-panel {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+  z-index: 1;
 }
 
 .sidebar {
@@ -308,10 +317,7 @@ body {
   font-size: 13px;
 }
 
-.viewer-panel {
-  flex: 1;
-  position: relative;
-}
+/* viewer-panel z-index/min-width defined with .app-main layout above */
 
 /* Buttons */
 .btn {
@@ -668,7 +674,7 @@ body {
 .feeds-calculator-sidebar--open {
   width: 300px;
   min-width: 280px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .feeds-calculator-sidebar--collapsed {
@@ -680,9 +686,9 @@ body {
 .feeds-calculator-toggle {
   position: absolute;
   top: 50%;
-  left: 0;
-  z-index: 4;
-  transform: translate(-100%, -50%);
+  right: 0;
+  z-index: 20;
+  transform: translate(100%, -50%);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -691,19 +697,19 @@ body {
   width: 34px;
   padding: 10px 6px;
   border: 1px solid var(--border);
-  border-right: none;
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  border-left: none;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   background: var(--bg-secondary);
   color: var(--text-muted);
   cursor: pointer;
-  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.16);
+  box-shadow: 4px 0 12px rgba(0, 0, 0, 0.16);
   transition: background 0.15s, color 0.15s, box-shadow 0.15s;
 }
 
 .feeds-calculator-toggle:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
-  box-shadow: -5px 0 14px rgba(0, 0, 0, 0.2);
+  box-shadow: 5px 0 14px rgba(0, 0, 0, 0.2);
 }
 
 .feeds-calculator-toggle-label {
@@ -721,7 +727,7 @@ body {
 }
 
 [data-theme='light'] .feeds-calculator-toggle {
-  box-shadow: -3px 0 10px rgba(15, 23, 42, 0.1);
+  box-shadow: 3px 0 10px rgba(15, 23, 42, 0.1);
 }
 
 .feeds-calc-chevron {
