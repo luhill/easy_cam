@@ -122,4 +122,21 @@ const largePartBounds = { minX: 0, maxX: 50, minY: 0, maxY: 30, minZ: 0, maxZ: 1
 assert(resolveOutlineWallSide(square, 0, 0, squarePartBounds) === 'exterior', 'large loop is exterior');
 assert(resolveOutlineWallSide(teardrop, 0, 0, largePartBounds) === 'interior', 'small loop is interior');
 
+// Cylindrical boss outer wall: small circle, face normal points radially outward.
+const bossR = 8;
+const bossLoop: LoopPoint[] = [];
+for (let i = 0; i < 16; i++) {
+  const t = (2 * Math.PI * i) / 16;
+  bossLoop.push(pt(20 + bossR * Math.cos(t), 15 + bossR * Math.sin(t)));
+}
+const bossNormalX = Math.cos(0);
+const bossNormalY = Math.sin(0);
+assert(
+  resolveOutlineWallSide(bossLoop, bossNormalX, bossNormalY, largePartBounds) === 'exterior',
+  'boss outer wall with outward normal should be exterior'
+);
+const bossOut = signedOffset(bossLoop, 1, 'exterior');
+const bossBounds = loopBounds(bossOut);
+assert(bossBounds.maxX > 20 + bossR + 0.5, 'boss outer wall should offset outward');
+
 console.log('polygonOffset tests passed');

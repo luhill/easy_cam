@@ -356,13 +356,16 @@ export function resolveWallOutwardOffsetSign(
 }
 
 /**
- * Exterior vs interior void — loop area relative to part footprint.
- * Normalized winding: exterior CCW + positive delta, interior CW + negative delta.
+ * Exterior vs interior void wall.
+ * Large loops (perimeter) → exterior. Small loops use wall normal vs radial
+ * direction to distinguish boss outer walls (normal outward) from hole walls
+ * (normal inward). Normalized winding: exterior CCW + positive delta,
+ * interior CW + negative delta.
  */
 export function resolveOutlineWallSide(
   loop: LoopPoint[],
-  _wallNormalX: number,
-  _wallNormalY: number,
+  wallNormalX: number,
+  wallNormalY: number,
   partBounds?: PartBounds
 ): OutlineWallSide {
   if (!partBounds || loop.length < 3) return 'exterior';
@@ -372,7 +375,39 @@ export function resolveOutlineWallSide(
     Math.max(partBounds.maxY - partBounds.minY, 1e-6);
   const loopArea = Math.abs(signedLoopArea2D(loop));
 
-  return loopArea < partArea * 0.35 ? 'interior' : 'exterior';
+  if (loopArea >= partArea * 0.35) return 'exterior';
+
+  const nLen = Math.hypot(wallNormalX, wallNormalY);
+  if (nLen < 1e-6) return 'interior';
+
+  const nx = wallNormalX / nLen;
+  const ny = wallNormalY / nLen;
+  const center = loopCentroid(loop);
+
+  // On circular/pocket rims, pick the rim point whose outward radial best matches
+  // the wall face normal, then probe whether void lies along +normal.
+  let rimPoint = loop[0];
+  let bestAlign = -Infinity;
+  for (const p of loop) {
+    const dx = p.x - center.x;
+    const dy = p.y - center.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-6) continue;
+    const align = nx * (dx / len) + ny * (dy / len);
+    if (align > bestAlign) {
+      bestAlign = align;
+      rimPoint = p;
+    }
+  }
+
+  const probeDist = 0.3;
+  const voidAlongNormal = pointInPolygon2D(
+    rimPoint.x + nx * probeDist,
+    rimPoint.y + ny * probeDist,
+    loop
+  );
+
+  return voidAlongNormal ? 'interior' : 'exterior';
 }
 
 /**
