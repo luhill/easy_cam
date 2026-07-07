@@ -4,6 +4,7 @@ import {
   closestPointOnLoop2D,
   offsetLoop2DMinkowski,
   signedLoopArea2D,
+  type OutlineWallSide,
 } from './geometryProcessing';
 import {
   advanceGuideArcLength,
@@ -46,13 +47,44 @@ function innerToolCenterOffset(settings: OperationDefaults, stockAllowance = 0):
   return toolRadius(settings) + (settings.radialOffset ?? 0) + stockAllowance;
 }
 
+export interface OutlineOffsetContext {
+  offsetSign: number;
+  wallSide: OutlineWallSide;
+}
+
+export const DEFAULT_OUTLINE_OFFSET_CONTEXT: OutlineOffsetContext = {
+  offsetSign: 1,
+  wallSide: 'exterior',
+};
+
+export function resolveOutlineOffsetContext(
+  geometry: SelectedGeometry | null | undefined,
+  partLoop: LoopPoint[]
+): OutlineOffsetContext {
+  const edgeLoops = geometry?.edgeLoops;
+  if (edgeLoops && edgeLoops.length > 0) {
+    const match =
+      edgeLoops.find(
+        (el) =>
+          el.loop.length === partLoop.length &&
+          Math.hypot(el.loop[0].x - partLoop[0].x, el.loop[0].y - partLoop[0].y) < 0.5
+      ) ?? edgeLoops[0];
+    return {
+      offsetSign: match.offsetSign ?? 1,
+      wallSide: match.wallSide ?? 'exterior',
+    };
+  }
+  return DEFAULT_OUTLINE_OFFSET_CONTEXT;
+}
+
 export function buildOutlineToolCenterline(
   partLoop: LoopPoint[],
   settings: OperationDefaults,
   stockAllowance = 0,
-  maxSegmentLen = 0.3
+  maxSegmentLen = 0.3,
+  offsetContext: OutlineOffsetContext = DEFAULT_OUTLINE_OFFSET_CONTEXT
 ): LoopPoint[] {
-  const offset = innerToolCenterOffset(settings, stockAllowance);
+  const offset = innerToolCenterOffset(settings, stockAllowance) * offsetContext.offsetSign;
   const segLen = Math.max(maxSegmentLen, Math.abs(offset) * 0.22, 0.4);
   const toolLoop = offsetLoop2DMinkowski(partLoop, offset, segLen);
   const ccw = signedLoopArea2D(partLoop) >= 0;
@@ -164,13 +196,24 @@ export function resolveStandardEntryLayout(
 ): StandardEntryLayout | null {
   if (partLoop.length < 2) return null;
 
-  const traverse = buildOutlineToolCenterline(partLoop, settings, stockAllowance, maxSegmentLen);
+  const offsetContext = resolveOutlineOffsetContext(geometry, partLoop);
+  const traverse = buildOutlineToolCenterline(
+    partLoop,
+    settings,
+    stockAllowance,
+    maxSegmentLen,
+    offsetContext
+  );
   if (traverse.length < 3) return null;
 
   const arcGuide = buildArcLengthGuide(traverse, Math.max(sampleSpacing, 0.25));
   if (arcGuide.totalLength <= 0) return null;
 
-  const guideTraverseSign = resolveGuideTraverseSign(traverse, settings.climbMilling, 'exterior');
+  const guideTraverseSign = resolveGuideTraverseSign(
+    traverse,
+    settings.climbMilling,
+    offsetContext.wallSide
+  );
   const tangentSign = guideTraverseSign >= 0 ? 1 : -1;
 
   const joinSnap = geometry?.slotJoinPoint

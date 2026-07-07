@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { LoopPoint, OperationType, SelectionStrategy } from '../types/operations';
-import { loopArea2D, pointInPolygon2D, boundsFromGeometry, loopCentroid, distanceToLoop2D, type PartBounds } from './geometryProcessing';
+import { loopArea2D, pointInPolygon2D, boundsFromGeometry, loopCentroid, distanceToLoop2D, resolveOutlineWallSide, resolveWallOutwardOffsetSign, type PartBounds } from './geometryProcessing';
 import {
   classifyRegionKind,
   effectiveOutlineLoop,
@@ -31,6 +31,8 @@ export interface SelectionGroup {
   edgeLoopId?: number;
   topZ?: number;
   bottomZ?: number;
+  offsetSign?: number;
+  wallSide?: 'exterior' | 'interior';
   outerLoop?: LoopPoint[] | null;
 }
 
@@ -41,6 +43,9 @@ export interface EdgeLoopFeature {
   bottomLoop: LoopPoint[];
   topZ: number;
   bottomZ: number;
+  /** +1 / −1 — offset away from selected wall faces */
+  offsetSign: number;
+  wallSide: 'exterior' | 'interior';
 }
 
 export interface HoleFeature {
@@ -598,6 +603,17 @@ export class MeshIndex {
     return [...loops].sort((a, b) => Math.abs(loopArea2D(b)) - Math.abs(loopArea2D(a)))[0];
   }
 
+  private averageWallNormalXY(faceIndices: number[]): { x: number; y: number } {
+    let sumX = 0;
+    let sumY = 0;
+    for (const faceIndex of faceIndices) {
+      const n = this.faceNormals[faceIndex];
+      sumX += n.x;
+      sumY += n.y;
+    }
+    return { x: sumX, y: sumY };
+  }
+
   private indexEdgeLoops(): EdgeLoopFeature[] {
     const features: EdgeLoopFeature[] = [];
 
@@ -612,6 +628,9 @@ export class MeshIndex {
       if (topZ - bottomZ < 0.2) continue;
 
       const bottomLoop = this.extractHorizontalRimLoop(faceIndices, 'bottom') ?? [];
+      const wallNormal = this.averageWallNormalXY(faceIndices);
+      const offsetSign = resolveWallOutwardOffsetSign(topLoop, wallNormal.x, wallNormal.y);
+      const wallSide = resolveOutlineWallSide(topLoop, wallNormal.x, wallNormal.y);
 
       features.push({
         id: features.length,
@@ -620,6 +639,8 @@ export class MeshIndex {
         bottomLoop,
         topZ,
         bottomZ,
+        offsetSign,
+        wallSide,
       });
     }
 
@@ -959,6 +980,8 @@ export class MeshIndex {
         edgeLoopId: edgeLoop.id,
         topZ: edgeLoop.topZ,
         bottomZ: edgeLoop.bottomZ,
+        offsetSign: edgeLoop.offsetSign,
+        wallSide: edgeLoop.wallSide,
         outerLoop: null,
       };
     }

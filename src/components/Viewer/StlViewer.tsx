@@ -308,8 +308,9 @@ function StlMesh({
       }
     }
     if (
+      activeOperationType &&
       isOutlineOperation({
-        type: activeOperationType ?? 'outline',
+        type: activeOperationType,
         settings: activeOperationSettings ?? DEFAULT_SETTINGS,
       }) &&
       meshIndexRef.current
@@ -603,6 +604,8 @@ function StlMesh({
           topZ: group.topZ,
           bottomZ: group.bottomZ,
           edgeLoopId: group.edgeLoopId,
+          offsetSign: group.offsetSign,
+          wallSide: group.wallSide,
         };
         const existingEdgeLoops = getSelectedEdgeLoops(existing);
 

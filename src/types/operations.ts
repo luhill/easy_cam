@@ -68,6 +68,9 @@ export interface EdgeLoopSelection {
   topZ: number;
   bottomZ: number;
   edgeLoopId?: number;
+  /** +1 / −1 — tool path offsets away from selected wall faces */
+  offsetSign?: number;
+  wallSide?: 'exterior' | 'interior';
 }
 
 export interface SelectedGeometry {

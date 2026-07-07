@@ -9,6 +9,7 @@ import {
   signedLoopArea2D,
   outwardEdgeNormal2D,
   closestPointOnLoop2D,
+  convexJoinArcSweep,
 } from './geometryProcessing';
 import {
   buildArcLengthGuide,
@@ -192,19 +193,23 @@ export function buildSlotCenterGuideWithCornerSpurs(
   slotCenterOffset: number,
   finishInnerOffset: number,
   maxSegmentLen: number,
-  options: CornerSpurOptions = {}
+  options: CornerSpurOptions = {},
+  offsetSign = 1
 ): SlotCenterGuideResult {
+  const signedSlotCenter = slotCenterOffset * offsetSign;
+  const signedFinishInner = finishInnerOffset * offsetSign;
+
   const maxInternalAngleDeg = options.maxInternalAngleDeg ?? 160;
   const roughTipInnerOffset = options.roughTipInnerOffset;
 
   const n = partLoop.length;
-  if (n < 3 || Math.abs(slotCenterOffset) < 1e-9) {
+  if (n < 3 || Math.abs(signedSlotCenter) < 1e-9) {
     return { guide: partLoop.map((p) => ({ ...p })), spurMarkers: [] };
   }
 
   const ccw = signedLoopArea2D(partLoop) >= 0;
   const side = ccw ? 1 : -1;
-  const segLen = Math.max(maxSegmentLen, Math.abs(slotCenterOffset) / 6);
+  const segLen = Math.max(maxSegmentLen, Math.abs(signedSlotCenter) / 6);
 
   interface VertexJoin {
     convex: boolean;
@@ -240,22 +245,22 @@ export function buildSlotCenterGuideWithCornerSpurs(
       joins.push({
         convex: true,
         curr,
-        startX: curr.x + nIn.nx * slotCenterOffset,
-        startY: curr.y + nIn.ny * slotCenterOffset,
-        endX: curr.x + nOut.nx * slotCenterOffset,
-        endY: curr.y + nOut.ny * slotCenterOffset,
+        startX: curr.x + nIn.nx * signedSlotCenter,
+        startY: curr.y + nIn.ny * signedSlotCenter,
+        endX: curr.x + nOut.nx * signedSlotCenter,
+        endY: curr.y + nOut.ny * signedSlotCenter,
         nInX: nIn.nx,
         nInY: nIn.ny,
         nOutX: nOut.nx,
         nOutY: nOut.ny,
       });
     } else {
-      const slotMiter = offsetVertexMiter(partLoop, i, slotCenterOffset);
+      const slotMiter = offsetVertexMiter(partLoop, i, signedSlotCenter);
       let spurTip: LoopPoint | undefined;
 
       const internalAngle = vertexInternalAngleDeg(prev, curr, next);
       if (internalAngle < maxInternalAngleDeg) {
-        const tipOffset = roughTipInnerOffset ?? finishInnerOffset;
+        const tipOffset = roughTipInnerOffset ?? signedFinishInner;
         const spurTipMiter = offsetVertexMiter(partLoop, i, tipOffset);
         spurTip = spurTipMiter;
       }
@@ -286,15 +291,14 @@ export function buildSlotCenterGuideWithCornerSpurs(
     if (join.convex) {
       const a1 = Math.atan2(join.nInY, join.nInX);
       const a2 = Math.atan2(join.nOutY, join.nOutX);
-      let sweep = a2 - a1;
-      while (sweep < -1e-9) sweep += 2 * Math.PI;
+      const sweep = convexJoinArcSweep(a1, a2);
 
-      const arcSteps = Math.max(1, Math.ceil((Math.abs(sweep) * Math.abs(slotCenterOffset)) / segLen));
+      const arcSteps = Math.max(1, Math.ceil((Math.abs(sweep) * Math.abs(signedSlotCenter)) / segLen));
       for (let s = 0; s <= arcSteps; s++) {
         const ang = a1 + (sweep * s) / arcSteps;
         result.push({
-          x: join.curr.x + slotCenterOffset * Math.cos(ang),
-          y: join.curr.y + slotCenterOffset * Math.sin(ang),
+          x: join.curr.x + signedSlotCenter * Math.cos(ang),
+          y: join.curr.y + signedSlotCenter * Math.sin(ang),
           z: join.curr.z,
         });
       }

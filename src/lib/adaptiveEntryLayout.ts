@@ -18,6 +18,10 @@ import {
   resolveAdaptiveSlotGeometry,
   cornerSpurOptionsForRoughing,
 } from './adaptiveOutline';
+import {
+  DEFAULT_OUTLINE_OFFSET_CONTEXT,
+  type OutlineOffsetContext,
+} from './outlineEntry';
 
 export interface AdaptiveEntryOverrides {
   toolStartPoint?: { x: number; y: number } | null;
@@ -57,7 +61,8 @@ export function resolveAdaptiveEntryLayout(
   centerGuideSegLen: number,
   trochSampleSpacing: number,
   resolution = 2,
-  toolOrigin?: Pick<ToolOrigin, 'x' | 'y'> | null
+  toolOrigin?: Pick<ToolOrigin, 'x' | 'y'> | null,
+  offsetContext: OutlineOffsetContext = DEFAULT_OUTLINE_OFFSET_CONTEXT
 ): AdaptiveEntryLayout | null {
   if (partLoop.length < 2) return null;
 
@@ -68,7 +73,8 @@ export function resolveAdaptiveEntryLayout(
     roughSlot.slotCenterOffset,
     finishSlot.innerCenterOffset,
     centerGuideSegLen,
-    cornerSpurOptionsForRoughing(settings)
+    cornerSpurOptionsForRoughing(settings),
+    offsetContext.offsetSign
   );
   if (slotCenterGuide.length < 3) return null;
 
@@ -82,7 +88,11 @@ export function resolveAdaptiveEntryLayout(
     trochSampleSpacing,
     { trochoidR: roughSlot.trochoidRadius, resolution }
   );
-  const guideTraverseSign = resolveGuideTraverseSign(slotCenterGuide, settings.climbMilling);
+  const guideTraverseSign = resolveGuideTraverseSign(
+    slotCenterGuide,
+    settings.climbMilling,
+    offsetContext.wallSide
+  );
   const forward = guideTraverseSign >= 0;
   const tangentSign = forward ? 1 : -1;
 

@@ -32,6 +32,8 @@ import {
   standardSplineLeadInFeed,
   standardSplineTailFromPoint,
   stationOnContour,
+  DEFAULT_OUTLINE_OFFSET_CONTEXT,
+  type OutlineOffsetContext,
 } from './outlineEntry';
 import {
   adaptiveEntryOverridesFromGeometry,
@@ -154,6 +156,7 @@ function getBounds(geometry: Operation['geometry']): {
 interface OutlinePathJob {
   loop: LoopPoint[];
   extent: OutlineCutExtent;
+  offsetContext: OutlineOffsetContext;
 }
 
 function resolveOutlinePathJobs(
@@ -167,11 +170,21 @@ function resolveOutlinePathJobs(
       .map((el) => ({
         loop: el.loop,
         extent: outlineCutExtentFromLoopZ(el.topZ, el.bottomZ),
+        offsetContext: {
+          offsetSign: el.offsetSign ?? 1,
+          wallSide: el.wallSide ?? 'exterior',
+        },
       }));
   }
 
   if (geometry?.loops?.[0] && geometry.loops[0].length >= 2) {
-    return [{ loop: geometry.loops[0], extent: defaultOutlineCutExtent(ctx) }];
+    return [
+      {
+        loop: geometry.loops[0],
+        extent: defaultOutlineCutExtent(ctx),
+        offsetContext: DEFAULT_OUTLINE_OFFSET_CONTEXT,
+      },
+    ];
   }
 
   return [];
@@ -200,9 +213,12 @@ function contourTraverse(
   loop: LoopPoint[],
   settings: Operation['settings'],
   extraRadialStock = 0,
-  resolution = DEFAULT_TOOLPATH_RESOLUTION
+  resolution = DEFAULT_TOOLPATH_RESOLUTION,
+  offsetContext: OutlineOffsetContext = DEFAULT_OUTLINE_OFFSET_CONTEXT
 ): LoopPoint[] {
-  const offset = toolRadius(settings) + (settings.radialOffset ?? 0) + extraRadialStock;
+  const offset =
+    (toolRadius(settings) + (settings.radialOffset ?? 0) + extraRadialStock) *
+    offsetContext.offsetSign;
   const toolLoop = offsetLoop2DMinkowski(loop, offset, minkowskiSegmentLen(resolution));
   const ccw = signedLoopArea2D(loop) >= 0;
   const reverse = settings.climbMilling ? ccw : !ccw;
@@ -293,7 +309,8 @@ function generateStandardHelixOutlinePath(
   ctx: CutZContext,
   globals: ToolpathGlobalOptions,
   geometry: Operation['geometry'] | null,
-  extent: OutlineCutExtent
+  extent: OutlineCutExtent,
+  offsetContext: OutlineOffsetContext = DEFAULT_OUTLINE_OFFSET_CONTEXT
 ): ToolpathPoint[] {
   const topZ = extent.cutTopZ;
   const safeZ = safeHeightWorldZ(ctx, globals.safeHeight);
@@ -432,7 +449,16 @@ function generateStandardHelixOutlinePath(
 
   if (settings.finishingPass) {
     const finishZ = layers[layers.length - 1];
-    appendConnectedFinishingPass(points, loop, settings, finishZ, safeZ, globals);
+    appendConnectedFinishingPass(
+      points,
+      loop,
+      settings,
+      finishZ,
+      safeZ,
+      globals,
+      undefined,
+      offsetContext
+    );
   } else {
     appendStraightRetractToSafe(points, safeZ);
   }
@@ -447,13 +473,22 @@ function generateStandardOutlinePath(
   globals: ToolpathGlobalOptions,
   geometry: Operation['geometry'] | null = null,
   entryTypeOverride?: Operation['settings']['outlineEntryType'],
-  extent?: OutlineCutExtent
+  extent?: OutlineCutExtent,
+  offsetContext: OutlineOffsetContext = DEFAULT_OUTLINE_OFFSET_CONTEXT
 ): ToolpathPoint[] {
   const cutExtent = extent ?? defaultOutlineCutExtent(ctx);
   const entryType = entryTypeOverride ?? settings.outlineEntryType ?? 'linear';
 
   if (entryType === 'helix') {
-    return generateStandardHelixOutlinePath(loop, settings, ctx, globals, geometry, cutExtent);
+    return generateStandardHelixOutlinePath(
+      loop,
+      settings,
+      ctx,
+      globals,
+      geometry,
+      cutExtent,
+      offsetContext
+    );
   }
 
   const topZ = cutExtent.cutTopZ;
@@ -603,7 +638,7 @@ function generateStandardOutlinePath(
 
   if (settings.finishingPass) {
     const finishZ = layers[layers.length - 1];
-    appendConnectedFinishingPass(points, loop, settings, finishZ, safeZ, globals);
+    appendConnectedFinishingPass(points, loop, settings, finishZ, safeZ, globals, undefined, offsetContext);
   } else {
     appendStraightRetractToSafe(points, safeZ);
   }
@@ -623,7 +658,14 @@ function generateOutlinePath(
   const points: ToolpathPoint[] = [];
   for (const job of jobs) {
     const path = settings.adaptiveMode
-      ? generateAdaptiveOutlinePath(op, ctx, globals, job.loop, job.extent)
+      ? generateAdaptiveOutlinePath(
+          op,
+          ctx,
+          globals,
+          job.loop,
+          job.extent,
+          job.offsetContext
+        )
       : generateStandardOutlinePath(
           job.loop,
           settings,
@@ -631,7 +673,8 @@ function generateOutlinePath(
           globals,
           geometry,
           undefined,
-          job.extent
+          job.extent,
+          job.offsetContext
         );
     if (!appendPoints(points, path)) break;
   }
@@ -646,10 +689,15 @@ function trochoidParams(
   z: number,
   roughing: boolean,
   globals: ToolpathGlobalOptions,
-  cutFeedRate?: number
+  cutFeedRate?: number,
+  offsetContext: OutlineOffsetContext = DEFAULT_OUTLINE_OFFSET_CONTEXT
 ) {
   const slot = resolveAdaptiveSlotGeometry(settings, { roughing });
-  const guideSign = resolveGuideTraverseSign(slotCenterGuide, settings.climbMilling);
+  const guideSign = resolveGuideTraverseSign(
+    slotCenterGuide,
+    settings.climbMilling,
+    offsetContext.wallSide
+  );
   return {
     forwardIncrement: slot.forwardIncrement,
     slotClearance: slot.slotClearance,
@@ -678,7 +726,8 @@ function generateAdaptiveTrochoidalPath(
   roughing = true,
   startS?: number,
   skipArcLength?: number,
-  omitFirstOrbitSample?: boolean
+  omitFirstOrbitSample?: boolean,
+  offsetContext: OutlineOffsetContext = DEFAULT_OUTLINE_OFFSET_CONTEXT
 ): ToolpathPoint[] {
   const roughSlot = resolveAdaptiveSlotGeometry(settings, { roughing });
   const finishSlot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
@@ -693,7 +742,8 @@ function generateAdaptiveTrochoidalPath(
     roughSlot.slotCenterOffset,
     finishSlot.innerCenterOffset,
     segLen,
-    cornerSpurOptionsForRoughing(settings)
+    cornerSpurOptionsForRoughing(settings),
+    offsetContext.offsetSign
   );
   const { arcGuide, spurRanges } = mapSpurRangesToArcGuide(
     slotCenterGuide,
@@ -704,7 +754,16 @@ function generateAdaptiveTrochoidalPath(
   return generateFourZoneAdaptivePath(
     slotCenterGuide,
     {
-      ...trochoidParams(partLoop, settings, slotCenterGuide, z, roughing, globals),
+      ...trochoidParams(
+        partLoop,
+        settings,
+        slotCenterGuide,
+        z,
+        roughing,
+        globals,
+        undefined,
+        offsetContext
+      ),
       startS,
       skipArcLength,
       omitFirstOrbitSample,
@@ -749,9 +808,10 @@ function appendStraightRetractToSafe(
 function finishContourPointFromToolPosition(
   partLoop: LoopPoint[],
   settings: Operation['settings'],
-  toolPos: { x: number; y: number }
+  toolPos: { x: number; y: number },
+  offsetSign = 1
 ): { x: number; y: number } {
-  const offset = toolRadius(settings) + (settings.radialOffset ?? 0);
+  const offset = (toolRadius(settings) + (settings.radialOffset ?? 0)) * offsetSign;
   const onPart = closestPointOnLoop2D(toolPos.x, toolPos.y, partLoop);
   return {
     x: onPart.x + onPart.outX * offset,
@@ -766,7 +826,8 @@ function appendConnectedFinishingPass(
   finishZ: number,
   safeZ: number,
   globals: ToolpathGlobalOptions,
-  finishPath?: ToolpathPoint[]
+  finishPath?: ToolpathPoint[],
+  offsetContext: OutlineOffsetContext = DEFAULT_OUTLINE_OFFSET_CONTEXT
 ): boolean {
   const sampleSpacing = pathSampleSpacing(globals.resolution);
   const stockAllowance = finishingStockAllowance(settings);
@@ -774,7 +835,7 @@ function appendConnectedFinishingPass(
 
   const finishPts =
     finishPath ??
-    contourTraverse(partLoop, settings, 0, globals.resolution).map((p) => ({
+    contourTraverse(partLoop, settings, 0, globals.resolution, offsetContext).map((p) => ({
       x: p.x,
       y: p.y,
       z: finishZ,
@@ -786,7 +847,12 @@ function appendConnectedFinishingPass(
   const last = lastPathPoint(points);
   if (last) {
     const traverse = finishPts.map((p) => ({ x: p.x, y: p.y, z: finishZ }));
-    const finishEntry = finishContourPointFromToolPosition(partLoop, settings, last);
+    const finishEntry = finishContourPointFromToolPosition(
+      partLoop,
+      settings,
+      last,
+      offsetContext.offsetSign
+    );
 
     if (Math.hypot(last.x - finishEntry.x, last.y - finishEntry.y) > 0.05) {
       if (
@@ -833,8 +899,8 @@ function appendConnectedFinishingPass(
       if (
         !appendPoints(points, [
           {
-            x: endAt.x + onPart.outX * stockAllowance,
-            y: endAt.y + onPart.outY * stockAllowance,
+            x: endAt.x + onPart.outX * stockAllowance * offsetContext.offsetSign,
+            y: endAt.y + onPart.outY * stockAllowance * offsetContext.offsetSign,
             z: finishZ,
             feedRate,
           },
@@ -885,18 +951,24 @@ function generateFinishingOutline(
   partLoop: LoopPoint[],
   settings: Operation['settings'],
   layerZ: number,
-  globals: ToolpathGlobalOptions
+  globals: ToolpathGlobalOptions,
+  offsetContext: OutlineOffsetContext = DEFAULT_OUTLINE_OFFSET_CONTEXT
 ): ToolpathPoint[] {
   const roughSlot = resolveAdaptiveSlotGeometry(settings, { roughing: true });
   const finishSlot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
   const segLen = minkowskiSegmentLen(globals.resolution);
-  const finishGuide = offsetLoop2DMinkowski(partLoop, finishSlot.innerCenterOffset, segLen);
+  const finishGuide = offsetLoop2DMinkowski(
+    partLoop,
+    finishSlot.innerCenterOffset * offsetContext.offsetSign,
+    segLen
+  );
   const { guide: roughCenterGuide } = buildSlotCenterGuideWithCornerSpurs(
     partLoop,
     roughSlot.slotCenterOffset,
     finishSlot.innerCenterOffset,
     segLen,
-    cornerSpurOptionsForRoughing(settings)
+    cornerSpurOptionsForRoughing(settings),
+    offsetContext.offsetSign
   );
   if (finishGuide.length < 3) return [];
 
@@ -1082,7 +1154,8 @@ function generateAdaptiveOutlinePath(
   ctx: CutZContext,
   globals: ToolpathGlobalOptions,
   loopOverride?: LoopPoint[],
-  extent?: OutlineCutExtent
+  extent?: OutlineCutExtent,
+  offsetContext: OutlineOffsetContext = DEFAULT_OUTLINE_OFFSET_CONTEXT
 ): ToolpathPoint[] {
   const { settings, geometry } = op;
   const loop = loopOverride ?? geometry?.loops?.[0];
@@ -1112,10 +1185,20 @@ function generateAdaptiveOutlinePath(
     segLen,
     trochSampleSpacing,
     globals.resolution,
-    globals.toolOrigin
+    globals.toolOrigin,
+    offsetContext
   );
   if (!entryLayout) {
-    return generateStandardOutlinePath(loop, settings, ctx, globals, geometry);
+    return generateStandardOutlinePath(
+      loop,
+      settings,
+      ctx,
+      globals,
+      geometry,
+      undefined,
+      cutExtent,
+      offsetContext
+    );
   }
 
   const toolStart = entryLayout.toolStart;
@@ -1243,7 +1326,8 @@ function generateAdaptiveOutlinePath(
       true,
       trochoidStartS,
       0,
-      false
+      false,
+      offsetContext
     );
 
     if (layerTroch.length === 0) continue;
@@ -1269,7 +1353,7 @@ function generateAdaptiveOutlinePath(
 
   if (settings.finishingPass) {
     const finishZ = layers.length > 0 ? layers[layers.length - 1] : finalZ;
-    const finishPath = generateFinishingOutline(loop, settings, finishZ, globals);
+    const finishPath = generateFinishingOutline(loop, settings, finishZ, globals, offsetContext);
     if (
       finishPath.length === 0 ||
       !appendConnectedFinishingPass(
@@ -1279,7 +1363,8 @@ function generateAdaptiveOutlinePath(
         finishZ,
         safeZ,
         globals,
-        finishPath
+        finishPath,
+        offsetContext
       )
     ) {
       appendRetractViaSlotCenter(points, slotJoinCenter, safeZ, travelFeed);

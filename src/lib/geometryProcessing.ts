@@ -334,6 +334,69 @@ export function outwardEdgeNormal2D(
   return { nx: side * (dy / len), ny: side * (-dx / len) };
 }
 
+export type OutlineWallSide = 'exterior' | 'interior';
+
+/** +1 or −1 so Minkowski offset moves away from the selected wall faces. */
+export function resolveWallOutwardOffsetSign(
+  loop: LoopPoint[],
+  wallNormalX: number,
+  wallNormalY: number
+): number {
+  const nLen = Math.hypot(wallNormalX, wallNormalY);
+  if (nLen < 1e-6 || loop.length < 2) return 1;
+
+  const nx = wallNormalX / nLen;
+  const ny = wallNormalY / nLen;
+  const ccw = signedLoopArea2D(loop) >= 0;
+  const side = ccw ? 1 : -1;
+
+  const a = loop[0];
+  const b = loop[1];
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const elen = Math.hypot(dx, dy) || 1;
+  const loopLeftX = side * (dy / elen);
+  const loopLeftY = side * (-dx / elen);
+
+  return loopLeftX * nx + loopLeftY * ny >= 0 ? 1 : -1;
+}
+
+/** Whether the wall faces bound an exterior perimeter or an interior void. */
+export function resolveOutlineWallSide(
+  loop: LoopPoint[],
+  wallNormalX: number,
+  wallNormalY: number
+): OutlineWallSide {
+  const nLen = Math.hypot(wallNormalX, wallNormalY);
+  if (nLen < 1e-6 || loop.length < 3) return 'exterior';
+
+  let cx = 0;
+  let cy = 0;
+  for (const p of loop) {
+    cx += p.x;
+    cy += p.y;
+  }
+  cx /= loop.length;
+  cy /= loop.length;
+
+  const probeX = cx + (wallNormalX / nLen) * 0.25;
+  const probeY = cy + (wallNormalY / nLen) * 0.25;
+  return pointInPolygon2D(probeX, probeY, loop) ? 'interior' : 'exterior';
+}
+
+export function convexJoinArcSweep(a1: number, a2: number): number {
+  let sweep = a2 - a1;
+  while (sweep <= -Math.PI) sweep += 2 * Math.PI;
+  while (sweep > Math.PI) sweep -= 2 * Math.PI;
+
+  // Acute convex tips: short normal sweep is the interior wedge — use the exterior bulge.
+  if (Math.abs(sweep) < Math.PI * 0.38) {
+    sweep = sweep > 0 ? sweep - 2 * Math.PI : sweep + 2 * Math.PI;
+  }
+
+  return sweep;
+}
+
 function appendDensifiedSegment(
   result: LoopPoint[],
   ax: number,
@@ -448,8 +511,7 @@ export function offsetLoop2DMinkowski(
     if (join.convex) {
       const a1 = Math.atan2(join.nInY, join.nInX);
       const a2 = Math.atan2(join.nOutY, join.nOutX);
-      let sweep = a2 - a1;
-      while (sweep < -1e-9) sweep += 2 * Math.PI;
+      const sweep = convexJoinArcSweep(a1, a2);
 
       const arcSteps = Math.max(1, Math.ceil((Math.abs(sweep) * Math.abs(offset)) / segLen));
       for (let s = 0; s <= arcSteps; s++) {
