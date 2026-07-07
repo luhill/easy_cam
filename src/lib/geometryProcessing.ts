@@ -1,6 +1,8 @@
 import * as THREE from 'three';
+import ClipperLib from 'clipper-lib';
 import { mergeVertices } from 'three-stdlib';
 import type { LoopPoint, SelectedGeometry } from '../types/operations';
+import { offsetClosedLoop2D } from './polygonOffset';
 
 export interface PartBounds {
   minX: number;
@@ -343,42 +345,14 @@ export function partCentroidXY(bounds: PartBounds): { x: number; y: number } {
   };
 }
 
-/** +1 or −1 so Minkowski offset moves away from the selected wall faces. */
+/** +1 or −1 so offset moves away from selected wall faces (given normalized winding). */
 export function resolveWallOutwardOffsetSign(
-  loop: LoopPoint[],
-  wallNormalX: number,
-  wallNormalY: number,
+  _loop: LoopPoint[],
+  _wallNormalX: number,
+  _wallNormalY: number,
   wallSide: OutlineWallSide = 'exterior'
 ): number {
-  const nLen = Math.hypot(wallNormalX, wallNormalY);
-  if (nLen < 1e-6 || loop.length < 2) return 1;
-
-  const nx = wallNormalX / nLen;
-  const ny = wallNormalY / nLen;
-  const aimX = wallSide === 'exterior' ? nx : -nx;
-  const aimY = wallSide === 'exterior' ? ny : -ny;
-
-  const loopCenter = loopCentroid(loop);
-  const probeOffset = Math.max(
-    0.35,
-    Math.hypot(loop[1].x - loop[0].x, loop[1].y - loop[0].y) * 0.08
-  );
-
-  let bestSign = 1;
-  let bestAlignment = -Infinity;
-  for (const sign of [1, -1] as const) {
-    const offsetLoop = offsetLoop2DMinkowski(loop, probeOffset * sign);
-    if (offsetLoop.length === 0) continue;
-    const offsetCenter = loopCentroid(offsetLoop);
-    const alignment =
-      (offsetCenter.x - loopCenter.x) * aimX + (offsetCenter.y - loopCenter.y) * aimY;
-    if (alignment > bestAlignment) {
-      bestAlignment = alignment;
-      bestSign = sign;
-    }
-  }
-
-  return bestSign;
+  return wallSide === 'interior' ? -1 : 1;
 }
 
 /** Whether the wall faces bound an exterior perimeter or an interior void. */
@@ -451,55 +425,9 @@ export function resolveOutlineWallSide(
   return 'exterior';
 }
 
-export function convexJoinArcSweep(
-  a1: number,
-  a2: number,
-  vertexTurnRad?: number
-): number {
-  let sweep = a2 - a1;
-  while (sweep <= -Math.PI) sweep += 2 * Math.PI;
-  while (sweep > Math.PI) sweep -= 2 * Math.PI;
-
-  // Curve tessellation: adjacent edges are nearly tangent — skip micro-arc joins.
-  if (vertexTurnRad !== undefined && Math.abs(vertexTurnRad) < (12 * Math.PI) / 180) {
-    return 0;
-  }
-
-  return sweep;
-}
-
-function appendDensifiedSegment(
-  result: LoopPoint[],
-  ax: number,
-  ay: number,
-  az: number,
-  bx: number,
-  by: number,
-  bz: number,
-  segLen: number,
-  skipFirst: boolean
-): void {
-  const dx = bx - ax;
-  const dy = by - ay;
-  const len = Math.hypot(dx, dy);
-  if (len < 1e-9) return;
-
-  const steps = Math.max(1, Math.ceil(len / segLen));
-  const start = skipFirst ? 1 : 0;
-  for (let s = start; s <= steps; s++) {
-    const t = s / steps;
-    result.push({
-      x: ax + dx * t,
-      y: ay + dy * t,
-      z: az + (bz - az) * t,
-    });
-  }
-}
-
 /**
- * Hybrid outward offset for slot-center guides.
- * Convex (exterior) corners: round joins via Minkowski disk sum.
- * Concave (interior) corners: miter joins to handle tight notches.
+ * Constant-distance offset of a closed XY loop for tool centerline guides.
+ * Uses Clipper polygon offset (round joins, self-intersection cleanup).
  */
 export function offsetLoop2DMinkowski(
   loop: LoopPoint[],
@@ -507,128 +435,12 @@ export function offsetLoop2DMinkowski(
   maxSegmentLen = 0.3,
   wallSide: OutlineWallSide = 'exterior'
 ): LoopPoint[] {
-  const n = loop.length;
-  if (n < 3 || Math.abs(offset) < 1e-9) return loop.map((p) => ({ ...p }));
-
-  const ccw = signedLoopArea2D(loop) >= 0;
-  const side = ccw ? 1 : -1;
-  const workingSide = wallSide === 'interior' ? (ccw ? -side : side) : side;
-  const segLen = Math.max(maxSegmentLen, Math.abs(offset) / 6);
-
-  interface VertexJoin {
-    convex: boolean;
-    turnRad: number;
-    curr: LoopPoint;
-    startX: number;
-    startY: number;
-    endX: number;
-    endY: number;
-    nInX: number;
-    nInY: number;
-    nOutX: number;
-    nOutY: number;
-  }
-
-  const joins: VertexJoin[] = [];
-
-  for (let i = 0; i < n; i++) {
-    const prev = loop[(i - 1 + n) % n];
-    const curr = loop[i];
-    const next = loop[(i + 1) % n];
-
-    const u1x = curr.x - prev.x;
-    const u1y = curr.y - prev.y;
-    const u2x = next.x - curr.x;
-    const u2y = next.y - curr.y;
-
-    const nIn = outwardEdgeNormal2D(prev.x, prev.y, curr.x, curr.y, workingSide);
-    const nOut = outwardEdgeNormal2D(curr.x, curr.y, next.x, next.y, workingSide);
-    const cross = u1x * u2y - u1y * u2x;
-    const turnRad = Math.atan2(Math.abs(cross), u1x * u2x + u1y * u2y);
-    const convex = workingSide * cross > 0;
-
-    if (convex) {
-      joins.push({
-        convex: true,
-        turnRad,
-        curr,
-        startX: curr.x + nIn.nx * offset,
-        startY: curr.y + nIn.ny * offset,
-        endX: curr.x + nOut.nx * offset,
-        endY: curr.y + nOut.ny * offset,
-        nInX: nIn.nx,
-        nInY: nIn.ny,
-        nOutX: nOut.nx,
-        nOutY: nOut.ny,
-      });
-    } else {
-      const miter = offsetMiterVertex(prev, curr, next, offset, workingSide);
-      joins.push({
-        convex: false,
-        turnRad,
-        curr,
-        startX: miter.x,
-        startY: miter.y,
-        endX: miter.x,
-        endY: miter.y,
-        nInX: nIn.nx,
-        nInY: nIn.ny,
-        nOutX: nOut.nx,
-        nOutY: nOut.ny,
-      });
-    }
-  }
-
-  const result: LoopPoint[] = [];
-
-  for (let i = 0; i < n; i++) {
-    const join = joins[i];
-    const nextJoin = joins[(i + 1) % n];
-
-    if (join.convex) {
-      const a1 = Math.atan2(join.nInY, join.nInX);
-      const a2 = Math.atan2(join.nOutY, join.nOutX);
-      const sweep = convexJoinArcSweep(a1, a2, join.turnRad);
-
-      if (Math.abs(sweep) > 1e-6) {
-        const arcSteps = Math.max(1, Math.ceil((Math.abs(sweep) * Math.abs(offset)) / segLen));
-        for (let s = 0; s <= arcSteps; s++) {
-          const ang = a1 + (sweep * s) / arcSteps;
-          result.push({
-            x: join.curr.x + offset * Math.cos(ang),
-            y: join.curr.y + offset * Math.sin(ang),
-            z: join.curr.z,
-          });
-        }
-      } else {
-        result.push({
-          x: join.endX,
-          y: join.endY,
-          z: join.curr.z,
-        });
-      }
-    } else {
-      result.push({
-        x: join.endX,
-        y: join.endY,
-        z: join.curr.z,
-      });
-    }
-
-    appendDensifiedSegment(
-      result,
-      join.endX,
-      join.endY,
-      join.curr.z,
-      nextJoin.startX,
-      nextJoin.startY,
-      nextJoin.curr.z,
-      segLen,
-      true
-    );
-  }
-
-  return result;
+  return offsetClosedLoop2D(loop, offset, {
+    joinType: ClipperLib.JoinType.jtRound,
+    miterLimit: 2,
+    maxSegmentLen: Math.max(maxSegmentLen, 0),
+    wallSide,
+  });
 }
 
 export function closestPointOnLoop2D(
