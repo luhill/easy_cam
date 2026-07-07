@@ -61,6 +61,7 @@ import {
 import {
   adaptiveForwardIncrement,
   buildArcLengthGuide,
+  findClosestSOnGuide,
   sampleGuideAtS,
   type ArcLengthGuide,
 } from './trochoidalPath';
@@ -321,7 +322,7 @@ function generateStandardHelixOutlinePath(
         Math.hypot(toolStart.x - joinPoint.x, toolStart.y - joinPoint.y) > 0.5
       ) {
         const boreBottom = lastPathPoint(points);
-        let leadIn = boreBottom
+        const splineGuide = boreBottom
           ? buildHelixOutlineSplineLeadIn(
               toolStart,
               boreBottom,
@@ -329,23 +330,39 @@ function generateStandardHelixOutlinePath(
               layerZ,
               sampleSpacing,
               rotDir
-            ).map((p) => ({ ...p, feedRate: cutFeed }))
-          : standardSplineLeadInFeed(
-              layout,
+            )
+          : buildStandardSplineLeadIn(layout, layerZ, sampleSpacing, toolStart);
+
+        let leadIn: ToolpathPoint[] = splineGuide.map((p) => ({
+          ...p,
+          feedRate: cutFeed,
+        }));
+
+        if (boreBottom && splineGuide.length > 0) {
+          const distToSplineStart = Math.hypot(
+            boreBottom.x - splineGuide[0].x,
+            boreBottom.y - splineGuide[0].y
+          );
+          if (distToSplineStart > sampleSpacing * 0.75) {
+            const transition = generateBoreBottomToLeadInTransition(
+              toolStart,
+              boreBottom,
+              splineGuide[0],
               layerZ,
-              cutFeed,
-              sampleSpacing,
-              undefined,
-              toolStart
+              stepoverIncrement,
+              rotDir,
+              segmentsPerRev,
+              cutFeed
             );
-        if (
-          boreBottom &&
-          leadIn.length > 0 &&
-          Math.hypot(leadIn[0].x - boreBottom.x, leadIn[0].y - boreBottom.y) <
-            sampleSpacing * 0.75
-        ) {
-          leadIn = leadIn.slice(1);
+            leadIn =
+              transition.length > 0
+                ? [...transition, ...leadIn.slice(1)]
+                : leadIn;
+          } else if (leadIn.length > 0) {
+            leadIn = leadIn.slice(1);
+          }
         }
+
         if (!appendPoints(points, leadIn)) break;
       }
     } else {
@@ -488,7 +505,7 @@ function generateStandardOutlinePath(
       } else {
         const at = lastPathPoint(points) ?? plungeAt;
         loopAnchor = { x: at.x, y: at.y };
-        loopStartS = stationOnContour(traverse, loopAnchor, rampSampleSpacing);
+        loopStartS = findClosestSOnGuide(arcGuide, loopAnchor).s;
       }
       loopSkipNear = lastPathPoint(points) ?? undefined;
     } else {
@@ -535,7 +552,7 @@ function generateStandardOutlinePath(
         );
         if (!appendPoints(points, ramp.points)) break;
         loopAnchor = ramp.endPoint;
-        loopStartS = stationOnContour(traverse, ramp.endPoint, rampSampleSpacing);
+        loopStartS = findClosestSOnGuide(arcGuide, ramp.endPoint).s;
       }
 
       loopSkipNear = lastPathPoint(points) ?? undefined;

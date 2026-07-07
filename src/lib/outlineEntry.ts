@@ -245,8 +245,8 @@ export function buildOutlineSplineEntryGuide(
     ];
   }
 
-  const startHandle = Math.min(Math.max(chord * 0.25, sampleSpacing), chord * 0.42);
-  const endHandle = Math.min(Math.max(chord * 0.18, sampleSpacing * 0.75), chord * 0.32);
+  const startHandle = Math.min(Math.max(chord * 0.18, sampleSpacing * 0.5), chord * 0.32);
+  const endHandle = Math.min(Math.max(chord * 0.14, sampleSpacing * 0.5), chord * 0.25);
   const startDir = startTangent ?? { x: dx / chord, y: dy / chord };
   const sLen = Math.hypot(startDir.x, startDir.y) || 1;
   const t0 = {
@@ -297,17 +297,28 @@ export function buildStandardSplineLeadIn(
   return spline.map((p) => ({ x: p.x, y: p.y, z }));
 }
 
-/** Spline from helix bore-bottom to contour join with circle exit tangent. */
+/** Spline from helix bore-bottom to contour join — chord departure, tangent arrival. */
 export function buildHelixOutlineSplineLeadIn(
-  boreCenter: { x: number; y: number },
+  _boreCenter: { x: number; y: number },
   boreBottom: { x: number; y: number },
   layout: StandardEntryLayout,
   z: number,
   sampleSpacing: number,
-  rotDir: number
+  _rotDir: number
 ): ToolpathPoint[] {
-  const startTan = helixBoreExitTangent(boreCenter, boreBottom, rotDir);
-  return buildStandardSplineLeadIn(layout, z, sampleSpacing, boreBottom, startTan);
+  const dx = layout.contourJoin.x - boreBottom.x;
+  const dy = layout.contourJoin.y - boreBottom.y;
+  const chord = Math.hypot(dx, dy) || 1;
+  const chordTan = { x: dx / chord, y: dy / chord };
+  const spline = buildOutlineSplineEntryGuide(
+    boreBottom,
+    layout.contourJoin,
+    layout.traverseTangent,
+    sampleSpacing,
+    z,
+    chordTan
+  );
+  return spline.map((p) => ({ x: p.x, y: p.y, z }));
 }
 
 export function standardSplineLeadInFeed(
@@ -364,18 +375,23 @@ export function standardSplineTailFromPoint(
     sampleSpacing,
     z
   );
+  if (spline.length < 2) return [];
 
-  let bestIdx = 0;
-  let bestDist = Infinity;
-  for (let i = 0; i < spline.length; i++) {
-    const d = Math.hypot(spline[i].x - fromPoint.x, spline[i].y - fromPoint.y);
-    if (d < bestDist) {
-      bestDist = d;
-      bestIdx = i;
-    }
+  const guide = buildOpenArcLengthGuide(spline, Math.max(sampleSpacing, 0.25), true);
+  if (guide.totalLength <= 0) return [];
+
+  const fromS = findClosestSOnGuide(guide, fromPoint).s;
+  const remain = guide.totalLength - fromS;
+  if (remain < sampleSpacing * 0.25) return [];
+
+  const steps = Math.max(2, Math.ceil(remain / sampleSpacing));
+  const points: ToolpathPoint[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const s = fromS + (i / steps) * remain;
+    const frame = sampleOpenGuideAtS(guide, s);
+    points.push({ x: frame.x, y: frame.y, z, feedRate });
   }
-
-  return spline.slice(bestIdx).map((p) => ({ x: p.x, y: p.y, z, feedRate }));
+  return points;
 }
 
 /** Minimum bore-center distance from part outline for standard helix entry. */
@@ -455,8 +471,8 @@ export function stationOnContour(
 
 function appendEdgeSamples(
   points: ToolpathPoint[],
-  from: LoopPoint,
-  to: LoopPoint,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
   layerZ: number,
   feedRate: number,
   sampleSpacing: number
@@ -478,7 +494,41 @@ function appendEdgeSamples(
   }
 }
 
-/** Walk the offset polyline vertex-by-vertex for an exact closed perimeter loop. */
+function locatePointOnClosedPolyline(
+  traverse: LoopPoint[],
+  point: { x: number; y: number }
+): { edgeIdx: number; startPoint: { x: number; y: number } } {
+  const n = traverse.length;
+  if (n < 2) return { edgeIdx: 0, startPoint: { x: point.x, y: point.y } };
+
+  let bestEdge = 0;
+  let bestDist = Infinity;
+  let bestPoint = { x: point.x, y: point.y };
+
+  for (let i = 0; i < n; i++) {
+    const a = traverse[i];
+    const b = traverse[(i + 1) % n];
+    const abx = b.x - a.x;
+    const aby = b.y - a.y;
+    const len2 = abx * abx + aby * aby;
+    const t =
+      len2 > 1e-12
+        ? Math.max(0, Math.min(1, ((point.x - a.x) * abx + (point.y - a.y) * aby) / len2))
+        : 0;
+    const px = a.x + abx * t;
+    const py = a.y + aby * t;
+    const d = Math.hypot(px - point.x, py - point.y);
+    if (d < bestDist) {
+      bestDist = d;
+      bestEdge = i;
+      bestPoint = { x: px, y: py };
+    }
+  }
+
+  return { edgeIdx: bestEdge, startPoint: bestPoint };
+}
+
+/** Walk the offset polyline edge-by-edge for an exact closed perimeter loop. */
 export function sampleContourLoopAlongTraverse(
   traverse: LoopPoint[],
   layerZ: number,
@@ -491,47 +541,48 @@ export function sampleContourLoopAlongTraverse(
   const n = traverse.length;
   if (n < 3) return [];
 
-  let startIdx = 0;
-  let bestDist = Infinity;
-  for (let i = 0; i < n; i++) {
-    const d = Math.hypot(traverse[i].x - loopAnchor.x, traverse[i].y - loopAnchor.y);
-    if (d < bestDist) {
-      bestDist = d;
-      startIdx = i;
-    }
-  }
-
-  const dir = forward ? 1 : -1;
+  const { edgeIdx, startPoint } = locatePointOnClosedPolyline(traverse, loopAnchor);
   const points: ToolpathPoint[] = [];
-  const startVtx = traverse[startIdx];
 
   const skipFirst =
     !!skipNear &&
-    Math.hypot(skipNear.x - startVtx.x, skipNear.y - startVtx.y) < sampleSpacing * 0.75 &&
+    Math.hypot(skipNear.x - startPoint.x, skipNear.y - startPoint.y) < sampleSpacing * 0.75 &&
     Math.abs(skipNear.z - layerZ) < 1e-4;
 
   if (!skipFirst) {
-    points.push({ x: startVtx.x, y: startVtx.y, z: layerZ, feedRate });
+    points.push({ x: startPoint.x, y: startPoint.y, z: layerZ, feedRate });
   }
 
-  for (let step = 1; step <= n; step++) {
-    const idx = ((startIdx + dir * step) % n + n) % n;
-    const prevIdx = ((startIdx + dir * (step - 1)) % n + n) % n;
-    if (step === n) {
-      const last = points[points.length - 1];
-      if (!last || Math.hypot(last.x - startVtx.x, last.y - startVtx.y) > 1e-4) {
-        points.push({ x: startVtx.x, y: startVtx.y, z: layerZ, feedRate });
+  const dir = forward ? 1 : -1;
+  for (let step = 0; step < n; step++) {
+    let fromPt: { x: number; y: number };
+    let toPt: { x: number; y: number };
+
+    if (step === 0) {
+      fromPt = startPoint;
+      const nextVtx = forward ? (edgeIdx + 1) % n : edgeIdx;
+      toPt = { x: traverse[nextVtx].x, y: traverse[nextVtx].y };
+    } else if (step === n - 1) {
+      const prevVtx = forward ? edgeIdx : (edgeIdx + 1) % n;
+      fromPt = { x: traverse[prevVtx].x, y: traverse[prevVtx].y };
+      toPt = startPoint;
+    } else {
+      const e = (edgeIdx + dir * step + n * 4) % n;
+      if (forward) {
+        fromPt = { x: traverse[e].x, y: traverse[e].y };
+        toPt = { x: traverse[(e + 1) % n].x, y: traverse[(e + 1) % n].y };
+      } else {
+        fromPt = { x: traverse[(e + 1) % n].x, y: traverse[(e + 1) % n].y };
+        toPt = { x: traverse[e].x, y: traverse[e].y };
       }
-      break;
     }
-    appendEdgeSamples(
-      points,
-      traverse[prevIdx],
-      traverse[idx],
-      layerZ,
-      feedRate,
-      sampleSpacing
-    );
+
+    appendEdgeSamples(points, fromPt, toPt, layerZ, feedRate, sampleSpacing);
+  }
+
+  const last = points[points.length - 1];
+  if (!last || Math.hypot(last.x - startPoint.x, last.y - startPoint.y) > 1e-4) {
+    points.push({ x: startPoint.x, y: startPoint.y, z: layerZ, feedRate });
   }
 
   return points;
