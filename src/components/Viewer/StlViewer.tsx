@@ -1078,6 +1078,7 @@ function SceneContent({
         <DebugGuideLines
           slotCenterline={adaptiveDebugGuides.slotCenterline}
           leadInGuide={adaptiveDebugGuides.leadInGuide}
+          slotCenterlineOpen={adaptiveDebugGuides.slotCenterlineOpen}
         />
       )}
       {adaptiveEntry && partBounds && selectionMode && selectionSubMode === 'entry-point' && (

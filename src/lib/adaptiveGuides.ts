@@ -26,6 +26,8 @@ export interface AdaptiveOutlineDebugGuides {
   slotCenterline: LoopPoint[];
   leadInGuide: LoopPoint[];
   layerZ: number;
+  /** When true, draw the slot path open so A→B→A branches are not chord-closed. */
+  slotCenterlineOpen?: boolean;
 }
 
 function resolveGuideContext(
@@ -101,6 +103,7 @@ export function computeAdaptiveOutlineDebugGuides(
     slotCenterline: entryLayout.slotCenterGuide.map((p) => ({ ...p, z: layerZ })),
     leadInGuide,
     layerZ,
+    slotCenterlineOpen: entryLayout.cornerSpurRanges.length > 0,
   };
 }
 

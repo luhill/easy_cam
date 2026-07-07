@@ -6,6 +6,8 @@ import { TOOLPATH_MOVE_COLORS } from '../../lib/toolpathColors';
 interface DebugGuideLinesProps {
   slotCenterline?: LoopPoint[];
   leadInGuide?: LoopPoint[];
+  /** Draw slot path without auto-closing (needed when spur branches are present). */
+  slotCenterlineOpen?: boolean;
   color?: string;
   opacity?: number;
 }
@@ -58,6 +60,7 @@ function ClosedLoop({
 export function DebugGuideLines({
   slotCenterline,
   leadInGuide,
+  slotCenterlineOpen = false,
   color = TOOLPATH_MOVE_COLORS.reference,
   opacity = 0.95,
 }: DebugGuideLinesProps) {
@@ -67,9 +70,12 @@ export function DebugGuideLines({
 
   return (
     <group>
-      {hasSlot && (
-        <ClosedLoop loop={slotCenterline!} color={color} opacity={opacity} />
-      )}
+      {hasSlot &&
+        (slotCenterlineOpen ? (
+          <OpenPolyline points={slotCenterline!} color={color} opacity={opacity} />
+        ) : (
+          <ClosedLoop loop={slotCenterline!} color={color} opacity={opacity} />
+        ))}
       {hasLeadIn && (
         <OpenPolyline points={leadInGuide!} color={color} opacity={opacity} />
       )}
