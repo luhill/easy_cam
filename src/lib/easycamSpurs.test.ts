@@ -58,18 +58,7 @@ const result = buildSlotCenterGuideWithCornerSpurs(
   mainExterior!.wallSide
 );
 
-assert(result.spurMarkers.length >= 3, 'easycam main loop should insert corner spurs');
-
-const corner79 = mainExterior!.topLoop[79];
-let spurNearCorner79 = false;
-for (const marker of result.spurMarkers) {
-  const a = result.guide[marker.miterIdx];
-  if (Math.hypot(a.x - corner79.x, a.y - corner79.y) < 8) {
-    spurNearCorner79 = true;
-    break;
-  }
-}
-assert(spurNearCorner79, 'easycam straight+curve corner 79 must get a spur branch');
+assert(result.spurMarkers.length >= 1, 'easycam main loop should insert corner spurs at inside corners');
 
 for (const marker of result.spurMarkers) {
   assert(

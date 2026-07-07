@@ -401,13 +401,7 @@ function collectSpurCorners(
     );
 
     if (!needsCornerSpur(prev, curr, next, workingSide, maxInternalAngleDeg)) {
-      const internalAngle = vertexInternalAngleDeg(prev, curr, next);
-      const straightCurveCorner =
-        roundHits.length === 0 &&
-        miterHits.length > 0 &&
-        internalAngle >= 45 &&
-        internalAngle < 85;
-      if (!straightCurveCorner) continue;
+      continue;
     }
 
     const centerHit =
@@ -575,27 +569,18 @@ function needsCornerSpur(
   const internalAngle = vertexInternalAngleDeg(prev, curr, next);
   if (internalAngle >= maxInternalAngleDeg) return false;
 
-  if (isConcaveReentrantCorner(prev, curr, next, workingSide)) return true;
-
   const e1x = curr.x - prev.x;
   const e1y = curr.y - prev.y;
   const e2x = next.x - curr.x;
   const e2y = next.y - curr.y;
   const turnCross = e1x * e2y - e1y * e2x;
-  if (workingSide * turnCross <= 0) return false;
 
-  const chordDx = next.x - prev.x;
-  const chordDy = next.y - prev.y;
-  const chordLen = Math.hypot(chordDx, chordDy);
-  if (chordLen < 1e-6) return false;
+  // Spur only at acute inside (concave/re-entrant) corners — never convex external.
+  if (workingSide * turnCross > 0) return false;
 
-  const chordCross = chordDx * (curr.y - prev.y) - chordDy * (curr.x - prev.x);
-  const distToChord = Math.abs(chordCross) / chordLen;
-  const edgeLen = Math.min(Math.hypot(e1x, e1y), Math.hypot(e2x, e2y));
+  if (internalAngle <= 90) return true;
 
-  if (workingSide * chordCross < 0 && distToChord / edgeLen < 0.58) return false;
-
-  return workingSide * chordCross > 0;
+  return isConcaveReentrantCorner(prev, curr, next, workingSide);
 }
 
 /** First centerline index after a spur anchor that is not on the round-join fillet cap. */

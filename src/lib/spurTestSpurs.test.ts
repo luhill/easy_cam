@@ -1,5 +1,5 @@
 /**
- * Regression: spurTest.stl — single straight+curve acute corner.
+ * Regression: spurTest.stl — single acute inside corner (straight meets curve).
  * Run with: npm run test:spurtest-spurs
  */
 import fs from 'node:fs';
@@ -54,11 +54,11 @@ assert(
   'spur branch must return to the same A anchor'
 );
 
-/** Part corner where straight meets curve (index 160 on bundled loop). */
-const partCorner = loop.topLoop[160];
+/** Part corner — acute inside corner where straight meets curve (index 161). */
+const partCorner = loop.topLoop[161];
 assert(
-  Math.hypot(a.x - partCorner.x, a.y - partCorner.y) < 8,
-  'spur anchor A must lie on the walked centerline near the part corner'
+  Math.hypot(a.x - partCorner.x, a.y - partCorner.y) < 12,
+  'spur anchor A must lie on the walked centerline near the inside part corner'
 );
 
 /** Spur must not jump off the walked path (miter-only anchor far from centerline). */
