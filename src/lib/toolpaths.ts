@@ -21,7 +21,7 @@ import {
   buildHelixOutlineSplineLeadIn,
   buildStandardSplineLeadIn,
   generateContourLinearRamp,
-  generateOpenPolylineLinearRamp,
+  generateStandardLeadInLayerRamp,
   outlineApproachWorldZ,
   outlineRampLengthMm,
   resolveStandardEntryLayout,
@@ -52,7 +52,6 @@ import {
   helixRadiusTaperedFromStart,
   interiorHelixRadiusAtZ,
   isGuideOutwardCCW,
-  resolveHelixRadius,
   resolveHelixRotationDir,
   resolveInteriorHelixRadius,
   resolveInteriorHelixRotationDir,
@@ -289,13 +288,10 @@ function generateStandardHelixOutlinePath(
   const { traverse, arcGuide } = layout;
   if (traverse.length === 0) return points;
   const approachZ = outlineApproachWorldZ(topZ, globals.safeHeight, settings.zStartOffset);
-  const helixR = resolveHelixRadius(settings);
   const helixOpts = { stockTopZ: topZ, globals };
   const plungeFeed = settings.plungeRate;
   const cutFeed = settings.feedRate;
   const rotDir = resolveHelixRotationDir(settings.climbMilling);
-  const segmentsPerRev = helixSegmentsPerRev(globals.resolution);
-  const stepoverIncrement = adaptiveForwardIncrement(settings.toolDiameter, settings.stepover);
   const sampleSpacing = pathSampleSpacing(globals.resolution);
 
   appendOutlineApproachToStart(points, toolStart, safeZ, approachZ, plungeFeed);
@@ -322,7 +318,7 @@ function generateStandardHelixOutlinePath(
         Math.hypot(toolStart.x - joinPoint.x, toolStart.y - joinPoint.y) > 0.5
       ) {
         const boreBottom = lastPathPoint(points);
-        const splineGuide = boreBottom
+        const leadIn = boreBottom
           ? buildHelixOutlineSplineLeadIn(
               toolStart,
               boreBottom,
@@ -330,68 +326,37 @@ function generateStandardHelixOutlinePath(
               layerZ,
               sampleSpacing,
               rotDir
-            )
-          : buildStandardSplineLeadIn(layout, layerZ, sampleSpacing, toolStart);
+            ).map((p) => ({ ...p, feedRate: cutFeed }))
+          : buildStandardSplineLeadIn(layout, layerZ, sampleSpacing, toolStart).map((p) => ({
+              ...p,
+              feedRate: cutFeed,
+            }));
 
-        let leadIn: ToolpathPoint[] = splineGuide.map((p) => ({
-          ...p,
-          feedRate: cutFeed,
-        }));
-
-        if (boreBottom && splineGuide.length > 0) {
-          const distToSplineStart = Math.hypot(
-            boreBottom.x - splineGuide[0].x,
-            boreBottom.y - splineGuide[0].y
-          );
-          if (distToSplineStart > sampleSpacing * 0.75) {
-            const transition = generateBoreBottomToLeadInTransition(
-              toolStart,
-              boreBottom,
-              splineGuide[0],
-              layerZ,
-              stepoverIncrement,
-              rotDir,
-              segmentsPerRev,
-              cutFeed
-            );
-            leadIn =
-              transition.length > 0
-                ? [...transition, ...leadIn.slice(1)]
-                : leadIn;
-          } else if (leadIn.length > 0) {
-            leadIn = leadIn.slice(1);
-          }
+        if (
+          boreBottom &&
+          leadIn.length > 0 &&
+          Math.hypot(leadIn[0].x - boreBottom.x, leadIn[0].y - boreBottom.y) <
+            sampleSpacing * 0.75
+        ) {
+          leadIn.shift();
         }
-
         if (!appendPoints(points, leadIn)) break;
       }
     } else {
-      appendFreshSlotWidthBore(
-        points,
-        toolStart,
+      const last = lastPathPoint(points);
+      const rampStart = last ?? joinPoint;
+      const layerRamp = generateContourLinearRamp(
+        traverse,
+        rampStart,
         layerPrevZ,
         layerZ,
-        helixR,
-        settings,
-        helixOpts
+        outlineRampLengthMm(settings),
+        settings.rampAngleDeg,
+        plungeFeed,
+        sampleSpacing,
+        layout.guideTraverseSign >= 0
       );
-
-      if (
-        !appendBoreBottomWidenAndLeadIn(
-          points,
-          toolStart,
-          layerZ,
-          helixR,
-          helixRadiusTaperedFromStart(settings, layerZ, layerPrevZ, helixR),
-          stepoverIncrement,
-          rotDir,
-          segmentsPerRev,
-          plungeFeed,
-          { x: joinPoint.x, y: joinPoint.y, z: layerZ, feedRate: cutFeed }
-        )
-      ) {
-        break;
-      }
+      if (!appendPoints(points, layerRamp.points)) break;
     }
 
     const loopStartS = layout.contourJoinS;
@@ -518,26 +483,32 @@ function generateStandardOutlinePath(
 
       let ramp: ReturnType<typeof generateContourLinearRamp>;
       if (li === 0 && needsLeadIn) {
-        const entryPath = buildStandardSplineLeadIn(layout, approachZ, rampSampleSpacing);
-        ramp = generateOpenPolylineLinearRamp(
-          entryPath,
+        const leadInRamp = generateStandardLeadInLayerRamp(
+          layout,
+          traverse,
           fromZ,
           layerZ,
           rampLength,
           settings.rampAngleDeg,
           settings.plungeRate,
-          rampSampleSpacing
+          rampSampleSpacing,
+          climbForward
         );
-        if (!appendPoints(points, ramp.points)) break;
+        if (!appendPoints(points, leadInRamp.points)) break;
 
-        const splineTail = standardSplineTailFromPoint(
-          layout,
-          layerZ,
-          settings.feedRate,
-          ramp.endPoint,
-          rampSampleSpacing
-        );
-        if (!appendPoints(points, splineTail)) break;
+        if (leadInRamp.needsSplineTail) {
+          const splineTail = standardSplineTailFromPoint(
+            layout,
+            layerZ,
+            settings.feedRate,
+            leadInRamp.endPoint,
+            rampSampleSpacing
+          );
+          if (!appendPoints(points, splineTail)) break;
+        }
+
+        loopAnchor = leadInRamp.loopAnchor;
+        loopStartS = leadInRamp.loopStartS;
       } else {
         ramp = generateContourLinearRamp(
           traverse,

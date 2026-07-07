@@ -10,6 +10,7 @@ import {
   buildArcLengthGuide,
   buildOpenArcLengthGuide,
   findClosestSOnGuide,
+  guideArcLengthBetween,
   sampleGuideAtS,
   sampleOpenGuideAtS,
   type ArcLengthGuide,
@@ -245,8 +246,8 @@ export function buildOutlineSplineEntryGuide(
     ];
   }
 
-  const startHandle = Math.min(Math.max(chord * 0.18, sampleSpacing * 0.5), chord * 0.32);
-  const endHandle = Math.min(Math.max(chord * 0.14, sampleSpacing * 0.5), chord * 0.25);
+  const startHandle = Math.min(Math.max(chord * 0.22, sampleSpacing), chord * 0.38);
+  const endHandle = Math.min(Math.max(chord * 0.48, sampleSpacing * 1.5), chord * 0.72);
   const startDir = startTangent ?? { x: dx / chord, y: dy / chord };
   const sLen = Math.hypot(startDir.x, startDir.y) || 1;
   const t0 = {
@@ -297,28 +298,61 @@ export function buildStandardSplineLeadIn(
   return spline.map((p) => ({ x: p.x, y: p.y, z }));
 }
 
-/** Spline from helix bore-bottom to contour join — chord departure, tangent arrival. */
+/** Spline from helix bore-bottom to contour join — tight departure, tangent arrival. */
 export function buildHelixOutlineSplineLeadIn(
-  _boreCenter: { x: number; y: number },
+  boreCenter: { x: number; y: number },
   boreBottom: { x: number; y: number },
   layout: StandardEntryLayout,
   z: number,
   sampleSpacing: number,
-  _rotDir: number
+  rotDir: number
 ): ToolpathPoint[] {
   const dx = layout.contourJoin.x - boreBottom.x;
   const dy = layout.contourJoin.y - boreBottom.y;
-  const chord = Math.hypot(dx, dy) || 1;
-  const chordTan = { x: dx / chord, y: dy / chord };
-  const spline = buildOutlineSplineEntryGuide(
-    boreBottom,
-    layout.contourJoin,
-    layout.traverseTangent,
-    sampleSpacing,
-    z,
-    chordTan
-  );
-  return spline.map((p) => ({ x: p.x, y: p.y, z }));
+  const chord = Math.hypot(dx, dy);
+  if (chord <= 1e-6) {
+    return [{ x: layout.contourJoin.x, y: layout.contourJoin.y, z }];
+  }
+
+  const startTan = helixBoreExitTangent(boreCenter, boreBottom, rotDir);
+  const startHandle = Math.min(Math.max(chord * 0.12, sampleSpacing * 0.4), chord * 0.22);
+  const endHandle = Math.min(Math.max(chord * 0.16, sampleSpacing * 0.5), chord * 0.28);
+  const sLen = Math.hypot(startTan.x, startTan.y) || 1;
+  const t0 = {
+    x: (startTan.x / sLen) * startHandle,
+    y: (startTan.y / sLen) * startHandle,
+  };
+  const tLen = Math.hypot(layout.traverseTangent.x, layout.traverseTangent.y) || 1;
+  const t1 = {
+    x: (layout.traverseTangent.x / tLen) * endHandle,
+    y: (layout.traverseTangent.y / tLen) * endHandle,
+  };
+
+  const steps = Math.max(6, Math.ceil(chord / sampleSpacing));
+  const points: ToolpathPoint[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const u = i / steps;
+    const u2 = u * u;
+    const u3 = u2 * u;
+    const h00 = 2 * u3 - 3 * u2 + 1;
+    const h10 = u3 - 2 * u2 + u;
+    const h01 = -2 * u3 + 3 * u2;
+    const h11 = u3 - u2;
+    points.push({
+      x:
+        h00 * boreBottom.x +
+        h10 * t0.x +
+        h01 * layout.contourJoin.x +
+        h11 * t1.x,
+      y:
+        h00 * boreBottom.y +
+        h10 * t0.y +
+        h01 * layout.contourJoin.y +
+        h11 * t1.y,
+      z,
+    });
+  }
+  return points;
 }
 
 export function standardSplineLeadInFeed(
@@ -457,6 +491,363 @@ export interface ContourRampResult {
   points: ToolpathPoint[];
   endPoint: { x: number; y: number };
   endS: number;
+}
+
+export type StandardLeadInRampMode = 'contour-only' | 'spline-only' | 'spline-hybrid';
+
+export interface StandardLeadInRampResult extends ContourRampResult {
+  mode: StandardLeadInRampMode;
+  needsSplineTail: boolean;
+  loopAnchor: { x: number; y: number };
+  loopStartS: number;
+  endedOnSpline: boolean;
+}
+
+export function standardLeadInChordMm(layout: StandardEntryLayout): number {
+  return Math.hypot(
+    layout.toolStart.x - layout.contourJoin.x,
+    layout.toolStart.y - layout.contourJoin.y
+  );
+}
+
+export function classifyStandardLeadInRamp(
+  layout: StandardEntryLayout,
+  rampLengthMm: number
+): StandardLeadInRampMode {
+  const chord = standardLeadInChordMm(layout);
+  if (chord <= 0.5) return 'contour-only';
+  if (chord > rampLengthMm * 0.98) return 'spline-only';
+  return 'spline-hybrid';
+}
+
+function rampLegDz(legLen: number, rampAngleDeg: number, maxDz: number): number {
+  const angleRad = (Math.max(rampAngleDeg, 0.5) * Math.PI) / 180;
+  return Math.min(legLen * Math.tan(angleRad), maxDz);
+}
+
+type HybridRampPhase = 'spline' | 'contour';
+
+interface HybridRampState {
+  phase: HybridRampPhase;
+  splineS: number;
+  splineForward: boolean;
+  contourS: number;
+  contourForward: boolean;
+}
+
+function hybridRampSample(
+  state: HybridRampState,
+  splineGuide: ArcLengthGuide,
+  contourGuide: ArcLengthGuide
+): { x: number; y: number } {
+  if (state.phase === 'spline') {
+    const frame = sampleOpenGuideAtS(splineGuide, state.splineS);
+    return { x: frame.x, y: frame.y };
+  }
+  const frame = sampleGuideAtS(contourGuide, state.contourS);
+  return { x: frame.x, y: frame.y };
+}
+
+function hybridRampAdvance(
+  state: HybridRampState,
+  distance: number,
+  _splineGuide: ArcLengthGuide,
+  contourGuide: ArcLengthGuide,
+  splineTotal: number,
+  contourTotal: number,
+  contourJoinS: number,
+  climbForward: boolean
+): number {
+  let remaining = distance;
+  let consumed = 0;
+
+  while (remaining > 1e-6) {
+    if (state.phase === 'spline') {
+      const avail = state.splineForward ? splineTotal - state.splineS : state.splineS;
+      if (avail < 1e-6) {
+        if (state.splineForward) {
+          state.phase = 'contour';
+          state.contourS = contourJoinS;
+          state.contourForward = climbForward;
+        } else {
+          state.splineForward = true;
+        }
+        continue;
+      }
+      const step = Math.min(remaining, avail);
+      state.splineS += state.splineForward ? step : -step;
+      remaining -= step;
+      consumed += step;
+
+      if (state.splineForward && state.splineS >= splineTotal - 1e-5) {
+        state.splineS = splineTotal;
+        state.phase = 'contour';
+        state.contourS = contourJoinS;
+        state.contourForward = climbForward;
+      } else if (!state.splineForward && state.splineS <= 1e-5) {
+        state.splineS = 0;
+      }
+      continue;
+    }
+
+    if (!state.contourForward) {
+      const avail = guideArcLengthBetween(
+        contourTotal,
+        state.contourS,
+        contourJoinS,
+        false
+      );
+      if (avail < 1e-6) {
+        state.phase = 'spline';
+        state.splineS = splineTotal;
+        state.splineForward = false;
+        continue;
+      }
+      const step = Math.min(remaining, avail);
+      state.contourS = advanceGuideArcLength(contourGuide, state.contourS, step, false);
+      remaining -= step;
+      consumed += step;
+
+      if (
+        guideArcLengthBetween(contourTotal, state.contourS, contourJoinS, false) < 1e-4
+      ) {
+        state.contourS = contourJoinS;
+        state.phase = 'spline';
+        state.splineS = splineTotal;
+        state.splineForward = false;
+      }
+      continue;
+    }
+
+    const step = remaining;
+    state.contourS = advanceGuideArcLength(contourGuide, state.contourS, step, true);
+    remaining = 0;
+    consumed += step;
+  }
+
+  return consumed;
+}
+
+function hybridRampFlipDirection(state: HybridRampState): void {
+  if (state.phase === 'spline') {
+    state.splineForward = !state.splineForward;
+    return;
+  }
+  state.contourForward = !state.contourForward;
+}
+
+/** Case B: ramp along spline, continue on perimeter, reverse back through join onto spline. */
+function generateHybridSplineContourRamp(
+  splinePolyline: LoopPoint[],
+  traverse: LoopPoint[],
+  contourJoinS: number,
+  fromZ: number,
+  toZ: number,
+  rampLengthMm: number,
+  rampAngleDeg: number,
+  feedRate: number | undefined,
+  sampleSpacing: number,
+  climbForward: boolean
+): ContourRampResult & { endedOnSpline: boolean } {
+  const splineGuide = buildOpenArcLengthGuide(
+    splinePolyline,
+    Math.max(sampleSpacing, 0.25),
+    true
+  );
+  const contourGuide = buildArcLengthGuide(traverse, Math.max(sampleSpacing, 0.25));
+  const splineTotal = splineGuide.totalLength;
+  const contourTotal = contourGuide.totalLength;
+
+  if (splineTotal <= 0 || contourTotal <= 0 || Math.abs(fromZ - toZ) < 1e-5) {
+    const end = splinePolyline[splinePolyline.length - 1] ?? splinePolyline[0];
+    return {
+      points: [{ x: end.x, y: end.y, z: toZ, feedRate }],
+      endPoint: { x: end.x, y: end.y },
+      endS: splineTotal,
+      endedOnSpline: true,
+    };
+  }
+
+  const state: HybridRampState = {
+    phase: 'spline',
+    splineS: 0,
+    splineForward: true,
+    contourS: contourJoinS,
+    contourForward: climbForward,
+  };
+
+  const points: ToolpathPoint[] = [];
+  const start = hybridRampSample(state, splineGuide, contourGuide);
+  points.push({ x: start.x, y: start.y, z: fromZ, feedRate });
+
+  let currentZ = fromZ;
+  let iterations = 0;
+  const maxIterations = 5000;
+
+  while (currentZ > toZ + 1e-5 && iterations < maxIterations) {
+    const legStartZ = currentZ;
+    const legState: HybridRampState = { ...state };
+    const traveled = hybridRampAdvance(
+      state,
+      rampLengthMm,
+      splineGuide,
+      contourGuide,
+      splineTotal,
+      contourTotal,
+      contourJoinS,
+      climbForward
+    );
+
+    if (traveled < 1e-6) {
+      hybridRampFlipDirection(state);
+      iterations++;
+      continue;
+    }
+
+    const legDz = rampLegDz(traveled, rampAngleDeg, currentZ - toZ);
+    const steps = Math.max(1, Math.ceil(traveled / sampleSpacing));
+
+    for (let i = 1; i <= steps; i++) {
+      const dist = (i / steps) * traveled;
+      const walkState: HybridRampState = { ...legState };
+      hybridRampAdvance(
+        walkState,
+        dist,
+        splineGuide,
+        contourGuide,
+        splineTotal,
+        contourTotal,
+        contourJoinS,
+        climbForward
+      );
+      const pos = hybridRampSample(walkState, splineGuide, contourGuide);
+      points.push({
+        x: pos.x,
+        y: pos.y,
+        z: legStartZ - legDz * (i / steps),
+        feedRate,
+      });
+      iterations++;
+    }
+
+    currentZ = legStartZ - legDz;
+    hybridRampFlipDirection(state);
+    iterations++;
+  }
+
+  const endPos = hybridRampSample(state, splineGuide, contourGuide);
+  const last = points[points.length - 1];
+  if (
+    !last ||
+    Math.hypot(last.x - endPos.x, last.y - endPos.y) > 1e-4 ||
+    Math.abs(last.z - toZ) > 1e-4
+  ) {
+    points.push({ x: endPos.x, y: endPos.y, z: toZ, feedRate });
+  }
+
+  return {
+    points,
+    endPoint: endPos,
+    endS: state.phase === 'spline' ? state.splineS : state.contourS,
+    endedOnSpline: state.phase === 'spline',
+  };
+}
+
+/** First-layer lead-in ramp for Cases A / B / C. */
+export function generateStandardLeadInLayerRamp(
+  layout: StandardEntryLayout,
+  traverse: LoopPoint[],
+  fromZ: number,
+  toZ: number,
+  rampLengthMm: number,
+  rampAngleDeg: number,
+  feedRate: number | undefined,
+  sampleSpacing: number,
+  climbForward: boolean
+): StandardLeadInRampResult {
+  const mode = classifyStandardLeadInRamp(layout, rampLengthMm);
+  const splinePolyline = buildOutlineSplineEntryGuide(
+    layout.toolStart,
+    layout.contourJoin,
+    layout.traverseTangent,
+    sampleSpacing,
+    fromZ
+  );
+
+  if (mode === 'contour-only') {
+    const ramp = generateContourLinearRamp(
+      traverse,
+      layout.contourJoin,
+      fromZ,
+      toZ,
+      rampLengthMm,
+      rampAngleDeg,
+      feedRate,
+      sampleSpacing,
+      climbForward
+    );
+    return {
+      ...ramp,
+      mode,
+      needsSplineTail: false,
+      loopAnchor: layout.contourJoin,
+      loopStartS: layout.contourJoinS,
+      endedOnSpline: false,
+    };
+  }
+
+  if (mode === 'spline-only') {
+    const ramp = generateOpenPolylineLinearRamp(
+      splinePolyline,
+      fromZ,
+      toZ,
+      rampLengthMm,
+      rampAngleDeg,
+      feedRate,
+      sampleSpacing
+    );
+    const atJoin =
+      Math.hypot(
+        ramp.endPoint.x - layout.contourJoin.x,
+        ramp.endPoint.y - layout.contourJoin.y
+      ) < sampleSpacing * 0.75;
+    return {
+      ...ramp,
+      mode,
+      needsSplineTail: !atJoin,
+      loopAnchor: layout.contourJoin,
+      loopStartS: layout.contourJoinS,
+      endedOnSpline: !atJoin,
+    };
+  }
+
+  const ramp = generateHybridSplineContourRamp(
+    splinePolyline,
+    traverse,
+    layout.contourJoinS,
+    fromZ,
+    toZ,
+    rampLengthMm,
+    rampAngleDeg,
+    feedRate,
+    sampleSpacing,
+    climbForward
+  );
+  const atJoin =
+    Math.hypot(
+      ramp.endPoint.x - layout.contourJoin.x,
+      ramp.endPoint.y - layout.contourJoin.y
+    ) < sampleSpacing * 0.75;
+  return {
+    ...ramp,
+    mode,
+    needsSplineTail: ramp.endedOnSpline && !atJoin,
+    loopAnchor: atJoin ? layout.contourJoin : ramp.endPoint,
+    loopStartS: atJoin
+      ? layout.contourJoinS
+      : findClosestSOnGuide(layout.arcGuide, ramp.endPoint).s,
+    endedOnSpline: ramp.endedOnSpline,
+  };
 }
 
 export function stationOnContour(
@@ -843,6 +1234,9 @@ export function generateOpenPolylineLinearRamp(
   }
 
   const points: ToolpathPoint[] = [];
+  const startFrame = sampleOpenGuideAtS(guide, 0);
+  points.push({ x: startFrame.x, y: startFrame.y, z: fromZ, feedRate });
+
   let currentZ = fromZ;
   let currentS = 0;
   let forward = true;
@@ -850,12 +1244,19 @@ export function generateOpenPolylineLinearRamp(
   const maxIterations = 5000;
 
   while (currentZ > toZ + 1e-5 && iterations < maxIterations) {
-    const legDz = Math.min(dzPerLeg, currentZ - toZ);
-    let legLen = legDz / Math.tan(angleRad);
     const remaining = forward ? total - currentS : currentS;
-    legLen = Math.min(legLen, Math.max(remaining, 0));
+    if (remaining < 1e-6) {
+      forward = !forward;
+      iterations++;
+      continue;
+    }
+
+    let legLen = Math.min(rampLengthMm, remaining);
+    const legDz = rampLegDz(legLen, rampAngleDeg, currentZ - toZ);
+    legLen = legDz / Math.tan(angleRad);
     if (legLen < 1e-6) {
       forward = !forward;
+      iterations++;
       continue;
     }
 
@@ -882,6 +1283,7 @@ export function generateOpenPolylineLinearRamp(
     if (currentZ <= toZ + 1e-5) break;
     if (forward && currentS >= total - 1e-5) forward = false;
     else if (!forward && currentS <= 1e-5) forward = true;
+    iterations++;
   }
 
   const endFrame = sampleOpenGuideAtS(guide, currentS);
