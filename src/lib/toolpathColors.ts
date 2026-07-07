@@ -44,7 +44,7 @@ export const DEFAULT_TOOLPATH_TYPE_VISIBILITY: ToolpathTypeVisibility = {
   reference: true,
 };
 
-const TRAVEL_FEED_TOLERANCE = 0.02;
+const FEED_MATCH_TOLERANCE = 0.02;
 
 function isTravelFeed(
   a: ToolpathPoint,
@@ -54,7 +54,21 @@ function isTravelFeed(
   const feed = b.feedRate ?? a.feedRate;
   return (
     feed !== undefined &&
-    Math.abs(feed - travelFeedRate) / Math.max(travelFeedRate, 1) <= TRAVEL_FEED_TOLERANCE
+    Math.abs(feed - travelFeedRate) / Math.max(travelFeedRate, 1) <= FEED_MATCH_TOLERANCE
+  );
+}
+
+function isPlungeFeed(
+  a: ToolpathPoint,
+  b: ToolpathPoint,
+  op: Operation | undefined
+): boolean {
+  if (!op) return false;
+  const plungeRate = op.settings.plungeRate;
+  const feed = b.feedRate ?? a.feedRate;
+  return (
+    feed !== undefined &&
+    Math.abs(feed - plungeRate) / Math.max(plungeRate, 1) <= FEED_MATCH_TOLERANCE
   );
 }
 
@@ -74,6 +88,7 @@ function edgeFeedRate(
 ): number {
   if (a.rapid || b.rapid) return PREVIEW_RAPID_FEED;
   if (isTravelFeed(a, b, travelFeedRate)) return travelFeedRate;
+  if (isPlungeFeed(a, b, op)) return op!.settings.plungeRate;
   if (isPlungeMove(a, b)) return op?.settings.plungeRate ?? travelFeedRate;
   return b.feedRate ?? a.feedRate ?? op?.settings.feedRate ?? travelFeedRate;
 }
@@ -81,13 +96,13 @@ function edgeFeedRate(
 export function classifyToolpathMove(
   a: ToolpathPoint,
   b: ToolpathPoint,
-  _op: Operation | undefined,
+  op: Operation | undefined,
   travelFeedRate: number
 ): ToolpathMoveKind {
   if (a.onSpur || b.onSpur) return 'spur';
   if (a.rapid || b.rapid) return 'rapid';
   if (isTravelFeed(a, b, travelFeedRate)) return 'travel';
-  if (isPlungeMove(a, b)) return 'plunge';
+  if (isPlungeFeed(a, b, op) || isPlungeMove(a, b)) return 'plunge';
 
   return 'cut';
 }
