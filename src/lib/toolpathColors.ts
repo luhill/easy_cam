@@ -4,7 +4,7 @@ import { PREVIEW_RAPID_FEED } from './toolpathSimulation';
 
 export type ToolpathColorMode = 'type' | 'speed';
 
-export type ToolpathMoveKind = 'rapid' | 'cut' | 'plunge' | 'travel' | 'spur';
+export type ToolpathMoveKind = 'rapid' | 'cut' | 'plunge' | 'travel' | 'spur' | 'reference';
 
 export const TOOLPATH_MOVE_COLORS: Record<ToolpathMoveKind, string> = {
   rapid: '#f59e0b',
@@ -12,6 +12,7 @@ export const TOOLPATH_MOVE_COLORS: Record<ToolpathMoveKind, string> = {
   plunge: '#3b82f6',
   travel: '#a855f7',
   spur: '#22c55e',
+  reference: '#eab308',
 };
 
 export const TOOLPATH_MOVE_LABELS: Record<ToolpathMoveKind, string> = {
@@ -20,6 +21,27 @@ export const TOOLPATH_MOVE_LABELS: Record<ToolpathMoveKind, string> = {
   plunge: 'Plunge',
   travel: 'Travel',
   spur: 'Spur',
+  reference: 'Reference',
+};
+
+export const TOOLPATH_MOVE_KINDS: ToolpathMoveKind[] = [
+  'cut',
+  'plunge',
+  'travel',
+  'rapid',
+  'spur',
+  'reference',
+];
+
+export type ToolpathTypeVisibility = Record<ToolpathMoveKind, boolean>;
+
+export const DEFAULT_TOOLPATH_TYPE_VISIBILITY: ToolpathTypeVisibility = {
+  cut: true,
+  plunge: true,
+  travel: true,
+  rapid: true,
+  spur: true,
+  reference: true,
 };
 
 const TRAVEL_FEED_TOLERANCE = 0.02;
@@ -120,6 +142,7 @@ export interface ToolpathEdgeColorInput {
   colorMode: ToolpathColorMode;
   operations: Operation[];
   travelFeedRate: number;
+  typeVisibility?: ToolpathTypeVisibility;
 }
 
 export function colorForToolpathEdge(

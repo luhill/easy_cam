@@ -264,7 +264,7 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
     if (isEditingEntry) {
       return hasTwoPointEntry
         ? hasAdaptiveEntry
-          ? 'Drag amber cross = tool start, blue cross = slot join on centerline (orange guide). Right-drag to orbit the view.'
+          ? 'Drag amber cross = tool start, blue cross = slot join on centerline (yellow reference guide). Right-drag to orbit the view.'
           : 'Drag amber cross = entry start, blue cross = outline join on tool path. Right-drag to orbit the view.'
         : 'Drag amber cross = outline entry start on the tool path. Right-drag to orbit the view.';
     }

@@ -3,8 +3,10 @@ import * as THREE from 'three';
 import type { Operation, ToolpathSegment } from '../../types/operations';
 import {
   colorForToolpathEdge,
+  classifyToolpathMove,
   computeToolpathFeedRange,
   type ToolpathColorMode,
+  type ToolpathTypeVisibility,
 } from '../../lib/toolpathColors';
 
 /** Trochoid samples classified as on-spur (debug overlay). */
@@ -15,6 +17,7 @@ interface ToolpathLinesProps {
   colorMode?: ToolpathColorMode;
   operations?: Operation[];
   travelFeedRate?: number;
+  typeVisibility?: ToolpathTypeVisibility;
 }
 
 const PathLine = memo(function PathLine({
@@ -24,6 +27,7 @@ const PathLine = memo(function PathLine({
   travelFeedRate,
   feedRange,
   operations,
+  typeVisibility,
 }: {
   segment: ToolpathSegment;
   colorMode: ToolpathColorMode;
@@ -31,6 +35,7 @@ const PathLine = memo(function PathLine({
   travelFeedRate: number;
   feedRange: { min: number; max: number };
   operations: Operation[];
+  typeVisibility?: ToolpathTypeVisibility;
 }) {
   const geometry = useMemo(() => {
     const positions: number[] = [];
@@ -41,11 +46,15 @@ const PathLine = memo(function PathLine({
       colorMode,
       operations,
       travelFeedRate,
+      typeVisibility,
     };
 
     for (let i = 0; i < segment.points.length - 1; i++) {
       const a = segment.points[i];
       const b = segment.points[i + 1];
+      const kind = classifyToolpathMove(a, b, op, travelFeedRate);
+      if (typeVisibility && !typeVisibility[kind]) continue;
+
       positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
 
       const color = colorForToolpathEdge(a, b, segment, op, input, feedRange, scratch);
@@ -53,11 +62,15 @@ const PathLine = memo(function PathLine({
       colors.push(color.r, color.g, color.b);
     }
 
+    if (positions.length === 0) return null;
+
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     return geo;
-  }, [segment, colorMode, op, travelFeedRate, feedRange, operations]);
+  }, [segment, colorMode, op, travelFeedRate, feedRange, operations, typeVisibility]);
+
+  if (!geometry) return null;
 
   return (
     <lineSegments geometry={geometry}>
@@ -71,6 +84,7 @@ export function ToolpathLines({
   colorMode = 'type',
   operations = [],
   travelFeedRate = 2000,
+  typeVisibility,
 }: ToolpathLinesProps) {
   const opById = useMemo(() => new Map(operations.map((op) => [op.id, op])), [operations]);
   const feedRange = useMemo(
@@ -89,6 +103,7 @@ export function ToolpathLines({
           travelFeedRate={travelFeedRate}
           feedRange={feedRange}
           operations={operations}
+          typeVisibility={typeVisibility}
         />
       ))}
     </group>

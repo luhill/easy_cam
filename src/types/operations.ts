@@ -76,7 +76,7 @@ export interface SelectedGeometry {
   holeId?: number;
   /** Adaptive: helix bore center in stock XY */
   toolStartPoint?: { x: number; y: number };
-  /** Adaptive: slot join on the centerline (draggable along the orange guide) */
+  /** Adaptive: slot join on the centerline (draggable along the yellow reference guide) */
   slotJoinPoint?: { x: number; y: number };
   /** @deprecated Legacy bore-center override — use toolStartPoint */
   entryPoint?: { x: number; y: number };

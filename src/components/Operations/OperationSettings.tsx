@@ -366,7 +366,7 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
         <div className="operation-settings-footer">
           <HintTooltip
             placement="top"
-            text="Viewer debug: orange = slot centerline guide; green trochoid loops = samples classified as on-spur (scaled radius)."
+            text="Viewer: yellow reference = slot centerline guide; green trochoid loops = samples classified as on-spur (scaled radius). Toggle line types in the viewer overlay."
           />
         </div>
       )}

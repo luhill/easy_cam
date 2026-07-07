@@ -76,7 +76,7 @@ import {
   replaceWithOrthographicCamera,
   replaceWithPerspectiveCamera,
 } from '../../lib/viewportCamera';
-import type { ToolpathColorMode } from '../../lib/toolpathColors';
+import type { ToolpathColorMode, ToolpathTypeVisibility } from '../../lib/toolpathColors';
 import { WebGLFallback } from './WebGLFallback';
 import { Viewer2D } from './Viewer2D';
 import { useProcessedStl } from '../../hooks/useProcessedStl';
@@ -683,12 +683,14 @@ function ToolpathWindowLive({
   colorMode,
   operations,
   travelFeedRate,
+  typeVisibility,
 }: {
   visiblePaths: ToolpathSegment[];
   totalDistance: number;
   colorMode: ToolpathColorMode;
   operations: Operation[];
   travelFeedRate: number;
+  typeVisibility: ToolpathTypeVisibility;
 }) {
   const [windowFrac, setWindowFrac] = useState(getEffectiveSimulationWindow);
   const lastKeyRef = useRef('');
@@ -716,6 +718,7 @@ function ToolpathWindowLive({
       colorMode={colorMode}
       operations={operations}
       travelFeedRate={travelFeedRate}
+      typeVisibility={typeVisibility}
     />
   );
 }
@@ -773,6 +776,7 @@ function SceneContent({
   const toolpathResolution = useSettingsStore((s) => s.toolpathResolution);
   const travelFeedRate = useSettingsStore((s) => s.travelFeedRate);
   const toolpathColorMode = useAppStore((s) => s.toolpathColorMode);
+  const toolpathTypeVisibility = useAppStore((s) => s.toolpathTypeVisibility);
   const uiTheme = useSettingsStore((s) => s.uiTheme);
   const viewerColors = viewerThemeColors(uiTheme);
   const controlsRef = useRef<OrbitControlsImpl>(null);
@@ -983,8 +987,9 @@ function SceneContent({
         colorMode={toolpathColorMode}
         operations={operations}
         travelFeedRate={travelFeedRate}
+        typeVisibility={toolpathTypeVisibility}
       />
-      {adaptiveDebugGuides && (
+      {adaptiveDebugGuides && toolpathTypeVisibility.reference && (
         <DebugGuideLines
           slotCenterline={adaptiveDebugGuides.slotCenterline}
           leadInGuide={adaptiveDebugGuides.leadInGuide}

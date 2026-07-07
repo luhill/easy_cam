@@ -1941,6 +1941,20 @@ body {
   gap: 6px 10px;
 }
 
+.toolpath-color-show-label {
+  margin-bottom: 6px;
+}
+
+.toolpath-color-toggle {
+  cursor: pointer;
+  user-select: none;
+}
+
+.toolpath-color-toggle input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .toolpath-color-legend--type {
   font-size: 10px;
   color: var(--text-muted);

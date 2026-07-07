@@ -1,8 +1,7 @@
 import { useMemo } from 'react';
 import { Line } from '@react-three/drei';
 import type { LoopPoint } from '../../types/operations';
-
-const DEBUG_GUIDE_COLOR = '#f97316';
+import { TOOLPATH_MOVE_COLORS } from '../../lib/toolpathColors';
 
 interface DebugGuideLinesProps {
   slotCenterline?: LoopPoint[];
@@ -59,7 +58,7 @@ function ClosedLoop({
 export function DebugGuideLines({
   slotCenterline,
   leadInGuide,
-  color = DEBUG_GUIDE_COLOR,
+  color = TOOLPATH_MOVE_COLORS.reference,
   opacity = 0.95,
 }: DebugGuideLinesProps) {
   const hasSlot = (slotCenterline?.length ?? 0) >= 2;
