@@ -6,6 +6,7 @@
 import type { LoopPoint } from '../types/operations';
 import {
   offsetConcaveMiter,
+  offsetMiterVertex,
   offsetLoop2DMinkowski,
   normalizeOutlineLoopWinding,
   closestPointOnLoop2D,
@@ -185,14 +186,11 @@ function mapSpurMarkerToArcRange(
   return { sStart, sPeak, sEnd, peakX: tip.x, peakY: tip.y, miterX: miter.x, miterY: miter.y };
 }
 
-interface ConcaveCornerTreatment {
+interface SpurCorner {
   slotMiter: LoopPoint;
   finishMiter: LoopPoint;
-  /** Last base-guide index on the approach edge (inclusive), or -1 if none. */
-  approachEnd: number;
-  /** First base-guide index on the departure edge to resume from. */
-  departStart: number;
-  insertSpur: boolean;
+  guideIdx: number;
+  internalAngle: number;
 }
 
 /** Offset-normal side for analytic miters — follows winding and signed offset direction. */
@@ -204,8 +202,7 @@ function resolveOffsetWorkingSide(partLoop: LoopPoint[], offsetSign: number): nu
 
 /**
  * True concave re-entrant corner (void notch), not a salient exterior needle tip.
- * Reflex vertices shallowly protruding past the prev–next chord are needle tips;
- * deeper re-entrant notches (L-corners, pocket bases) get spurs.
+ * Shallow reflex vertices on a taper (small chord deviation) keep the Clipper arc.
  */
 function isConcaveReentrantCorner(
   prev: LoopPoint,
@@ -229,150 +226,126 @@ function isConcaveReentrantCorner(
   const distToChord = Math.abs(chordCross) / chordLen;
   const edgeLen = Math.min(Math.hypot(e1x, e1y), Math.hypot(e2x, e2y));
 
-  if (workingSide * chordCross > 0 && distToChord / edgeLen < 0.55) {
+  if (workingSide * chordCross > 0 && distToChord / edgeLen < 0.58) {
     return false;
   }
 
   return true;
 }
 
-/**
- * Indices of the Clipper round-join arc to replace with an analytic slot miter.
- * Uses proximity to the slot miter (not the part vertex) so sharp corners do not
- * swallow entire approach/departure legs and create bow-tie chords.
- */
-function cornerGuideIndices(
-  baseGuide: LoopPoint[],
-  slotMiter: LoopPoint,
-  partCorner: LoopPoint,
-  segLen: number,
-  signedSlotCenter: number
-): { approachEnd: number; departStart: number } {
-  const n = baseGuide.length;
-  const miterEps = Math.max(segLen * 1.2, Math.abs(signedSlotCenter) * 0.12, 0.15);
-  const maxArcSteps = Math.max(6, Math.ceil(Math.abs(signedSlotCenter) / segLen) + 2);
-
-  let peakIdx = 0;
-  let bestMiterDist = Infinity;
-  for (let j = 0; j < n; j++) {
-    const d = Math.hypot(baseGuide[j].x - slotMiter.x, baseGuide[j].y - slotMiter.y);
-    if (d < bestMiterDist) {
-      bestMiterDist = d;
-      peakIdx = j;
+function findClosestGuideIndex(guide: LoopPoint[], target: LoopPoint): number {
+  let bestIdx = 0;
+  let bestDist = Infinity;
+  for (let j = 0; j < guide.length; j++) {
+    const d = Math.hypot(guide[j].x - target.x, guide[j].y - target.y);
+    if (d < bestDist) {
+      bestDist = d;
+      bestIdx = j;
     }
   }
-
-  const nearMiter = (j: number) =>
-    Math.hypot(baseGuide[j].x - slotMiter.x, baseGuide[j].y - slotMiter.y) <= miterEps;
-
-  let arcStart = peakIdx;
-  let arcEnd = peakIdx;
-
-  if (bestMiterDist <= miterEps * 2.5) {
-    while (arcStart > 0 && nearMiter(arcStart - 1)) arcStart--;
-    while (arcEnd < n - 1 && nearMiter(arcEnd + 1)) arcEnd++;
-  } else {
-    let cornerPeak = peakIdx;
-    let bestCornerDist = Infinity;
-    for (let j = 0; j < n; j++) {
-      const d = Math.hypot(baseGuide[j].x - partCorner.x, baseGuide[j].y - partCorner.y);
-      if (d < bestCornerDist) {
-        bestCornerDist = d;
-        cornerPeak = j;
-      }
-    }
-    arcStart = cornerPeak;
-    arcEnd = cornerPeak;
-    const cornerRadius = Math.max(segLen * 2, Math.abs(signedSlotCenter) * 0.2, 0.25);
-    let steps = 0;
-    while (arcStart > 0 && steps < maxArcSteps) {
-      const d = Math.hypot(baseGuide[arcStart - 1].x - partCorner.x, baseGuide[arcStart - 1].y - partCorner.y);
-      if (d <= cornerRadius) {
-        arcStart--;
-        steps++;
-      } else break;
-    }
-    steps = 0;
-    while (arcEnd < n - 1 && steps < maxArcSteps) {
-      const d = Math.hypot(baseGuide[arcEnd + 1].x - partCorner.x, baseGuide[arcEnd + 1].y - partCorner.y);
-      if (d <= cornerRadius) {
-        arcEnd++;
-        steps++;
-      } else break;
-    }
-  }
-
-  return {
-    approachEnd: arcStart - 1,
-    departStart: Math.min(arcEnd + 1, n),
-  };
+  return bestIdx;
 }
 
-function collectConcaveCornerTreatments(
+/**
+ * Whether this vertex needs a bisector spur to the finish-inner miter.
+ * Covers reflex re-entrant notches and acute convex tips (V-notch / teardrop points).
+ */
+function needsCornerSpur(
+  prev: LoopPoint,
+  curr: LoopPoint,
+  next: LoopPoint,
+  workingSide: number,
+  maxInternalAngleDeg: number
+): boolean {
+  const internalAngle = vertexInternalAngleDeg(prev, curr, next);
+  if (internalAngle >= maxInternalAngleDeg) return false;
+
+  if (isConcaveReentrantCorner(prev, curr, next, workingSide)) return true;
+
+  const e1x = curr.x - prev.x;
+  const e1y = curr.y - prev.y;
+  const e2x = next.x - curr.x;
+  const e2y = next.y - curr.y;
+  const turnCross = e1x * e2y - e1y * e2x;
+  if (workingSide * turnCross <= 0) return false;
+
+  if (internalAngle >= 75) return false;
+
+  const chordDx = next.x - prev.x;
+  const chordDy = next.y - prev.y;
+  const chordLen = Math.hypot(chordDx, chordDy);
+  if (chordLen < 1e-6) return false;
+
+  const chordCross = chordDx * (curr.y - prev.y) - chordDy * (curr.x - prev.x);
+  const distToChord = Math.abs(chordCross) / chordLen;
+  const edgeLen = Math.min(Math.hypot(e1x, e1y), Math.hypot(e2x, e2y));
+
+  // Shallow exterior needle tips (taper apex) — Clipper arc is enough, spurs cause bow-ties.
+  if (workingSide * chordCross < 0 && distToChord / edgeLen < 0.58) return false;
+
+  return workingSide * chordCross > 0;
+}
+
+/** Slot/finish miter at a corner — bisector for acute tips, line intersection for wide notches. */
+function cornerOffsetMiter(
+  prev: LoopPoint,
+  curr: LoopPoint,
+  next: LoopPoint,
+  offset: number,
+  workingSide: number
+): LoopPoint {
+  const internalAngle = vertexInternalAngleDeg(prev, curr, next);
+  if (internalAngle < 75) {
+    return offsetMiterVertex(prev, curr, next, offset, workingSide, { clampToEdge: false });
+  }
+  return offsetConcaveMiter(prev, curr, next, offset, workingSide);
+}
+
+function collectSpurCorners(
   partLoop: LoopPoint[],
   baseGuide: LoopPoint[],
   signedSlotCenter: number,
   signedTipOffset: number,
   workingSide: number,
-  maxInternalAngleDeg: number
-): ConcaveCornerTreatment[] {
+  maxInternalAngleDeg: number,
+  minSpurLength = 0.08
+): SpurCorner[] {
   const n = partLoop.length;
-  const treatments: ConcaveCornerTreatment[] = [];
+  const raw: SpurCorner[] = [];
 
   for (let i = 0; i < n; i++) {
     const prev = partLoop[(i - 1 + n) % n];
     const curr = partLoop[i];
     const next = partLoop[(i + 1) % n];
 
-    if (!isConcaveReentrantCorner(prev, curr, next, workingSide)) continue;
+    if (!needsCornerSpur(prev, curr, next, workingSide, maxInternalAngleDeg)) continue;
 
     const internalAngle = vertexInternalAngleDeg(prev, curr, next);
-    const slotMiter = offsetConcaveMiter(prev, curr, next, signedSlotCenter, workingSide);
-    const { approachEnd, departStart } = cornerGuideIndices(
-      baseGuide,
-      slotMiter,
-      curr,
-      Math.max(Math.abs(signedSlotCenter) / 6, 0.08),
-      signedSlotCenter
-    );
+    const slotMiter = cornerOffsetMiter(prev, curr, next, signedSlotCenter, workingSide);
+    const finishMiter = cornerOffsetMiter(prev, curr, next, signedTipOffset, workingSide);
+    if (
+      Math.hypot(finishMiter.x - slotMiter.x, finishMiter.y - slotMiter.y) < minSpurLength
+    ) {
+      continue;
+    }
 
-    treatments.push({
+    raw.push({
       slotMiter,
-      finishMiter: offsetConcaveMiter(prev, curr, next, signedTipOffset, workingSide),
-      approachEnd,
-      departStart,
-      insertSpur: internalAngle < maxInternalAngleDeg,
+      finishMiter,
+      guideIdx: findClosestGuideIndex(baseGuide, slotMiter),
+      internalAngle,
     });
   }
 
-  return treatments.sort((a, b) => a.approachEnd - b.approachEnd);
-}
+  const byGuideIdx = new Map<number, SpurCorner>();
+  for (const corner of raw) {
+    const existing = byGuideIdx.get(corner.guideIdx);
+    if (!existing || corner.internalAngle < existing.internalAngle) {
+      byGuideIdx.set(corner.guideIdx, corner);
+    }
+  }
 
-function connectResultToPoint(
-  result: LoopPoint[],
-  target: LoopPoint,
-  segLen: number
-): void {
-  const tail = lastGuidePoint(result);
-  if (!tail) {
-    result.push({ ...target });
-    return;
-  }
-  if (pointsNear(tail, target)) {
-    result[result.length - 1] = { ...target };
-    return;
-  }
-  appendDensifiedSegment(
-    result,
-    tail.x,
-    tail.y,
-    tail.z,
-    target.x,
-    target.y,
-    target.z,
-    segLen,
-    true
-  );
+  return [...byGuideIdx.values()];
 }
 
 function insertSpurBetweenMiters(
@@ -421,42 +394,68 @@ function insertSpurBetweenMiters(
   return { miterIdx, peakIdx, returnIdx };
 }
 
-function mergeGuideWithConcaveCorners(
+function connectGuideToPoint(
+  result: LoopPoint[],
+  target: LoopPoint,
+  segLen: number
+): void {
+  const tail = lastGuidePoint(result);
+  if (!tail) {
+    result.push({ ...target });
+    return;
+  }
+  if (pointsNear(tail, target)) {
+    result[result.length - 1] = { ...target };
+    return;
+  }
+  appendDensifiedSegment(
+    result,
+    tail.x,
+    tail.y,
+    tail.z,
+    target.x,
+    target.y,
+    target.z,
+    segLen,
+    false
+  );
+}
+
+/**
+ * Walk the Clipper guide and branch spurs at analytic miters without replacing
+ * arc spans — avoids bow-tie chords on tapers and sharp exterior tips.
+ */
+function buildGuideWithSpurBranches(
   baseGuide: LoopPoint[],
-  treatments: ConcaveCornerTreatment[],
+  spurCorners: SpurCorner[],
   segLen: number
 ): { guide: LoopPoint[]; spurMarkers: CornerSpurMarker[] } {
-  const result: LoopPoint[] = [];
-  const spurMarkers: CornerSpurMarker[] = [];
-  let emitted = 0;
-
-  for (const treatment of treatments) {
-    if (treatment.approachEnd < emitted - 1) continue;
-
-    const approachStart = Math.max(emitted, 0);
-    const approachEnd = Math.max(treatment.approachEnd, approachStart - 1);
-    for (let i = approachStart; i <= approachEnd; i++) {
-      result.push({ ...baseGuide[i] });
-    }
-
-    connectResultToPoint(result, treatment.slotMiter, segLen);
-
-    if (treatment.insertSpur) {
-      spurMarkers.push(
-        insertSpurBetweenMiters(result, treatment.slotMiter, treatment.finishMiter, segLen)
-      );
-    }
-
-    if (treatment.departStart < baseGuide.length) {
-      connectResultToPoint(result, baseGuide[treatment.departStart], segLen);
-      emitted = treatment.departStart + 1;
-    } else {
-      emitted = baseGuide.length;
-    }
+  const spurAtIdx = new Map<number, SpurCorner>();
+  for (const corner of spurCorners) {
+    spurAtIdx.set(corner.guideIdx, corner);
   }
 
-  for (let i = emitted; i < baseGuide.length; i++) {
-    result.push({ ...baseGuide[i] });
+  const result: LoopPoint[] = [];
+  const spurMarkers: CornerSpurMarker[] = [];
+
+  for (let i = 0; i < baseGuide.length; i++) {
+    const spur = spurAtIdx.get(i);
+    if (!spur) {
+      const pt = { ...baseGuide[i] };
+      const tail = lastGuidePoint(result);
+      if (tail && pointsNear(tail, pt)) continue;
+      result.push(pt);
+      continue;
+    }
+
+    connectGuideToPoint(result, spur.slotMiter, segLen);
+    spurMarkers.push(
+      insertSpurBetweenMiters(result, spur.slotMiter, spur.finishMiter, segLen)
+    );
+
+    if (i + 1 < baseGuide.length) {
+      connectGuideToPoint(result, baseGuide[i + 1], segLen);
+    }
   }
 
   return { guide: result, spurMarkers };
@@ -464,8 +463,7 @@ function mergeGuideWithConcaveCorners(
 
 /**
  * Build slot center guide with bisector spurs at sharp concave corners.
- * Clipper provides the base offset; concave corners are sharpened to analytic slot
- * miters, with spurs running slot-miter → finish-inner-miter → slot-miter.
+ * Base path is the Clipper slot-center offset; spurs branch at analytic miters only.
  */
 export function buildSlotCenterGuideWithCornerSpurs(
   partLoop: LoopPoint[],
@@ -485,6 +483,7 @@ export function buildSlotCenterGuideWithCornerSpurs(
       : signedFinishInner;
 
   const maxInternalAngleDeg = options.maxInternalAngleDeg ?? 160;
+  const minSpurLength = options.minSpurLength ?? 0.08;
 
   const n = normalizedLoop.length;
   if (n < 3 || Math.abs(signedSlotCenter) < 1e-9) {
@@ -501,18 +500,21 @@ export function buildSlotCenterGuideWithCornerSpurs(
     wallSide
   );
 
-  const treatments = collectConcaveCornerTreatments(
+  const spurCorners = collectSpurCorners(
     normalizedLoop,
     baseGuide,
     signedSlotCenter,
     signedTipOffset,
     workingSide,
-    maxInternalAngleDeg
+    maxInternalAngleDeg,
+    minSpurLength
   );
 
-  const { guide, spurMarkers } = mergeGuideWithConcaveCorners(baseGuide, treatments, segLen);
+  if (spurCorners.length === 0) {
+    return { guide: baseGuide, spurMarkers: [] };
+  }
 
-  return { guide, spurMarkers };
+  return buildGuideWithSpurBranches(baseGuide, spurCorners, segLen);
 }
 
 /** Map spur markers from polyline indices to arc-length ranges on the trochoid guide. */

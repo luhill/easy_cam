@@ -284,7 +284,8 @@ export function offsetMiterVertex(
   curr: LoopPoint,
   next: LoopPoint,
   offset: number,
-  side: number
+  side: number,
+  options: { clampToEdge?: boolean } = {}
 ): LoopPoint {
   const e1x = curr.x - prev.x;
   const e1y = curr.y - prev.y;
@@ -312,9 +313,11 @@ export function offsetMiterVertex(
   const dot = bx * n1x + by * n1y;
   const miter = dot > 0.05 ? offset / dot : offset;
   const edgeLimit = Math.min(len1, len2) * 0.48;
-  const clamped =
-    Math.sign(miter) *
-    Math.min(Math.abs(miter), Math.abs(offset) * 6, edgeLimit > 1e-6 ? edgeLimit : Math.abs(offset) * 6);
+  const clampToEdge = options.clampToEdge !== false;
+  const maxDist = clampToEdge
+    ? Math.min(Math.abs(offset) * 6, edgeLimit > 1e-6 ? edgeLimit : Math.abs(offset) * 6)
+    : Math.abs(offset) * 6;
+  const clamped = Math.sign(miter) * Math.min(Math.abs(miter), maxDist);
 
   return {
     x: curr.x + bx * clamped,

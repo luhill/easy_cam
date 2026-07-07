@@ -2,9 +2,10 @@
  * Slot centerline spur checks — run with: npx tsx src/lib/cornerSpurs.test.ts
  */
 import { buildSlotCenterGuideWithCornerSpurs } from './cornerSpurs';
+import { resolveAdaptiveSlotGeometry } from './adaptiveOutline';
 import {
   closestPointOnLoop2D,
-  offsetConcaveMiter,
+  offsetMiterVertex,
 } from './geometryProcessing';
 import type { LoopPoint } from '../types/operations';
 
@@ -153,7 +154,9 @@ assert(acute.spurMarkers.length >= 1, 'acute notch should insert a spur');
 const vPrev = acuteV[1];
 const vCurr = acuteV[2];
 const vNext = acuteV[3];
-const expectedFinish = offsetConcaveMiter(vPrev, vCurr, vNext, innerOffset, 1);
+const expectedFinish = offsetMiterVertex(vPrev, vCurr, vNext, innerOffset, 1, {
+  clampToEdge: false,
+});
 
 for (const marker of acute.spurMarkers) {
   const tip = acute.guide[marker.peakIdx];
@@ -163,7 +166,9 @@ for (const marker of acute.spurMarkers) {
   );
 
   const slotAnchor = acute.guide[marker.miterIdx];
-  const expectedSlot = offsetConcaveMiter(vPrev, vCurr, vNext, slotCenter, 1);
+  const expectedSlot = offsetMiterVertex(vPrev, vCurr, vNext, slotCenter, 1, {
+    clampToEdge: false,
+  });
   assert(
     Math.hypot(slotAnchor.x - expectedSlot.x, slotAnchor.y - expectedSlot.y) < 0.05,
     'spur anchor should match slot-center corner miter'
@@ -171,6 +176,41 @@ for (const marker of acute.spurMarkers) {
 }
 
 assert(!hasSelfIntersection(acute.guide), 'acute notch guide must not self-intersect');
+
+// Realistic tool offsets — slot/finish miters must stay separated (non-zero spur).
+const realisticSettings = {
+  toolDiameter: 6,
+  radialOffset: 0,
+  slotWidthPercent: 150,
+  stepover: 40,
+  finishingPass: true,
+  finishingStockPercent: 7,
+  climbMilling: true,
+  feedRate: 1000,
+  plungeRate: 300,
+  stepDown: 2,
+  depthOffset: 0,
+} as import('../types/operations').OperationDefaults;
+const realisticRough = resolveAdaptiveSlotGeometry(realisticSettings, { roughing: true });
+const realisticFinish = resolveAdaptiveSlotGeometry(realisticSettings, { roughing: false });
+const realisticAcute = buildSlotCenterGuideWithCornerSpurs(
+  acuteV,
+  realisticRough.slotCenterOffset,
+  realisticFinish.innerCenterOffset,
+  0.15,
+  { maxInternalAngleDeg: 130 },
+  1,
+  'exterior'
+);
+assert(realisticAcute.spurMarkers.length >= 1, 'acute notch should spur with realistic offsets');
+for (const marker of realisticAcute.spurMarkers) {
+  const start = realisticAcute.guide[marker.miterIdx];
+  const tip = realisticAcute.guide[marker.peakIdx];
+  assert(
+    Math.hypot(tip.x - start.x, tip.y - start.y) >= 0.5,
+    'realistic acute spur must have visible bisector length'
+  );
+}
 
 // Narrow symmetric taper to a point — convex needle tips must not get spurs or bow-ties
 const taper: LoopPoint[] = [
@@ -193,22 +233,35 @@ const taperGuide = buildSlotCenterGuideWithCornerSpurs(
   'exterior'
 );
 assert(
-  taperGuide.spurMarkers.length <= 2,
-  'convex needle apex must not insert a spur (notch base corners may)'
+  taperGuide.spurMarkers.length === 0,
+  'taper shoulders must not insert spurs that cross at the apex'
 );
-// No spur anchored at the taper apex
-const apex = taper[2];
-for (const marker of taperGuide.spurMarkers) {
-  const anchor = taperGuide.guide[marker.miterIdx];
-  assert(
-    Math.hypot(anchor.x - apex.x, anchor.y - apex.y) > 1,
-    'spur must not anchor at the convex taper apex'
-  );
-}
 assert(
   !hasSelfIntersection(taperGuide.guide),
   'narrow taper must not produce bow-tie chord at apex'
 );
+
+// V-notch at top edge — spurs at both re-entrant base corners
+const vNotch: LoopPoint[] = [
+  pt(0, 0),
+  pt(5, 0),
+  pt(10, 18),
+  pt(20, 18),
+  pt(25, 0),
+  pt(30, 0),
+  pt(30, 25),
+  pt(0, 25),
+];
+const vGuide = buildSlotCenterGuideWithCornerSpurs(
+  vNotch,
+  slotCenter,
+  innerOffset,
+  0.15,
+  { maxInternalAngleDeg: 130 },
+  1,
+  'exterior'
+);
+assert(vGuide.spurMarkers.length >= 2, 'V-notch base corners should insert spurs');
 
 // Interior pocket (CW) — spur tips stay on finish inner envelope
 const pocketInterior = [
