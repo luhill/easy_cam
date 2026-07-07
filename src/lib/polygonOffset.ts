@@ -92,6 +92,18 @@ function removeDuplicateClosingPoint(loop: LoopPoint[]): LoopPoint[] {
   return loop;
 }
 
+/** Remove near-duplicate/collinear vertices without collapsing the loop shape. */
+export function cleanClosedOffsetLoop(loop: LoopPoint[]): LoopPoint[] {
+  if (loop.length < 3) return loop.map((p) => ({ ...p }));
+
+  const z = loop[0]?.z ?? 0;
+  const path = toClipperPath(loop);
+  const cleaned = ClipperLib.Clipper.CleanPolygon(path, 0.02 * CLIPPER_SCALE);
+  if (cleaned.length < 3) return loop.map((p) => ({ ...p }));
+
+  return removeDuplicateClosingPoint(fromClipperPath(cleaned, z));
+}
+
 /**
  * Constant-distance offset of a closed XY loop using Angus Johnson's Clipper.
  *

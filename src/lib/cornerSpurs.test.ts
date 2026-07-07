@@ -2,10 +2,9 @@
  * Slot centerline spur checks — run with: npx tsx src/lib/cornerSpurs.test.ts
  */
 import { buildSlotCenterGuideWithCornerSpurs } from './cornerSpurs';
-import { resolveAdaptiveSlotGeometry } from './adaptiveOutline';
+import { resolveAdaptiveSlotGeometry, cornerSpurOptionsForRoughing } from './adaptiveOutline';
 import {
   closestPointOnLoop2D,
-  offsetLoop2DMinkowski,
 } from './geometryProcessing';
 import type { LoopPoint } from '../types/operations';
 
@@ -41,23 +40,6 @@ function segmentsProperlyCross(
   return o1 * o2 < 0 && o3 * o4 < 0;
 }
 
-function nearestOffsetVertexForCorner(
-  finishInnerGuide: LoopPoint[],
-  centerlineGuide: LoopPoint[],
-  centerlineIdx: number
-): number {
-  const target = centerlineGuide[centerlineIdx];
-  let bestIdx = 0;
-  let bestDist = Infinity;
-  for (let j = 0; j < finishInnerGuide.length; j++) {
-    const d = Math.hypot(finishInnerGuide[j].x - target.x, finishInnerGuide[j].y - target.y);
-    if (d < bestDist) {
-      bestDist = d;
-      bestIdx = j;
-    }
-  }
-  return bestIdx;
-}
 
 function hasSelfIntersection(loop: LoopPoint[]): boolean {
   const n = loop.length;
@@ -169,50 +151,19 @@ const acute = buildSlotCenterGuideWithCornerSpurs(
 );
 assert(acute.spurMarkers.length >= 1, 'acute notch should insert a spur');
 
-const vCornerIdx = 2;
-const expectedCenterline = offsetLoop2DMinkowski(acuteV, slotCenter, 0.2, 'exterior');
-const expectedFinishInner = offsetLoop2DMinkowski(acuteV, innerOffset, 0.2, 'exterior');
-const searchRadius = Math.max(slotCenter * 5, 18);
-let expectedA = expectedCenterline[0];
-let expectedB = expectedFinishInner[0];
-let bestAngle = Infinity;
-for (let i = 0; i < expectedCenterline.length; i++) {
-  const prev = expectedCenterline[(i - 1 + expectedCenterline.length) % expectedCenterline.length];
-  const curr = expectedCenterline[i];
-  const next = expectedCenterline[(i + 1) % expectedCenterline.length];
-  const internalAngle = (Math.acos(
-    Math.max(
-      -1,
-      Math.min(
-        1,
-        ((prev.x - curr.x) * (next.x - curr.x) + (prev.y - curr.y) * (next.y - curr.y)) /
-          (Math.hypot(prev.x - curr.x, prev.y - curr.y) *
-            Math.hypot(next.x - curr.x, next.y - curr.y))
-      )
-    )
-  ) * 180) / Math.PI;
-  const distCorner = Math.hypot(curr.x - acuteV[vCornerIdx].x, curr.y - acuteV[vCornerIdx].y);
-  if (internalAngle < 160 && distCorner <= searchRadius && internalAngle < bestAngle) {
-    bestAngle = internalAngle;
-    expectedA = curr;
-    expectedB =
-      expectedFinishInner[
-        nearestOffsetVertexForCorner(expectedFinishInner, expectedCenterline, i)
-      ];
-  }
-}
-
+const spike = acuteV[2];
 for (const marker of acute.spurMarkers) {
   const tip = acute.guide[marker.peakIdx];
-  assert(
-    Math.hypot(tip.x - expectedB.x, tip.y - expectedB.y) < 0.15,
-    'spur tip should match finish-inner offset vertex'
-  );
-
   const slotAnchor = acute.guide[marker.miterIdx];
+  const distA = Math.hypot(slotAnchor.x - spike.x, slotAnchor.y - spike.y);
+  const distB = Math.hypot(tip.x - spike.x, tip.y - spike.y);
   assert(
-    Math.hypot(slotAnchor.x - expectedA.x, slotAnchor.y - expectedA.y) < 0.15,
-    'spur anchor should match slot-center offset vertex'
+    distB < distA - 0.05,
+    'spur tip (B) should sit closer to the part corner than the slot anchor (A)'
+  );
+  assert(
+    Math.hypot(tip.x - slotAnchor.x, tip.y - slotAnchor.y) >= 0.5,
+    'acute spur must have visible bisector length'
   );
 }
 
@@ -233,13 +184,13 @@ const realisticSettings = {
   depthOffset: 0,
 } as import('../types/operations').OperationDefaults;
 const realisticRough = resolveAdaptiveSlotGeometry(realisticSettings, { roughing: true });
-const realisticFinish = resolveAdaptiveSlotGeometry(realisticSettings, { roughing: false });
+const realisticSpurOpts = cornerSpurOptionsForRoughing(realisticSettings);
 const realisticAcute = buildSlotCenterGuideWithCornerSpurs(
   acuteV,
   realisticRough.slotCenterOffset,
-  realisticFinish.innerCenterOffset,
+  realisticRough.innerCenterOffset,
   0.15,
-  { maxInternalAngleDeg: 130 },
+  realisticSpurOpts,
   1,
   'exterior'
 );
@@ -250,6 +201,16 @@ for (const marker of realisticAcute.spurMarkers) {
   assert(
     Math.hypot(tip.x - start.x, tip.y - start.y) >= 0.5,
     'realistic acute spur must have visible bisector length'
+  );
+  assert(
+    Math.abs(tip.x - spike.x) < 1.5,
+    'realistic spur tip (B) should lie on the spike bisector, not an unrelated corner'
+  );
+  const distA = Math.hypot(start.x - spike.x, start.y - spike.y);
+  const distB = Math.hypot(tip.x - spike.x, tip.y - spike.y);
+  assert(
+    distB < distA - 0.05,
+    'realistic spur tip (B) must be closer to the part corner than slot anchor (A)'
   );
 }
 
