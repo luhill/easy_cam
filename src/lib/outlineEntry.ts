@@ -508,7 +508,6 @@ export function resolveStandardHelixEntryLayout(
 ): StandardHelixEntryLayout | null {
   if (partLoop.length < 2) return null;
 
-  const offsetContext = resolveOutlineOffsetContext(geometry, partLoop);
   const layout = resolveStandardEntryLayout(
     partLoop,
     settings,
@@ -530,8 +529,8 @@ export function resolveStandardHelixEntryLayout(
     const helixR = resolveHelixRadius(settings);
     const outward = closestPointOnLoop2D(joinPoint.x, joinPoint.y, partLoop);
     const candidate = {
-      x: joinPoint.x + outward.outX * helixR * offsetContext.offsetSign,
-      y: joinPoint.y + outward.outY * helixR * offsetContext.offsetSign,
+      x: joinPoint.x + outward.outX * helixR,
+      y: joinPoint.y + outward.outY * helixR,
     };
     toolStart = ensureEntryOutsidePart(partLoop, candidate, minDist * 0.98);
   }
@@ -550,14 +549,13 @@ export function resolveStandardHelixLayerBoreCenter(
   joinPoint: { x: number; y: number },
   settings: OperationDefaults,
   stockAllowance = 0,
-  geometry?: SelectedGeometry | null
+  _geometry?: SelectedGeometry | null
 ): { x: number; y: number } {
-  const offsetContext = resolveOutlineOffsetContext(geometry ?? null, partLoop);
   const helixR = resolveHelixRadius(settings);
   const outward = closestPointOnLoop2D(joinPoint.x, joinPoint.y, partLoop);
   const candidate = {
-    x: joinPoint.x + outward.outX * helixR * offsetContext.offsetSign,
-    y: joinPoint.y + outward.outY * helixR * offsetContext.offsetSign,
+    x: joinPoint.x + outward.outX * helixR,
+    y: joinPoint.y + outward.outY * helixR,
   };
   const minDist = minimumStandardHelixEntryCenterDist(settings, stockAllowance);
   return ensureEntryOutsidePart(partLoop, candidate, minDist * 0.98);

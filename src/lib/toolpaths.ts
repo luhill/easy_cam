@@ -367,7 +367,28 @@ function generateStandardHelixOutlinePath(
       if (!appendPoints(points, initialBore.points)) break;
       boreHelixAngle = initialBore.endAngle;
 
-      if (
+      const bottomHelixR = helixRadiusAtZ(settings, layerZ, topZ);
+      const needsBottomWiden =
+        settings.boreTaperAngleDeg > 0 && bottomHelixR + 1e-3 < helixR;
+
+      if (needsBottomWiden) {
+        if (
+          !appendBoreBottomWidenAndLeadIn(
+            points,
+            toolStart,
+            layerZ,
+            helixR,
+            bottomHelixR,
+            stepoverIncrement,
+            rotDir,
+            segmentsPerRev,
+            plungeFeed,
+            { x: joinPoint.x, y: joinPoint.y, z: layerZ, feedRate: cutFeed }
+          )
+        ) {
+          break;
+        }
+      } else if (
         Math.hypot(toolStart.x - joinPoint.x, toolStart.y - joinPoint.y) > 0.5
       ) {
         const boreBottom = lastPathPoint(points);
@@ -813,14 +834,13 @@ function appendStraightRetractToSafe(
 function finishContourPointFromToolPosition(
   partLoop: LoopPoint[],
   settings: Operation['settings'],
-  toolPos: { x: number; y: number },
-  offsetSign = 1
+  toolPos: { x: number; y: number }
 ): { x: number; y: number } {
-  const offset = (toolRadius(settings) + (settings.radialOffset ?? 0)) * offsetSign;
+  const offsetMag = toolRadius(settings) + (settings.radialOffset ?? 0);
   const onPart = closestPointOnLoop2D(toolPos.x, toolPos.y, partLoop);
   return {
-    x: onPart.x + onPart.outX * offset,
-    y: onPart.y + onPart.outY * offset,
+    x: onPart.x + onPart.outX * offsetMag,
+    y: onPart.y + onPart.outY * offsetMag,
   };
 }
 
@@ -855,8 +875,7 @@ function appendConnectedFinishingPass(
     const finishEntry = finishContourPointFromToolPosition(
       partLoop,
       settings,
-      last,
-      offsetContext.offsetSign
+      last
     );
 
     if (Math.hypot(last.x - finishEntry.x, last.y - finishEntry.y) > 0.05) {
@@ -904,8 +923,8 @@ function appendConnectedFinishingPass(
       if (
         !appendPoints(points, [
           {
-            x: endAt.x + onPart.outX * stockAllowance * offsetContext.offsetSign,
-            y: endAt.y + onPart.outY * stockAllowance * offsetContext.offsetSign,
+            x: endAt.x + onPart.outX * stockAllowance,
+            y: endAt.y + onPart.outY * stockAllowance,
             z: finishZ,
             feedRate,
           },

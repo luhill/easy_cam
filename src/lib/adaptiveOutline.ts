@@ -94,13 +94,18 @@ export function resolveAdaptiveSlotGeometry(
   };
 }
 
+/** Slot geometry for entry bore placement (includes roughing stock when finishing pass is on). */
+function entryPlacementSlotGeometry(settings: OperationDefaults): AdaptiveSlotGeometry {
+  return resolveAdaptiveSlotGeometry(settings, { roughing: true });
+}
+
 /**
  * Largest tool-center radius from bore center during entry — derived from the
  * greater of bore outer diameter and slot width so the widen spiral cannot
  * cross the inner slot path.
  */
 export function resolveMaxEntryHelixRadius(settings: OperationDefaults): number {
-  const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
+  const slot = entryPlacementSlotGeometry(settings);
   const boreOuterD = 2 * resolveBoreOuterRadius(settings);
   const effectiveDiameter = Math.max(boreOuterD, slot.slotWidth);
   return Math.max(effectiveDiameter / 2 - slot.toolRadius, 0.05);
@@ -112,7 +117,7 @@ export function resolveMaxEntryHelixRadius(settings: OperationDefaults): number 
  * helix or bottom widen spiral, whichever is greater).
  */
 export function minimumEntryCenterDist(settings: OperationDefaults): number {
-  const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
+  const slot = entryPlacementSlotGeometry(settings);
   return slot.minCenterDist + resolveMaxEntryHelixRadius(settings);
 }
 
@@ -131,7 +136,7 @@ export function computeDefaultEntryPoint(
 ): { x: number; y: number } {
   if (partLoop.length < 2) return { x: toolOrigin?.x ?? 0, y: toolOrigin?.y ?? 0 };
 
-  const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
+  const slot = entryPlacementSlotGeometry(settings);
   const guide = offsetLoop2DMinkowski(
     partLoop,
     slot.innerCenterOffset * offsetSign,
@@ -168,8 +173,8 @@ export function computeDefaultEntryPoint(
   return ensureEntryOutsidePart(
     partLoop,
     {
-      x: bestGuide.x + outward.outX * outwardOffset * offsetSign,
-      y: bestGuide.y + outward.outY * outwardOffset * offsetSign,
+      x: bestGuide.x + outward.outX * outwardOffset,
+      y: bestGuide.y + outward.outY * outwardOffset,
     },
     centerDist * 0.98
   );
