@@ -338,6 +338,18 @@ export function outwardEdgeNormal2D(
 
 export type OutlineWallSide = 'exterior' | 'interior';
 
+/** Exterior walls CCW, interior void walls CW — matches Clipper offset contract. */
+export function normalizeOutlineLoopWinding(
+  loop: LoopPoint[],
+  wallSide: OutlineWallSide
+): LoopPoint[] {
+  if (loop.length < 3) return loop;
+  const ccw = signedLoopArea2D(loop) >= 0;
+  if (wallSide === 'exterior' && !ccw) return [...loop].reverse();
+  if (wallSide === 'interior' && ccw) return [...loop].reverse();
+  return loop;
+}
+
 export function partCentroidXY(bounds: PartBounds): { x: number; y: number } {
   return {
     x: (bounds.minX + bounds.maxX) / 2,

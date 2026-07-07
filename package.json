@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "build:pages": "tsc -b && vite build --base /easy_cam/",
     "preview": "vite preview",
-    "test:offset": "tsx src/lib/polygonOffset.test.ts"
+    "test:offset": "tsx src/lib/polygonOffset.test.ts",
+    "test:spurs": "tsx src/lib/cornerSpurs.test.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
