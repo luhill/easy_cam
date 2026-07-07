@@ -397,7 +397,8 @@ function generateStandardHelixOutlinePath(
         loop,
         joinPoint,
         settings,
-        stockAllowance
+        stockAllowance,
+        geometry
       );
       appendFreshSlotWidthBore(
         points,

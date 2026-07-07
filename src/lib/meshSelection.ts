@@ -629,8 +629,13 @@ export class MeshIndex {
 
       const bottomLoop = this.extractHorizontalRimLoop(faceIndices, 'bottom') ?? [];
       const wallNormal = this.averageWallNormalXY(faceIndices);
-      const offsetSign = resolveWallOutwardOffsetSign(topLoop, wallNormal.x, wallNormal.y);
-      const wallSide = resolveOutlineWallSide(topLoop, wallNormal.x, wallNormal.y);
+      const wallSide = resolveOutlineWallSide(topLoop, wallNormal.x, wallNormal.y, this.bounds);
+      const offsetSign = resolveWallOutwardOffsetSign(
+        topLoop,
+        wallNormal.x,
+        wallNormal.y,
+        wallSide
+      );
 
       features.push({
         id: features.length,

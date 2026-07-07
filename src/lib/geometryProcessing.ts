@@ -336,52 +336,119 @@ export function outwardEdgeNormal2D(
 
 export type OutlineWallSide = 'exterior' | 'interior';
 
+export function partCentroidXY(bounds: PartBounds): { x: number; y: number } {
+  return {
+    x: (bounds.minX + bounds.maxX) / 2,
+    y: (bounds.minY + bounds.maxY) / 2,
+  };
+}
+
 /** +1 or −1 so Minkowski offset moves away from the selected wall faces. */
 export function resolveWallOutwardOffsetSign(
   loop: LoopPoint[],
   wallNormalX: number,
-  wallNormalY: number
+  wallNormalY: number,
+  wallSide: OutlineWallSide = 'exterior'
 ): number {
   const nLen = Math.hypot(wallNormalX, wallNormalY);
   if (nLen < 1e-6 || loop.length < 2) return 1;
 
   const nx = wallNormalX / nLen;
   const ny = wallNormalY / nLen;
-  const ccw = signedLoopArea2D(loop) >= 0;
-  const side = ccw ? 1 : -1;
+  const aimX = wallSide === 'exterior' ? nx : -nx;
+  const aimY = wallSide === 'exterior' ? ny : -ny;
 
-  const a = loop[0];
-  const b = loop[1];
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const elen = Math.hypot(dx, dy) || 1;
-  const loopLeftX = side * (dy / elen);
-  const loopLeftY = side * (-dx / elen);
+  const loopCenter = loopCentroid(loop);
+  const probeOffset = Math.max(
+    0.35,
+    Math.hypot(loop[1].x - loop[0].x, loop[1].y - loop[0].y) * 0.08
+  );
 
-  return loopLeftX * nx + loopLeftY * ny >= 0 ? 1 : -1;
+  let bestSign = 1;
+  let bestAlignment = -Infinity;
+  for (const sign of [1, -1] as const) {
+    const offsetLoop = offsetLoop2DMinkowski(loop, probeOffset * sign);
+    if (offsetLoop.length === 0) continue;
+    const offsetCenter = loopCentroid(offsetLoop);
+    const alignment =
+      (offsetCenter.x - loopCenter.x) * aimX + (offsetCenter.y - loopCenter.y) * aimY;
+    if (alignment > bestAlignment) {
+      bestAlignment = alignment;
+      bestSign = sign;
+    }
+  }
+
+  return bestSign;
 }
 
 /** Whether the wall faces bound an exterior perimeter or an interior void. */
 export function resolveOutlineWallSide(
   loop: LoopPoint[],
   wallNormalX: number,
-  wallNormalY: number
+  wallNormalY: number,
+  partBounds?: PartBounds
 ): OutlineWallSide {
   const nLen = Math.hypot(wallNormalX, wallNormalY);
   if (nLen < 1e-6 || loop.length < 3) return 'exterior';
 
-  let cx = 0;
-  let cy = 0;
-  for (const p of loop) {
-    cx += p.x;
-    cy += p.y;
-  }
-  cx /= loop.length;
-  cy /= loop.length;
+  const nx = wallNormalX / nLen;
+  const ny = wallNormalY / nLen;
+  const loopCenter = loopCentroid(loop);
 
-  const probeX = cx + (wallNormalX / nLen) * 0.25;
-  const probeY = cy + (wallNormalY / nLen) * 0.25;
-  return pointInPolygon2D(probeX, probeY, loop) ? 'interior' : 'exterior';
+  if (partBounds) {
+    const partArea =
+      Math.max(partBounds.maxX - partBounds.minX, 1e-6) *
+      Math.max(partBounds.maxY - partBounds.minY, 1e-6);
+    const loopArea = Math.abs(signedLoopArea2D(loop));
+    const spanMargin = Math.max(
+      (partBounds.maxX - partBounds.minX) * 0.04,
+      (partBounds.maxY - partBounds.minY) * 0.04,
+      0.75
+    );
+
+    let loopMinX = Infinity;
+    let loopMaxX = -Infinity;
+    let loopMinY = Infinity;
+    let loopMaxY = -Infinity;
+    for (const p of loop) {
+      loopMinX = Math.min(loopMinX, p.x);
+      loopMaxX = Math.max(loopMaxX, p.x);
+      loopMinY = Math.min(loopMinY, p.y);
+      loopMaxY = Math.max(loopMaxY, p.y);
+    }
+
+    const touchesExterior =
+      Math.abs(loopMinX - partBounds.minX) <= spanMargin ||
+      Math.abs(loopMaxX - partBounds.maxX) <= spanMargin ||
+      Math.abs(loopMinY - partBounds.minY) <= spanMargin ||
+      Math.abs(loopMaxY - partBounds.maxY) <= spanMargin;
+
+    if (touchesExterior) return 'exterior';
+    if (loopArea < partArea * 0.35) return 'interior';
+
+    const partCenter = partCentroidXY(partBounds);
+    const radialX = loopCenter.x - partCenter.x;
+    const radialY = loopCenter.y - partCenter.y;
+    const radialLen = Math.hypot(radialX, radialY);
+    if (radialLen > 1e-6) {
+      const alignment = nx * (radialX / radialLen) + ny * (radialY / radialLen);
+      if (Math.abs(alignment) > 0.08) {
+        return alignment >= 0 ? 'exterior' : 'interior';
+      }
+    }
+  }
+
+  const probeX = loopCenter.x + nx * 0.25;
+  const probeY = loopCenter.y + ny * 0.25;
+  const oppositeX = loopCenter.x - nx * 0.25;
+  const oppositeY = loopCenter.y - ny * 0.25;
+  const alongNormalInside = pointInPolygon2D(probeX, probeY, loop);
+  const oppositeInside = pointInPolygon2D(oppositeX, oppositeY, loop);
+  if (alongNormalInside !== oppositeInside) {
+    return oppositeInside ? 'interior' : 'exterior';
+  }
+
+  return 'exterior';
 }
 
 export function convexJoinArcSweep(a1: number, a2: number): number {

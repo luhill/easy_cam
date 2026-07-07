@@ -98,8 +98,14 @@ export function resolveAdaptiveEntryLayout(
 
   const toolStartOverride = overrides?.toolStartPoint ?? overrides?.entryPoint ?? null;
   const toolStart = toolStartOverride
-    ? resolveAdaptiveEntryPoint(partLoop, settings, toolStartOverride, toolOrigin)
-    : computeDefaultEntryPoint(partLoop, settings, toolOrigin);
+    ? resolveAdaptiveEntryPoint(
+        partLoop,
+        settings,
+        toolStartOverride,
+        toolOrigin,
+        offsetContext.offsetSign
+      )
+    : computeDefaultEntryPoint(partLoop, settings, toolOrigin, offsetContext.offsetSign);
 
   const slotJoinSnap = overrides?.slotJoinPoint
     ? findClosestSOnGuide(arcGuide, overrides.slotJoinPoint)
