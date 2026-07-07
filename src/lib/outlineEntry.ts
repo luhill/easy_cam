@@ -487,6 +487,23 @@ export function resolveStandardHelixEntryLayout(
   };
 }
 
+/** Outward-offset helix bore center so inter-layer bores sit outside the part. */
+export function resolveStandardHelixLayerBoreCenter(
+  partLoop: LoopPoint[],
+  joinPoint: { x: number; y: number },
+  settings: OperationDefaults,
+  stockAllowance = 0
+): { x: number; y: number } {
+  const helixR = resolveHelixRadius(settings);
+  const outward = closestPointOnLoop2D(joinPoint.x, joinPoint.y, partLoop);
+  const candidate = {
+    x: joinPoint.x + outward.outX * helixR,
+    y: joinPoint.y + outward.outY * helixR,
+  };
+  const minDist = minimumStandardHelixEntryCenterDist(settings, stockAllowance);
+  return ensureEntryOutsidePart(partLoop, candidate, minDist * 0.98);
+}
+
 export interface ContourRampResult {
   points: ToolpathPoint[];
   endPoint: { x: number; y: number };

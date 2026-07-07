@@ -26,6 +26,7 @@ import {
   outlineRampLengthMm,
   resolveStandardEntryLayout,
   resolveStandardHelixEntryLayout,
+  resolveStandardHelixLayerBoreCenter,
   sampleContourLoopFromArcS,
   standardEntryNeedsLeadIn,
   standardSplineLeadInFeed,
@@ -347,7 +348,12 @@ function generateStandardHelixOutlinePath(
         if (!appendPoints(points, leadIn)) break;
       }
     } else {
-      const layerBoreCenter = joinPoint;
+      const layerBoreCenter = resolveStandardHelixLayerBoreCenter(
+        loop,
+        joinPoint,
+        settings,
+        stockAllowance
+      );
       appendFreshSlotWidthBore(
         points,
         layerBoreCenter,
