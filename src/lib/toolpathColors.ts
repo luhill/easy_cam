@@ -24,6 +24,18 @@ export const TOOLPATH_MOVE_LABELS: Record<ToolpathMoveKind, string> = {
 
 const TRAVEL_FEED_TOLERANCE = 0.02;
 
+function isTravelFeed(
+  a: ToolpathPoint,
+  b: ToolpathPoint,
+  travelFeedRate: number
+): boolean {
+  const feed = b.feedRate ?? a.feedRate;
+  return (
+    feed !== undefined &&
+    Math.abs(feed - travelFeedRate) / Math.max(travelFeedRate, 1) <= TRAVEL_FEED_TOLERANCE
+  );
+}
+
 function isPlungeMove(a: ToolpathPoint, b: ToolpathPoint): boolean {
   const dx = b.x - a.x;
   const dy = b.y - a.y;
@@ -39,6 +51,7 @@ function edgeFeedRate(
   travelFeedRate: number
 ): number {
   if (a.rapid || b.rapid) return PREVIEW_RAPID_FEED;
+  if (isTravelFeed(a, b, travelFeedRate)) return travelFeedRate;
   if (isPlungeMove(a, b)) return op?.settings.plungeRate ?? travelFeedRate;
   return b.feedRate ?? a.feedRate ?? op?.settings.feedRate ?? travelFeedRate;
 }
@@ -51,15 +64,8 @@ export function classifyToolpathMove(
 ): ToolpathMoveKind {
   if (a.onSpur || b.onSpur) return 'spur';
   if (a.rapid || b.rapid) return 'rapid';
+  if (isTravelFeed(a, b, travelFeedRate)) return 'travel';
   if (isPlungeMove(a, b)) return 'plunge';
-
-  const feed = b.feedRate ?? a.feedRate;
-  if (
-    feed !== undefined &&
-    Math.abs(feed - travelFeedRate) / Math.max(travelFeedRate, 1) <= TRAVEL_FEED_TOLERANCE
-  ) {
-    return 'travel';
-  }
 
   return 'cut';
 }
