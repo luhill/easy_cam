@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { LoopPoint, OperationType, SelectionStrategy } from '../types/operations';
-import { loopArea2D, pointInPolygon2D, boundsFromGeometry, loopCentroid, distanceToLoop2D, resolveOutlineWallSide, resolveWallOutwardOffsetSign, signedLoopArea2D, type PartBounds } from './geometryProcessing';
+import { loopArea2D, pointInPolygon2D, boundsFromGeometry, loopCentroid, distanceToLoop2D, resolveOutlineWallSide, orientNormalIntoVoid, resolveOutlineOffsetDelta, signedLoopArea2D, type PartBounds } from './geometryProcessing';
 import {
   classifyRegionKind,
   effectiveOutlineLoop,
@@ -33,6 +33,8 @@ export interface SelectionGroup {
   bottomZ?: number;
   offsetSign?: number;
   wallSide?: 'exterior' | 'interior';
+  voidNormalX?: number;
+  voidNormalY?: number;
   outerLoop?: LoopPoint[] | null;
 }
 
@@ -46,6 +48,8 @@ export interface EdgeLoopFeature {
   /** +1 / −1 — offset away from selected wall faces */
   offsetSign: number;
   wallSide: 'exterior' | 'interior';
+  voidNormalX: number;
+  voidNormalY: number;
 }
 
 export interface HoleFeature {
@@ -641,14 +645,27 @@ export class MeshIndex {
 
       const bottomLoop = this.extractHorizontalRimLoop(faceIndices, 'bottom') ?? [];
       const wallNormal = this.averageWallNormalXY(faceIndices);
-      const wallSide = resolveOutlineWallSide(topLoop, wallNormal.x, wallNormal.y, this.bounds);
-      const normalizedLoop = normalizeEdgeLoopWinding(topLoop, wallSide);
-      const offsetSign = resolveWallOutwardOffsetSign(
+      const voidNormal = orientNormalIntoVoid(topLoop, wallNormal.x, wallNormal.y);
+      let wallSide = resolveOutlineWallSide(topLoop, wallNormal.x, wallNormal.y, this.bounds);
+      let normalizedLoop = normalizeEdgeLoopWinding(topLoop, wallSide);
+
+      const probeDelta = resolveOutlineOffsetDelta(
         normalizedLoop,
-        wallNormal.x,
-        wallNormal.y,
-        wallSide
+        voidNormal.nx,
+        voidNormal.ny,
+        1
       );
+      if (probeDelta !== 0) {
+        const expectPositive = signedLoopArea2D(normalizedLoop) >= 0;
+        if ((probeDelta > 0) !== expectPositive) {
+          wallSide = wallSide === 'exterior' ? 'interior' : 'exterior';
+          normalizedLoop = normalizeEdgeLoopWinding(topLoop, wallSide);
+        }
+      }
+
+      const offsetSign =
+        resolveOutlineOffsetDelta(normalizedLoop, voidNormal.nx, voidNormal.ny, 1) >= 0 ? 1 : -1;
+      const resolvedWallSide = signedLoopArea2D(normalizedLoop) >= 0 ? 'exterior' : 'interior';
 
       features.push({
         id: features.length,
@@ -658,7 +675,9 @@ export class MeshIndex {
         topZ,
         bottomZ,
         offsetSign,
-        wallSide,
+        wallSide: resolvedWallSide,
+        voidNormalX: voidNormal.nx,
+        voidNormalY: voidNormal.ny,
       });
     }
 
@@ -1000,6 +1019,8 @@ export class MeshIndex {
         bottomZ: edgeLoop.bottomZ,
         offsetSign: edgeLoop.offsetSign,
         wallSide: edgeLoop.wallSide,
+        voidNormalX: edgeLoop.voidNormalX,
+        voidNormalY: edgeLoop.voidNormalY,
         outerLoop: null,
       };
     }

@@ -7,6 +7,7 @@ import type { LoopPoint } from '../types/operations';
 import {
   offsetMiterVertex,
   offsetLoop2DMinkowski,
+  resolveOutlineOffsetDelta,
   signedLoopArea2D,
   closestPointOnLoop2D,
   type OutlineWallSide,
@@ -305,10 +306,18 @@ export function buildSlotCenterGuideWithCornerSpurs(
   maxSegmentLen: number,
   options: CornerSpurOptions = {},
   offsetSign = 1,
-  wallSide: OutlineWallSide = 'exterior'
+  wallSide: OutlineWallSide = 'exterior',
+  voidNormalX?: number,
+  voidNormalY?: number
 ): SlotCenterGuideResult {
-  const signedSlotCenter = slotCenterOffset * offsetSign;
-  const signedFinishInner = finishInnerOffset * offsetSign;
+  const signedSlotCenter =
+    voidNormalX !== undefined && voidNormalY !== undefined
+      ? resolveOutlineOffsetDelta(partLoop, voidNormalX, voidNormalY, slotCenterOffset)
+      : slotCenterOffset * offsetSign;
+  const signedFinishInner =
+    voidNormalX !== undefined && voidNormalY !== undefined
+      ? resolveOutlineOffsetDelta(partLoop, voidNormalX, voidNormalY, finishInnerOffset)
+      : finishInnerOffset * offsetSign;
 
   const maxInternalAngleDeg = options.maxInternalAngleDeg ?? 160;
   const roughTipInnerOffset = options.roughTipInnerOffset;

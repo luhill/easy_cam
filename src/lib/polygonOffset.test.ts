@@ -4,6 +4,8 @@
 import { offsetClosedLoop2D } from './polygonOffset';
 import {
   offsetLoop2DMinkowski,
+  orientNormalIntoVoid,
+  resolveOutlineOffsetDelta,
   resolveOutlineWallSide,
   signedLoopArea2D,
 } from './geometryProcessing';
@@ -178,5 +180,27 @@ assert(exteriorInwardNormal === 'exterior', 'perimeter with inward mesh normal s
 const extOut = offsetLoop2DMinkowski(square, 2, 0.15, exteriorInwardNormal);
 const extBounds = loopBounds(extOut);
 assert(extBounds.minX < -0.5 && extBounds.maxX > 10.5, 'exterior should offset outward with inward mesh normal');
+
+function offsetWithVoidNormal(
+  loop: LoopPoint[],
+  voidNx: number,
+  voidNy: number,
+  mag: number,
+  segLen = 0.15
+): LoopPoint[] {
+  const delta = resolveOutlineOffsetDelta(loop, voidNx, voidNy, mag);
+  return offsetLoop2DMinkowski(loop, delta, segLen, signedLoopArea2D(loop) >= 0 ? 'exterior' : 'interior');
+}
+
+// Empirical void-normal offset: exterior expands, interior insets regardless of mesh normal flip.
+const extVoid = orientNormalIntoVoid(square, -1, 0);
+const extEmpirical = offsetWithVoidNormal(square, extVoid.nx, extVoid.ny, 2);
+const extEmpBounds = loopBounds(extEmpirical);
+assert(extEmpBounds.minX < -0.5 && extEmpBounds.maxX > 10.5, 'empirical exterior offset should expand outward');
+
+const tearVoid = orientNormalIntoVoid(teardrop, -0.5, 1);
+const tearEmpirical = offsetWithVoidNormal(teardrop, tearVoid.nx, tearVoid.ny, 1);
+const tearEmpBounds = loopBounds(tearEmpirical);
+assert(tearEmpBounds.maxY < 19.5, 'empirical interior offset should move into void');
 
 console.log('polygonOffset tests passed');

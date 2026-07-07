@@ -33,6 +33,7 @@ import {
   standardSplineTailFromPoint,
   stationOnContour,
   DEFAULT_OUTLINE_OFFSET_CONTEXT,
+  resolveSignedOutlineOffset,
   type OutlineOffsetContext,
 } from './outlineEntry';
 import {
@@ -173,6 +174,8 @@ function resolveOutlinePathJobs(
         offsetContext: {
           offsetSign: el.offsetSign ?? 1,
           wallSide: el.wallSide ?? 'exterior',
+          voidNormalX: el.voidNormalX,
+          voidNormalY: el.voidNormalY,
         },
       }));
   }
@@ -216,9 +219,11 @@ function contourTraverse(
   resolution = DEFAULT_TOOLPATH_RESOLUTION,
   offsetContext: OutlineOffsetContext = DEFAULT_OUTLINE_OFFSET_CONTEXT
 ): LoopPoint[] {
-  const offset =
-    (toolRadius(settings) + (settings.radialOffset ?? 0) + extraRadialStock) *
-    offsetContext.offsetSign;
+  const offset = resolveSignedOutlineOffset(
+    loop,
+    toolRadius(settings) + (settings.radialOffset ?? 0) + extraRadialStock,
+    offsetContext
+  );
   const toolLoop = offsetLoop2DMinkowski(loop, offset, minkowskiSegmentLen(resolution), offsetContext.wallSide);
   const ccw = signedLoopArea2D(loop) >= 0;
   const reverse = settings.climbMilling ? ccw : !ccw;
@@ -745,7 +750,9 @@ function generateAdaptiveTrochoidalPath(
     segLen,
     cornerSpurOptionsForRoughing(settings),
     offsetContext.offsetSign,
-    offsetContext.wallSide
+    offsetContext.wallSide,
+    offsetContext.voidNormalX,
+    offsetContext.voidNormalY
   );
   const { arcGuide, spurRanges } = mapSpurRangesToArcGuide(
     slotCenterGuide,
@@ -961,7 +968,7 @@ function generateFinishingOutline(
   const segLen = minkowskiSegmentLen(globals.resolution);
   const finishGuide = offsetLoop2DMinkowski(
     partLoop,
-    finishSlot.innerCenterOffset * offsetContext.offsetSign,
+    resolveSignedOutlineOffset(partLoop, finishSlot.innerCenterOffset, offsetContext),
     segLen,
     offsetContext.wallSide
   );
@@ -972,7 +979,9 @@ function generateFinishingOutline(
     segLen,
     cornerSpurOptionsForRoughing(settings),
     offsetContext.offsetSign,
-    offsetContext.wallSide
+    offsetContext.wallSide,
+    offsetContext.voidNormalX,
+    offsetContext.voidNormalY
   );
   if (finishGuide.length < 3) return [];
 

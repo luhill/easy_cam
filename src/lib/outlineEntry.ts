@@ -3,6 +3,7 @@ import type { ToolOrigin } from './geometryProcessing';
 import {
   closestPointOnLoop2D,
   offsetLoop2DMinkowski,
+  resolveOutlineOffsetDelta,
   signedLoopArea2D,
   type OutlineWallSide,
 } from './geometryProcessing';
@@ -50,12 +51,30 @@ function innerToolCenterOffset(settings: OperationDefaults, stockAllowance = 0):
 export interface OutlineOffsetContext {
   offsetSign: number;
   wallSide: OutlineWallSide;
+  voidNormalX?: number;
+  voidNormalY?: number;
 }
 
 export const DEFAULT_OUTLINE_OFFSET_CONTEXT: OutlineOffsetContext = {
   offsetSign: 1,
   wallSide: 'exterior',
 };
+
+export function resolveSignedOutlineOffset(
+  partLoop: LoopPoint[],
+  offsetMagnitude: number,
+  offsetContext: OutlineOffsetContext
+): number {
+  if (offsetContext.voidNormalX !== undefined && offsetContext.voidNormalY !== undefined) {
+    return resolveOutlineOffsetDelta(
+      partLoop,
+      offsetContext.voidNormalX,
+      offsetContext.voidNormalY,
+      offsetMagnitude
+    );
+  }
+  return offsetMagnitude * offsetContext.offsetSign;
+}
 
 export function resolveOutlineOffsetContext(
   geometry: SelectedGeometry | null | undefined,
@@ -71,7 +90,10 @@ export function resolveOutlineOffsetContext(
       ) ?? edgeLoops[0];
     return {
       offsetSign: match.offsetSign ?? 1,
-      wallSide: match.wallSide ?? 'exterior',
+      wallSide:
+        match.wallSide ?? (signedLoopArea2D(partLoop) >= 0 ? 'exterior' : 'interior'),
+      voidNormalX: match.voidNormalX,
+      voidNormalY: match.voidNormalY,
     };
   }
   return DEFAULT_OUTLINE_OFFSET_CONTEXT;
@@ -84,7 +106,11 @@ export function buildOutlineToolCenterline(
   maxSegmentLen = 0.3,
   offsetContext: OutlineOffsetContext = DEFAULT_OUTLINE_OFFSET_CONTEXT
 ): LoopPoint[] {
-  const offset = innerToolCenterOffset(settings, stockAllowance) * offsetContext.offsetSign;
+  const offset = resolveSignedOutlineOffset(
+    partLoop,
+    innerToolCenterOffset(settings, stockAllowance),
+    offsetContext
+  );
   const segLen = Math.max(maxSegmentLen, Math.abs(offset) * 0.22, 0.4);
   const toolLoop = offsetLoop2DMinkowski(partLoop, offset, segLen, offsetContext.wallSide);
   const ccw = signedLoopArea2D(partLoop) >= 0;

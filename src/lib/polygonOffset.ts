@@ -125,11 +125,12 @@ export function offsetClosedLoop2D(
 
   if (solution.length === 0) return loop.map((p) => ({ ...p }));
 
+  const wantLargest = deltaMm >= 0;
   let best = solution[0];
   let bestArea = Math.abs(pathArea2D(best));
   for (let i = 1; i < solution.length; i++) {
     const area = Math.abs(pathArea2D(solution[i]));
-    if (area > bestArea) {
+    if (wantLargest ? area > bestArea : area < bestArea) {
       best = solution[i];
       bestArea = area;
     }

@@ -75,7 +75,9 @@ export function resolveAdaptiveEntryLayout(
     centerGuideSegLen,
     cornerSpurOptionsForRoughing(settings),
     offsetContext.offsetSign,
-    offsetContext.wallSide
+    offsetContext.wallSide,
+    offsetContext.voidNormalX,
+    offsetContext.voidNormalY
   );
   if (slotCenterGuide.length < 3) return null;
 
@@ -112,7 +114,9 @@ export function resolveAdaptiveEntryLayout(
         settings,
         toolOrigin,
         offsetContext.offsetSign,
-        offsetContext.wallSide
+        offsetContext.wallSide,
+        offsetContext.voidNormalX,
+        offsetContext.voidNormalY
       );
 
   const slotJoinSnap = overrides?.slotJoinPoint
