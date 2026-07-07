@@ -365,26 +365,52 @@ export function resolveOutlineWallSide(
   const nLen = Math.hypot(wallNormalX, wallNormalY);
   if (nLen < 1e-6 || loop.length < 3) return 'exterior';
 
-  const nx = wallNormalX / nLen;
-  const ny = wallNormalY / nLen;
+  let nx = wallNormalX / nLen;
+  let ny = wallNormalY / nLen;
   const loopCenter = loopCentroid(loop);
+  const anchor = closestPointOnLoop2D(loopCenter.x, loopCenter.y, loop);
 
-  // Wall face normals point from solid into the void where the tool should live.
   let edgeLen = 0;
   for (let i = 0; i < loop.length; i++) {
     const a = loop[i];
     const b = loop[(i + 1) % loop.length];
     edgeLen = Math.max(edgeLen, Math.hypot(b.x - a.x, b.y - a.y));
   }
-  const probeDist = Math.max(edgeLen * 0.2, 0.3);
-  const voidX = loopCenter.x + nx * probeDist;
-  const voidY = loopCenter.y + ny * probeDist;
-  const solidX = loopCenter.x - nx * probeDist;
-  const solidY = loopCenter.y - ny * probeDist;
-  const voidInsideLoop = pointInPolygon2D(voidX, voidY, loop);
-  const solidInsideLoop = pointInPolygon2D(solidX, solidY, loop);
-  if (voidInsideLoop !== solidInsideLoop) {
-    return voidInsideLoop ? 'interior' : 'exterior';
+  const probeDist = Math.max(edgeLen * 0.15, 0.25);
+
+  const plusInside = pointInPolygon2D(
+    anchor.x + nx * probeDist,
+    anchor.y + ny * probeDist,
+    loop
+  );
+  const minusInside = pointInPolygon2D(
+    anchor.x - nx * probeDist,
+    anchor.y - ny * probeDist,
+    loop
+  );
+
+  // Mesh normals may point into solid; orient +n from material into void using winding.
+  if (plusInside !== minusInside) {
+    const ccw = signedLoopArea2D(loop) >= 0;
+    const materialOnPlus = ccw ? plusInside : !plusInside;
+    if (materialOnPlus) {
+      nx = -nx;
+      ny = -ny;
+    }
+  }
+
+  const voidInside = pointInPolygon2D(
+    anchor.x + nx * probeDist,
+    anchor.y + ny * probeDist,
+    loop
+  );
+  const solidInside = pointInPolygon2D(
+    anchor.x - nx * probeDist,
+    anchor.y - ny * probeDist,
+    loop
+  );
+  if (voidInside !== solidInside) {
+    return voidInside ? 'interior' : 'exterior';
   }
 
   if (partBounds) {

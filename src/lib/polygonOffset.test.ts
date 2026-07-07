@@ -164,4 +164,19 @@ const exteriorSide = resolveOutlineWallSide(square, 1, 0, {
 });
 assert(exteriorSide === 'exterior', 'perimeter square with outward normal should be exterior');
 
+// Mesh normals often point into solid — exterior must still classify correctly.
+const exteriorInwardNormal = resolveOutlineWallSide(square, -1, 0, {
+  minX: 0,
+  maxX: 10,
+  minY: 0,
+  maxY: 10,
+  minZ: 0,
+  maxZ: 10,
+});
+assert(exteriorInwardNormal === 'exterior', 'perimeter with inward mesh normal should be exterior');
+
+const extOut = offsetLoop2DMinkowski(square, 2, 0.15, exteriorInwardNormal);
+const extBounds = loopBounds(extOut);
+assert(extBounds.minX < -0.5 && extBounds.maxX > 10.5, 'exterior should offset outward with inward mesh normal');
+
 console.log('polygonOffset tests passed');
