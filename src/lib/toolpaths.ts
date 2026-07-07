@@ -347,9 +347,10 @@ function generateStandardHelixOutlinePath(
         if (!appendPoints(points, leadIn)) break;
       }
     } else {
+      const layerBoreCenter = joinPoint;
       appendFreshSlotWidthBore(
         points,
-        toolStart,
+        layerBoreCenter,
         layerPrevZ,
         layerZ,
         helixR,
@@ -360,7 +361,7 @@ function generateStandardHelixOutlinePath(
       if (
         !appendBoreBottomWidenAndLeadIn(
           points,
-          toolStart,
+          layerBoreCenter,
           layerZ,
           helixR,
           helixRadiusTaperedFromStart(settings, layerZ, layerPrevZ, helixR),
