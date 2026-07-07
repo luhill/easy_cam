@@ -10,13 +10,11 @@ import {
   buildArcLengthGuide,
   buildOpenArcLengthGuide,
   findClosestSOnGuide,
-  guideArcLengthBetween,
   sampleGuideAtS,
   sampleOpenGuideAtS,
   type ArcLengthGuide,
 } from './trochoidalPath';
 import {
-  buildSplineEntryGuide,
   ensureEntryOutsidePart,
   resolveHelixRadius,
 } from './entryPath';
@@ -54,7 +52,8 @@ export function buildOutlineToolCenterline(
   maxSegmentLen = 0.3
 ): LoopPoint[] {
   const offset = innerToolCenterOffset(settings, stockAllowance);
-  const toolLoop = offsetLoop2DMinkowski(partLoop, offset, maxSegmentLen);
+  const segLen = Math.max(maxSegmentLen, Math.abs(offset) * 0.22, 0.4);
+  const toolLoop = offsetLoop2DMinkowski(partLoop, offset, segLen);
   const ccw = signedLoopArea2D(partLoop) >= 0;
   const reverse = settings.climbMilling ? ccw : !ccw;
   return reverse ? [...toolLoop].reverse() : toolLoop;
@@ -212,19 +211,103 @@ export function standardEntryNeedsLeadIn(layout: StandardEntryLayout): boolean {
   );
 }
 
+/** Tangent to a bore circle at the tool position (helix exit direction). */
+export function helixBoreExitTangent(
+  boreCenter: { x: number; y: number },
+  boreBottom: { x: number; y: number },
+  rotDir: number
+): { x: number; y: number } {
+  const rx = boreBottom.x - boreCenter.x;
+  const ry = boreBottom.y - boreCenter.y;
+  const rLen = Math.hypot(rx, ry) || 1;
+  return { x: (-ry / rLen) * rotDir, y: (rx / rLen) * rotDir };
+}
+
+/** Tighter Hermite lead-in for standard outline (less bow than adaptive slot entry). */
+export function buildOutlineSplineEntryGuide(
+  toolStart: { x: number; y: number },
+  contourJoin: { x: number; y: number },
+  exitTangent: { x: number; y: number },
+  sampleSpacing: number,
+  z: number,
+  startTangent?: { x: number; y: number }
+): LoopPoint[] {
+  const dx = contourJoin.x - toolStart.x;
+  const dy = contourJoin.y - toolStart.y;
+  const chord = Math.hypot(dx, dy);
+  if (chord <= 1e-6) {
+    return [{ x: contourJoin.x, y: contourJoin.y, z }];
+  }
+  if (chord <= sampleSpacing * 0.25) {
+    return [
+      { x: toolStart.x, y: toolStart.y, z },
+      { x: contourJoin.x, y: contourJoin.y, z },
+    ];
+  }
+
+  const startHandle = Math.min(Math.max(chord * 0.25, sampleSpacing), chord * 0.42);
+  const endHandle = Math.min(Math.max(chord * 0.18, sampleSpacing * 0.75), chord * 0.32);
+  const startDir = startTangent ?? { x: dx / chord, y: dy / chord };
+  const sLen = Math.hypot(startDir.x, startDir.y) || 1;
+  const t0 = {
+    x: (startDir.x / sLen) * startHandle,
+    y: (startDir.y / sLen) * startHandle,
+  };
+  const tLen = Math.hypot(exitTangent.x, exitTangent.y) || 1;
+  const t1 = {
+    x: (exitTangent.x / tLen) * endHandle,
+    y: (exitTangent.y / tLen) * endHandle,
+  };
+
+  const steps = Math.max(6, Math.ceil(chord / sampleSpacing));
+  const points: LoopPoint[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const u = i / steps;
+    const u2 = u * u;
+    const u3 = u2 * u;
+    const h00 = 2 * u3 - 3 * u2 + 1;
+    const h10 = u3 - 2 * u2 + u;
+    const h01 = -2 * u3 + 3 * u2;
+    const h11 = u3 - u2;
+    points.push({
+      x: h00 * toolStart.x + h10 * t0.x + h01 * contourJoin.x + h11 * t1.x,
+      y: h00 * toolStart.y + h10 * t0.y + h01 * contourJoin.y + h11 * t1.y,
+      z,
+    });
+  }
+  return points;
+}
+
 export function buildStandardSplineLeadIn(
   layout: StandardEntryLayout,
   z: number,
-  sampleSpacing: number
+  sampleSpacing: number,
+  toolStartOverride?: { x: number; y: number },
+  startTangent?: { x: number; y: number }
 ): ToolpathPoint[] {
-  const spline = buildSplineEntryGuide(
-    layout.toolStart,
+  const start = toolStartOverride ?? layout.toolStart;
+  const spline = buildOutlineSplineEntryGuide(
+    start,
     layout.contourJoin,
     layout.traverseTangent,
     sampleSpacing,
-    z
+    z,
+    startTangent
   );
   return spline.map((p) => ({ x: p.x, y: p.y, z }));
+}
+
+/** Spline from helix bore-bottom to contour join with circle exit tangent. */
+export function buildHelixOutlineSplineLeadIn(
+  boreCenter: { x: number; y: number },
+  boreBottom: { x: number; y: number },
+  layout: StandardEntryLayout,
+  z: number,
+  sampleSpacing: number,
+  rotDir: number
+): ToolpathPoint[] {
+  const startTan = helixBoreExitTangent(boreCenter, boreBottom, rotDir);
+  return buildStandardSplineLeadIn(layout, z, sampleSpacing, boreBottom, startTan);
 }
 
 export function standardSplineLeadInFeed(
@@ -233,17 +316,19 @@ export function standardSplineLeadInFeed(
   feedRate: number,
   sampleSpacing: number,
   skipNear?: { x: number; y: number; z: number },
-  toolStartOverride?: { x: number; y: number }
+  toolStartOverride?: { x: number; y: number },
+  startTangent?: { x: number; y: number }
 ): ToolpathPoint[] {
-  const start = toolStartOverride ?? layout.toolStart;
-  const spline = buildSplineEntryGuide(
-    start,
-    layout.contourJoin,
-    layout.traverseTangent,
+  const pts = buildStandardSplineLeadIn(
+    layout,
+    z,
     sampleSpacing,
-    z
-  );
-  const pts = spline.map((p) => ({ x: p.x, y: p.y, z, feedRate }));
+    toolStartOverride,
+    startTangent
+  ).map((p) => ({
+    ...p,
+    feedRate,
+  }));
   if (!pts.length || !skipNear) return pts;
   const first = pts[0];
   if (
@@ -253,6 +338,44 @@ export function standardSplineLeadInFeed(
     return pts.slice(1);
   }
   return pts;
+}
+
+/** Continue a spline lead-in from an intermediate XY (e.g. after ramp ends mid-entry). */
+export function standardSplineTailFromPoint(
+  layout: StandardEntryLayout,
+  z: number,
+  feedRate: number,
+  fromPoint: { x: number; y: number },
+  sampleSpacing: number,
+  toolStartOverride?: { x: number; y: number }
+): ToolpathPoint[] {
+  if (
+    Math.hypot(fromPoint.x - layout.contourJoin.x, fromPoint.y - layout.contourJoin.y) <
+    sampleSpacing * 0.75
+  ) {
+    return [];
+  }
+
+  const start = toolStartOverride ?? layout.toolStart;
+  const spline = buildOutlineSplineEntryGuide(
+    start,
+    layout.contourJoin,
+    layout.traverseTangent,
+    sampleSpacing,
+    z
+  );
+
+  let bestIdx = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < spline.length; i++) {
+    const d = Math.hypot(spline[i].x - fromPoint.x, spline[i].y - fromPoint.y);
+    if (d < bestDist) {
+      bestDist = d;
+      bestIdx = i;
+    }
+  }
+
+  return spline.slice(bestIdx).map((p) => ({ x: p.x, y: p.y, z, feedRate }));
 }
 
 /** Minimum bore-center distance from part outline for standard helix entry. */
@@ -330,89 +453,91 @@ export function stationOnContour(
   return findClosestSOnGuide(guide, point).s;
 }
 
-function vertexInteriorAngleDeg(traverse: LoopPoint[], index: number): number {
-  const n = traverse.length;
-  if (n < 3) return 180;
-  const prev = traverse[(index - 1 + n) % n];
-  const curr = traverse[index];
-  const next = traverse[(index + 1) % n];
-  const v1x = prev.x - curr.x;
-  const v1y = prev.y - curr.y;
-  const v2x = next.x - curr.x;
-  const v2y = next.y - curr.y;
-  const len1 = Math.hypot(v1x, v1y) || 1;
-  const len2 = Math.hypot(v2x, v2y) || 1;
-  const dot = (v1x / len1) * (v2x / len2) + (v1y / len1) * (v2y / len2);
-  return (Math.acos(Math.min(1, Math.max(-1, dot))) * 180) / Math.PI;
+function appendEdgeSamples(
+  points: ToolpathPoint[],
+  from: LoopPoint,
+  to: LoopPoint,
+  layerZ: number,
+  feedRate: number,
+  sampleSpacing: number
+): void {
+  const len = Math.hypot(to.x - from.x, to.y - from.y);
+  if (len <= sampleSpacing * 0.5) {
+    points.push({ x: to.x, y: to.y, z: layerZ, feedRate });
+    return;
+  }
+  const steps = Math.max(1, Math.ceil(len / sampleSpacing));
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    points.push({
+      x: from.x + (to.x - from.x) * t,
+      y: from.y + (to.y - from.y) * t,
+      z: layerZ,
+      feedRate,
+    });
+  }
 }
 
-/** Anchor only sharp polyline vertices (interior miters + arc joins), not dense arc samples. */
-function collectSharpCornerStations(
-  guide: ArcLengthGuide,
+/** Walk the offset polyline vertex-by-vertex for an exact closed perimeter loop. */
+export function sampleContourLoopAlongTraverse(
   traverse: LoopPoint[],
-  startS: number,
-  cutLength: number,
-  forward: boolean
-): number[] {
-  const total = guide.totalLength;
-  if (total <= 0 || traverse.length < 3) return [];
+  layerZ: number,
+  feedRate: number,
+  loopAnchor: { x: number; y: number },
+  forward = true,
+  sampleSpacing: number,
+  skipNear?: { x: number; y: number; z: number }
+): ToolpathPoint[] {
+  const n = traverse.length;
+  if (n < 3) return [];
 
-  const seen = new Set<number>();
-  const anchors: number[] = [];
-
-  for (let i = 0; i < traverse.length; i++) {
-    if (vertexInteriorAngleDeg(traverse, i) > 165) continue;
-    const s = findClosestSOnGuide(guide, traverse[i]).s;
-    const key = Math.round(s * 1000);
-    if (seen.has(key)) continue;
-    const delta = guideArcLengthBetween(total, startS, s, forward);
-    if (delta > 1e-4 && delta <= cutLength + 1e-4) {
-      seen.add(key);
-      anchors.push(s);
+  let startIdx = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < n; i++) {
+    const d = Math.hypot(traverse[i].x - loopAnchor.x, traverse[i].y - loopAnchor.y);
+    if (d < bestDist) {
+      bestDist = d;
+      startIdx = i;
     }
   }
 
-  return anchors;
-}
+  const dir = forward ? 1 : -1;
+  const points: ToolpathPoint[] = [];
+  const startVtx = traverse[startIdx];
 
-function mergeLoopSampleStations(
-  guide: ArcLengthGuide,
-  startS: number,
-  cutLength: number,
-  forward: boolean,
-  uniformSteps: number,
-  anchorStations: number[]
-): number[] {
-  const total = guide.totalLength;
-  const seen = new Set<number>();
-  const ordered: { delta: number; s: number }[] = [];
+  const skipFirst =
+    !!skipNear &&
+    Math.hypot(skipNear.x - startVtx.x, skipNear.y - startVtx.y) < sampleSpacing * 0.75 &&
+    Math.abs(skipNear.z - layerZ) < 1e-4;
 
-  const pushStation = (s: number) => {
-    const delta = guideArcLengthBetween(total, startS, s, forward);
-    if (delta <= 1e-6 || delta > cutLength + 1e-4) return;
-    const key = Math.round(delta * 1000);
-    if (seen.has(key)) return;
-    seen.add(key);
-    ordered.push({ delta, s });
-  };
-
-  for (let i = 1; i <= uniformSteps; i++) {
-    const delta = (i / uniformSteps) * cutLength;
-    const s = forward
-      ? advanceGuideArcLength(guide, startS, delta, true)
-      : advanceGuideArcLength(guide, startS, delta, false);
-    pushStation(s);
+  if (!skipFirst) {
+    points.push({ x: startVtx.x, y: startVtx.y, z: layerZ, feedRate });
   }
 
-  for (const s of anchorStations) {
-    pushStation(s);
+  for (let step = 1; step <= n; step++) {
+    const idx = ((startIdx + dir * step) % n + n) % n;
+    const prevIdx = ((startIdx + dir * (step - 1)) % n + n) % n;
+    if (step === n) {
+      const last = points[points.length - 1];
+      if (!last || Math.hypot(last.x - startVtx.x, last.y - startVtx.y) > 1e-4) {
+        points.push({ x: startVtx.x, y: startVtx.y, z: layerZ, feedRate });
+      }
+      break;
+    }
+    appendEdgeSamples(
+      points,
+      traverse[prevIdx],
+      traverse[idx],
+      layerZ,
+      feedRate,
+      sampleSpacing
+    );
   }
 
-  ordered.sort((a, b) => a.delta - b.delta);
-  return ordered.map((entry) => entry.s);
+  return points;
 }
 
-/** One contour loop sampled by arc length, starting at startS for up to arcLengthToCut. */
+/** Sample a closed contour loop; full perimeters walk the offset polyline exactly. */
 export function sampleContourLoopFromArcS(
   traverse: LoopPoint[],
   layerZ: number,
@@ -422,7 +547,8 @@ export function sampleContourLoopFromArcS(
   forward = true,
   skipNear?: { x: number; y: number; z: number },
   arcLengthToCut?: number,
-  cachedGuide?: ArcLengthGuide
+  cachedGuide?: ArcLengthGuide,
+  loopAnchor?: { x: number; y: number }
 ): ToolpathPoint[] {
   const guide = cachedGuide ?? buildArcLengthGuide(traverse, Math.max(sampleSpacing, 0.25));
   const total = guide.totalLength;
@@ -431,23 +557,26 @@ export function sampleContourLoopFromArcS(
   const cutLength = Math.min(Math.max(arcLengthToCut ?? total, 0), total);
   if (cutLength <= 1e-6) return [];
 
-  const uniformSteps = Math.max(8, Math.ceil(cutLength / sampleSpacing));
-  const anchorStations = collectSharpCornerStations(
-    guide,
-    traverse,
-    startS,
-    cutLength,
-    forward
-  );
-  const sampleStations = mergeLoopSampleStations(
-    guide,
-    startS,
-    cutLength,
-    forward,
-    uniformSteps,
-    anchorStations
-  );
+  const isFullLoop = Math.abs(cutLength - total) < Math.max(sampleSpacing * 0.5, 1e-3);
+  const anchor =
+    loopAnchor ?? (() => {
+      const frame = sampleGuideAtS(guide, startS);
+      return { x: frame.x, y: frame.y };
+    })();
 
+  if (isFullLoop) {
+    return sampleContourLoopAlongTraverse(
+      traverse,
+      layerZ,
+      feedRate,
+      anchor,
+      forward,
+      sampleSpacing,
+      skipNear
+    );
+  }
+
+  const uniformSteps = Math.max(8, Math.ceil(cutLength / sampleSpacing));
   const points: ToolpathPoint[] = [];
   const startFrame = sampleGuideAtS(guide, startS);
 
@@ -466,7 +595,11 @@ export function sampleContourLoopFromArcS(
     });
   }
 
-  for (const s of sampleStations) {
+  for (let i = 1; i <= uniformSteps; i++) {
+    const delta = (i / uniformSteps) * cutLength;
+    const s = forward
+      ? advanceGuideArcLength(guide, startS, delta, true)
+      : advanceGuideArcLength(guide, startS, delta, false);
     const frame = sampleGuideAtS(guide, s);
     points.push({ x: frame.x, y: frame.y, z: layerZ, feedRate });
   }

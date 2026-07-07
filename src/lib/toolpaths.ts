@@ -18,6 +18,7 @@ import {
 } from './cornerSpurs';
 import { resolveAdaptiveSlotGeometry, cornerSpurOptionsForRoughing, finishingStockAllowance } from './adaptiveOutline';
 import {
+  buildHelixOutlineSplineLeadIn,
   buildStandardSplineLeadIn,
   generateContourLinearRamp,
   generateOpenPolylineLinearRamp,
@@ -28,6 +29,7 @@ import {
   sampleContourLoopFromArcS,
   standardEntryNeedsLeadIn,
   standardSplineLeadInFeed,
+  standardSplineTailFromPoint,
   stationOnContour,
 } from './outlineEntry';
 import {
@@ -58,6 +60,7 @@ import {
 } from './entryPath';
 import {
   adaptiveForwardIncrement,
+  buildArcLengthGuide,
   sampleGuideAtS,
   type ArcLengthGuide,
 } from './trochoidalPath';
@@ -187,7 +190,8 @@ function appendContourLoopFromArcS(
   forward = true,
   skipNear?: { x: number; y: number; z: number },
   arcLengthToCut?: number,
-  cachedGuide?: ArcLengthGuide
+  cachedGuide?: ArcLengthGuide,
+  loopAnchor?: { x: number; y: number }
 ): boolean {
   const skip = skipNear ?? lastPathPoint(points) ?? undefined;
   const loopPts = sampleContourLoopFromArcS(
@@ -199,7 +203,8 @@ function appendContourLoopFromArcS(
     forward,
     skip,
     arcLengthToCut,
-    cachedGuide
+    cachedGuide,
+    loopAnchor
   );
   return appendPoints(points, loopPts);
 }
@@ -268,9 +273,6 @@ function generateStandardHelixOutlinePath(
   if (loop.length === 0 || layers.length === 0) return points;
 
   const stockAllowance = finishingStockAllowance(settings);
-  const traverse = contourTraverse(loop, settings, stockAllowance, globals.resolution);
-  if (traverse.length === 0) return points;
-
   const entryLayout = resolveStandardHelixEntryLayout(
     loop,
     settings,
@@ -283,6 +285,8 @@ function generateStandardHelixOutlinePath(
   }
 
   const { toolStart, joinPoint, layout } = entryLayout;
+  const { traverse, arcGuide } = layout;
+  if (traverse.length === 0) return points;
   const approachZ = outlineApproachWorldZ(topZ, globals.safeHeight, settings.zStartOffset);
   const helixR = resolveHelixRadius(settings);
   const helixOpts = { stockTopZ: topZ, globals };
@@ -316,14 +320,32 @@ function generateStandardHelixOutlinePath(
       if (
         Math.hypot(toolStart.x - joinPoint.x, toolStart.y - joinPoint.y) > 0.5
       ) {
-        const leadIn = standardSplineLeadInFeed(
-          layout,
-          layerZ,
-          cutFeed,
-          sampleSpacing,
-          lastPathPoint(points) ?? undefined,
-          toolStart
-        );
+        const boreBottom = lastPathPoint(points);
+        let leadIn = boreBottom
+          ? buildHelixOutlineSplineLeadIn(
+              toolStart,
+              boreBottom,
+              layout,
+              layerZ,
+              sampleSpacing,
+              rotDir
+            ).map((p) => ({ ...p, feedRate: cutFeed }))
+          : standardSplineLeadInFeed(
+              layout,
+              layerZ,
+              cutFeed,
+              sampleSpacing,
+              undefined,
+              toolStart
+            );
+        if (
+          boreBottom &&
+          leadIn.length > 0 &&
+          Math.hypot(leadIn[0].x - boreBottom.x, leadIn[0].y - boreBottom.y) <
+            sampleSpacing * 0.75
+        ) {
+          leadIn = leadIn.slice(1);
+        }
         if (!appendPoints(points, leadIn)) break;
       }
     } else {
@@ -355,7 +377,7 @@ function generateStandardHelixOutlinePath(
       }
     }
 
-    const loopStartS = stationOnContour(traverse, joinPoint, sampleSpacing);
+    const loopStartS = layout.contourJoinS;
     if (
       !appendContourLoopFromArcS(
         points,
@@ -366,8 +388,9 @@ function generateStandardHelixOutlinePath(
         sampleSpacing,
         layout.guideTraverseSign >= 0,
         lastPathPoint(points) ?? undefined,
-        undefined,
-        layout.arcGuide
+        arcGuide.totalLength,
+        arcGuide,
+        joinPoint
       )
     ) {
       break;
@@ -434,6 +457,7 @@ function generateStandardOutlinePath(
     const fromZ = li === 0 ? approachZ : layers[li - 1];
     const lastBeforeLayer = lastPathPoint(points);
     let loopStartS = layout.contourJoinS;
+    let loopAnchor: { x: number; y: number } = contourJoin;
     let loopSkipNear: { x: number; y: number; z: number } | undefined;
 
     if (entryType === 'straight') {
@@ -450,7 +474,7 @@ function generateStandardOutlinePath(
       ) {
         break;
       }
-      if (needsLeadIn) {
+      if (needsLeadIn && li === 0) {
         const leadIn = standardSplineLeadInFeed(
           layout,
           layerZ,
@@ -459,8 +483,13 @@ function generateStandardOutlinePath(
           lastPathPoint(points) ?? undefined
         );
         if (!appendPoints(points, leadIn)) break;
+        loopAnchor = contourJoin;
+        loopStartS = layout.contourJoinS;
+      } else {
+        const at = lastPathPoint(points) ?? plungeAt;
+        loopAnchor = { x: at.x, y: at.y };
+        loopStartS = stationOnContour(traverse, loopAnchor, rampSampleSpacing);
       }
-      loopStartS = stationOnContour(traverse, contourJoin, rampSampleSpacing);
       loopSkipNear = lastPathPoint(points) ?? undefined;
     } else {
       const rampStart =
@@ -482,6 +511,16 @@ function generateStandardOutlinePath(
           settings.plungeRate,
           rampSampleSpacing
         );
+        if (!appendPoints(points, ramp.points)) break;
+
+        const splineTail = standardSplineTailFromPoint(
+          layout,
+          layerZ,
+          settings.feedRate,
+          ramp.endPoint,
+          rampSampleSpacing
+        );
+        if (!appendPoints(points, splineTail)) break;
       } else {
         ramp = generateContourLinearRamp(
           traverse,
@@ -494,10 +533,11 @@ function generateStandardOutlinePath(
           rampSampleSpacing,
           climbForward
         );
+        if (!appendPoints(points, ramp.points)) break;
+        loopAnchor = ramp.endPoint;
+        loopStartS = stationOnContour(traverse, ramp.endPoint, rampSampleSpacing);
       }
 
-      if (!appendPoints(points, ramp.points)) break;
-      loopStartS = stationOnContour(traverse, ramp.endPoint, rampSampleSpacing);
       loopSkipNear = lastPathPoint(points) ?? undefined;
     }
 
@@ -512,7 +552,8 @@ function generateStandardOutlinePath(
         climbForward,
         loopSkipNear,
         traverseLength,
-        arcGuide
+        arcGuide,
+        loopAnchor
       )
     ) {
       break;
@@ -706,12 +747,13 @@ function appendConnectedFinishingPass(
       }
     }
 
-    const loopAnchor = lastPathPoint(points) ?? {
+    const loopAnchor = {
       x: finishEntry.x,
       y: finishEntry.y,
-      z: finishZ,
     };
     const startS = stationOnContour(traverse, finishEntry, sampleSpacing);
+    const finishTraverseLength = buildArcLengthGuide(traverse, Math.max(sampleSpacing, 0.25))
+      .totalLength;
     if (
       !appendContourLoopFromArcS(
         points,
@@ -721,6 +763,9 @@ function appendConnectedFinishingPass(
         startS,
         sampleSpacing,
         true,
+        lastPathPoint(points) ?? undefined,
+        finishTraverseLength,
+        undefined,
         loopAnchor
       )
     ) {
