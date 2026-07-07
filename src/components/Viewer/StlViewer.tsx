@@ -65,6 +65,7 @@ import { minkowskiSegmentLen, pathSampleSpacing, trochoidSampleSpacing } from '.
 import { resolveAdaptiveSlotGeometry, finishingStockAllowance } from '../../lib/adaptiveOutline';
 import {
   buildOutlineEntryArcGuide,
+  resolveOutlineOffsetContext,
   resolveStandardEntryLayout,
   snapPointToOutlineCenterline,
 } from '../../lib/outlineEntry';
@@ -932,6 +933,7 @@ function SceneContent({
         roughSlot.trochoidRadius,
         toolpathResolution
       );
+      const offsetContext = resolveOutlineOffsetContext(op.geometry, loop);
       const layout = resolveAdaptiveEntryLayout(
         loop,
         op.settings,
@@ -939,7 +941,8 @@ function SceneContent({
         segLen,
         trochSampleSpacing,
         toolpathResolution,
-        toolOrigin
+        toolOrigin,
+        offsetContext
       );
       if (!layout) return null;
 
@@ -947,7 +950,7 @@ function SceneContent({
         safeHeight,
         resolution: toolpathResolution,
         travelFeedRate,
-      });
+      }, op.geometry);
 
       return {
         op,

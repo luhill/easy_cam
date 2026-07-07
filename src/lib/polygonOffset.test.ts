@@ -2,7 +2,11 @@
  * Offset geometry checks — run with: npx tsx src/lib/polygonOffset.test.ts
  */
 import { offsetClosedLoop2D } from './polygonOffset';
-import { offsetLoop2DMinkowski, signedLoopArea2D } from './geometryProcessing';
+import {
+  offsetLoop2DMinkowski,
+  resolveOutlineWallSide,
+  signedLoopArea2D,
+} from './geometryProcessing';
 import type { LoopPoint } from '../types/operations';
 
 const Z = 0;
@@ -121,5 +125,43 @@ for (let i = 0; i <= 16; i++) {
 arc.push(pt(-10, 0));
 const arcOut = offsetLoop2DMinkowski(arc, 1.5, 0.15, 'exterior');
 assert(!hasSelfIntersection(arcOut), 'arc exterior offset must not self-intersect');
+
+// Convex corner should have enough points for a smooth round join.
+const squareCorner = offsetLoop2DMinkowski(square, 2, 0.15, 'exterior');
+let cornerPts = 0;
+for (let i = 0; i < squareCorner.length; i++) {
+  const p = squareCorner[i];
+  if (p.x > 9.5 && p.y > 9.5) cornerPts++;
+}
+assert(cornerPts >= 6, 'exterior convex corner should have a smooth round join');
+
+// Wall-side: void along face normal is interior (pocket / notch).
+const notch: LoopPoint[] = [];
+const notchR = 5;
+for (let i = 0; i <= 12; i++) {
+  const t = Math.PI + (Math.PI * i) / 12;
+  notch.push(pt(-20 + notchR * Math.cos(t), notchR * Math.sin(t)));
+}
+notch.push(pt(-20, 0), pt(-15, 0));
+const notchBounds = {
+  minX: -25,
+  maxX: 25,
+  minY: -5,
+  maxY: 25,
+  minZ: 0,
+  maxZ: 10,
+};
+const notchSide = resolveOutlineWallSide(notch, -1, 0, notchBounds);
+assert(notchSide === 'interior', 'notch with normal into void should be interior');
+
+const exteriorSide = resolveOutlineWallSide(square, 1, 0, {
+  minX: 0,
+  maxX: 10,
+  minY: 0,
+  maxY: 10,
+  minZ: 0,
+  maxZ: 10,
+});
+assert(exteriorSide === 'exterior', 'perimeter square with outward normal should be exterior');
 
 console.log('polygonOffset tests passed');

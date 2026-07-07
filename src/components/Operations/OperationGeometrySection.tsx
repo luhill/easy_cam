@@ -17,7 +17,7 @@ import {
   resolveAdaptiveEntryLayout,
 } from '../../lib/adaptiveGuides';
 import { minkowskiSegmentLen, pathSampleSpacing, trochoidSampleSpacing } from '../../lib/toolpathConfig';
-import { resolveStandardEntryLayout } from '../../lib/outlineEntry';
+import { resolveStandardEntryLayout, resolveOutlineOffsetContext } from '../../lib/outlineEntry';
 import { finishingStockAllowance, resolveAdaptiveSlotGeometry } from '../../lib/adaptiveOutline';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { useAppStore } from '../../store/useAppStore';
@@ -112,7 +112,8 @@ function formatGeometrySummary(operation: Operation, cutZContext: CutZContext): 
       segLen,
       trochSampleSpacing,
       resolution,
-      toolOrigin
+      toolOrigin,
+      resolveOutlineOffsetContext(geo, loop)
     );
     if (layout) {
       parts.push(`start (${layout.toolStart.x.toFixed(1)}, ${layout.toolStart.y.toFixed(1)})`);
@@ -188,7 +189,8 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
         segLen,
         trochSampleSpacing,
         resolution,
-        toolOrigin
+        toolOrigin,
+        resolveOutlineOffsetContext(operation.geometry, loop)
       );
     }
     const stockAllowance = finishingStockAllowance(operation.settings);

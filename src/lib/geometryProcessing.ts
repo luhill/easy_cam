@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import ClipperLib from 'clipper-lib';
 import { mergeVertices } from 'three-stdlib';
 import type { LoopPoint, SelectedGeometry } from '../types/operations';
-import { offsetClosedLoop2D } from './polygonOffset';
+import { offsetClosedLoop2D, CLIPPER_SCALE } from './polygonOffset';
 
 export interface PartBounds {
   minX: number;
@@ -369,35 +369,29 @@ export function resolveOutlineWallSide(
   const ny = wallNormalY / nLen;
   const loopCenter = loopCentroid(loop);
 
+  // Wall face normals point from solid into the void where the tool should live.
+  let edgeLen = 0;
+  for (let i = 0; i < loop.length; i++) {
+    const a = loop[i];
+    const b = loop[(i + 1) % loop.length];
+    edgeLen = Math.max(edgeLen, Math.hypot(b.x - a.x, b.y - a.y));
+  }
+  const probeDist = Math.max(edgeLen * 0.2, 0.3);
+  const voidX = loopCenter.x + nx * probeDist;
+  const voidY = loopCenter.y + ny * probeDist;
+  const solidX = loopCenter.x - nx * probeDist;
+  const solidY = loopCenter.y - ny * probeDist;
+  const voidInsideLoop = pointInPolygon2D(voidX, voidY, loop);
+  const solidInsideLoop = pointInPolygon2D(solidX, solidY, loop);
+  if (voidInsideLoop !== solidInsideLoop) {
+    return voidInsideLoop ? 'interior' : 'exterior';
+  }
+
   if (partBounds) {
     const partArea =
       Math.max(partBounds.maxX - partBounds.minX, 1e-6) *
       Math.max(partBounds.maxY - partBounds.minY, 1e-6);
     const loopArea = Math.abs(signedLoopArea2D(loop));
-    const spanMargin = Math.max(
-      (partBounds.maxX - partBounds.minX) * 0.04,
-      (partBounds.maxY - partBounds.minY) * 0.04,
-      0.75
-    );
-
-    let loopMinX = Infinity;
-    let loopMaxX = -Infinity;
-    let loopMinY = Infinity;
-    let loopMaxY = -Infinity;
-    for (const p of loop) {
-      loopMinX = Math.min(loopMinX, p.x);
-      loopMaxX = Math.max(loopMaxX, p.x);
-      loopMinY = Math.min(loopMinY, p.y);
-      loopMaxY = Math.max(loopMaxY, p.y);
-    }
-
-    const touchesExterior =
-      Math.abs(loopMinX - partBounds.minX) <= spanMargin ||
-      Math.abs(loopMaxX - partBounds.maxX) <= spanMargin ||
-      Math.abs(loopMinY - partBounds.minY) <= spanMargin ||
-      Math.abs(loopMaxY - partBounds.maxY) <= spanMargin;
-
-    if (touchesExterior) return 'exterior';
     if (loopArea < partArea * 0.35) return 'interior';
 
     const partCenter = partCentroidXY(partBounds);
@@ -410,16 +404,6 @@ export function resolveOutlineWallSide(
         return alignment >= 0 ? 'exterior' : 'interior';
       }
     }
-  }
-
-  const probeX = loopCenter.x + nx * 0.25;
-  const probeY = loopCenter.y + ny * 0.25;
-  const oppositeX = loopCenter.x - nx * 0.25;
-  const oppositeY = loopCenter.y - ny * 0.25;
-  const alongNormalInside = pointInPolygon2D(probeX, probeY, loop);
-  const oppositeInside = pointInPolygon2D(oppositeX, oppositeY, loop);
-  if (alongNormalInside !== oppositeInside) {
-    return oppositeInside ? 'interior' : 'exterior';
   }
 
   return 'exterior';
@@ -435,9 +419,14 @@ export function offsetLoop2DMinkowski(
   maxSegmentLen = 0.3,
   wallSide: OutlineWallSide = 'exterior'
 ): LoopPoint[] {
+  const absOffset = Math.abs(offset);
+  const segTol = Math.max(maxSegmentLen, 0.08);
+  const arcTolMm = Math.min(0.025, Math.max(0.006, segTol * 0.08, absOffset * 0.015));
+
   return offsetClosedLoop2D(loop, offset, {
     joinType: ClipperLib.JoinType.jtRound,
     miterLimit: 2,
+    arcTolerance: arcTolMm * CLIPPER_SCALE,
     maxSegmentLen: Math.max(maxSegmentLen, 0),
     wallSide,
   });

@@ -20,6 +20,7 @@ import {
 } from './toolpathConfig';
 import { resolveAdaptiveSlotGeometry, cornerSpurOptionsForRoughing } from './adaptiveOutline';
 import { buildSlotCenterGuideWithCornerSpurs } from './cornerSpurs';
+import { resolveOutlineOffsetContext } from './outlineEntry';
 
 export interface AdaptiveOutlineDebugGuides {
   slotCenterline: LoopPoint[];
@@ -41,6 +42,7 @@ function resolveGuideContext(
     roughSlot.trochoidRadius,
     globals.resolution
   );
+  const offsetContext = resolveOutlineOffsetContext(geometry, loop);
   const entryLayout = resolveAdaptiveEntryLayout(
     loop,
     settings,
@@ -48,7 +50,8 @@ function resolveGuideContext(
     segLen,
     trochSampleSpacing,
     globals.resolution,
-    globals.toolOrigin
+    globals.toolOrigin,
+    offsetContext
   );
   const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
   const finalZ = finalCutWorldZ(ctx, settings.depthOffset);
@@ -113,17 +116,21 @@ export function computeAdaptiveOutlineDebugGuidesFromBounds(
 export function buildSlotCenterlineArcGuide(
   loop: LoopPoint[],
   settings: OperationDefaults,
-  globals: ToolpathGlobalOptions
+  globals: ToolpathGlobalOptions,
+  geometry?: Operation['geometry']
 ) {
   const roughSlot = resolveAdaptiveSlotGeometry(settings, { roughing: true });
   const finishSlot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
   const segLen = minkowskiSegmentLen(globals.resolution);
+  const offsetContext = resolveOutlineOffsetContext(geometry, loop);
   const { guide: slotCenterGuide } = buildSlotCenterGuideWithCornerSpurs(
     loop,
     roughSlot.slotCenterOffset,
     finishSlot.innerCenterOffset,
     segLen,
-    cornerSpurOptionsForRoughing(settings)
+    cornerSpurOptionsForRoughing(settings),
+    offsetContext.offsetSign,
+    offsetContext.wallSide
   );
   return buildArcLengthGuide(slotCenterGuide, pathSampleSpacing(globals.resolution));
 }
