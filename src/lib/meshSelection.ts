@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { LoopPoint, OperationType, SelectionStrategy } from '../types/operations';
-import { loopArea2D, pointInPolygon2D, boundsFromGeometry, loopCentroid, distanceToLoop2D, resolveOutlineWallSide, resolveWallOutwardOffsetSign, type PartBounds } from './geometryProcessing';
+import { loopArea2D, pointInPolygon2D, boundsFromGeometry, loopCentroid, distanceToLoop2D, resolveOutlineWallSide, resolveWallOutwardOffsetSign, signedLoopArea2D, type PartBounds } from './geometryProcessing';
 import {
   classifyRegionKind,
   effectiveOutlineLoop,
@@ -299,6 +299,18 @@ function classifyLoops(loops: LoopPoint[][]): {
   if (loops.length === 0) return { outerLoop: null, innerLoops: [] };
   const sorted = [...loops].sort((a, b) => loopArea2D(b) - loopArea2D(a));
   return { outerLoop: sorted[0], innerLoops: sorted.slice(1) };
+}
+
+/** Exterior loops CCW; interior void loops CW — consistent offset join behavior. */
+function normalizeEdgeLoopWinding(
+  loop: LoopPoint[],
+  wallSide: 'exterior' | 'interior'
+): LoopPoint[] {
+  if (loop.length < 3) return loop;
+  const ccw = signedLoopArea2D(loop) >= 0;
+  if (wallSide === 'exterior' && !ccw) return [...loop].reverse();
+  if (wallSide === 'interior' && ccw) return [...loop].reverse();
+  return loop;
 }
 
 function traceLoops(edges: Array<[THREE.Vector3, THREE.Vector3]>, epsilon: number): LoopPoint[][] {
@@ -630,8 +642,9 @@ export class MeshIndex {
       const bottomLoop = this.extractHorizontalRimLoop(faceIndices, 'bottom') ?? [];
       const wallNormal = this.averageWallNormalXY(faceIndices);
       const wallSide = resolveOutlineWallSide(topLoop, wallNormal.x, wallNormal.y, this.bounds);
+      const normalizedLoop = normalizeEdgeLoopWinding(topLoop, wallSide);
       const offsetSign = resolveWallOutwardOffsetSign(
-        topLoop,
+        normalizedLoop,
         wallNormal.x,
         wallNormal.y,
         wallSide
@@ -640,7 +653,7 @@ export class MeshIndex {
       features.push({
         id: features.length,
         faceIndices,
-        topLoop,
+        topLoop: normalizedLoop,
         bottomLoop,
         topZ,
         bottomZ,

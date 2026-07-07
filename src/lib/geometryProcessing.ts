@@ -277,7 +277,7 @@ export function offsetVertexMiter(
   return offsetMiterVertex(prev, curr, next, offset, side);
 }
 
-function offsetMiterVertex(
+export function offsetMiterVertex(
   prev: LoopPoint,
   curr: LoopPoint,
   next: LoopPoint,
@@ -451,14 +451,18 @@ export function resolveOutlineWallSide(
   return 'exterior';
 }
 
-export function convexJoinArcSweep(a1: number, a2: number): number {
+export function convexJoinArcSweep(
+  a1: number,
+  a2: number,
+  vertexTurnRad?: number
+): number {
   let sweep = a2 - a1;
   while (sweep <= -Math.PI) sweep += 2 * Math.PI;
   while (sweep > Math.PI) sweep -= 2 * Math.PI;
 
-  // Acute convex tips: short normal sweep is the interior wedge — use the exterior bulge.
-  if (Math.abs(sweep) < Math.PI * 0.38) {
-    sweep = sweep > 0 ? sweep - 2 * Math.PI : sweep + 2 * Math.PI;
+  // Curve tessellation: adjacent edges are nearly tangent — skip micro-arc joins.
+  if (vertexTurnRad !== undefined && Math.abs(vertexTurnRad) < (12 * Math.PI) / 180) {
+    return 0;
   }
 
   return sweep;
@@ -500,17 +504,20 @@ function appendDensifiedSegment(
 export function offsetLoop2DMinkowski(
   loop: LoopPoint[],
   offset: number,
-  maxSegmentLen = 0.3
+  maxSegmentLen = 0.3,
+  wallSide: OutlineWallSide = 'exterior'
 ): LoopPoint[] {
   const n = loop.length;
   if (n < 3 || Math.abs(offset) < 1e-9) return loop.map((p) => ({ ...p }));
 
   const ccw = signedLoopArea2D(loop) >= 0;
   const side = ccw ? 1 : -1;
+  const workingSide = wallSide === 'interior' ? (ccw ? -side : side) : side;
   const segLen = Math.max(maxSegmentLen, Math.abs(offset) / 6);
 
   interface VertexJoin {
     convex: boolean;
+    turnRad: number;
     curr: LoopPoint;
     startX: number;
     startY: number;
@@ -534,14 +541,16 @@ export function offsetLoop2DMinkowski(
     const u2x = next.x - curr.x;
     const u2y = next.y - curr.y;
 
-    const nIn = outwardEdgeNormal2D(prev.x, prev.y, curr.x, curr.y, side);
-    const nOut = outwardEdgeNormal2D(curr.x, curr.y, next.x, next.y, side);
+    const nIn = outwardEdgeNormal2D(prev.x, prev.y, curr.x, curr.y, workingSide);
+    const nOut = outwardEdgeNormal2D(curr.x, curr.y, next.x, next.y, workingSide);
     const cross = u1x * u2y - u1y * u2x;
-    const convex = side * cross > 0;
+    const turnRad = Math.atan2(Math.abs(cross), u1x * u2x + u1y * u2y);
+    const convex = workingSide * cross > 0;
 
     if (convex) {
       joins.push({
         convex: true,
+        turnRad,
         curr,
         startX: curr.x + nIn.nx * offset,
         startY: curr.y + nIn.ny * offset,
@@ -553,9 +562,10 @@ export function offsetLoop2DMinkowski(
         nOutY: nOut.ny,
       });
     } else {
-      const miter = offsetMiterVertex(prev, curr, next, offset, side);
+      const miter = offsetMiterVertex(prev, curr, next, offset, workingSide);
       joins.push({
         convex: false,
+        turnRad,
         curr,
         startX: miter.x,
         startY: miter.y,
@@ -578,14 +588,22 @@ export function offsetLoop2DMinkowski(
     if (join.convex) {
       const a1 = Math.atan2(join.nInY, join.nInX);
       const a2 = Math.atan2(join.nOutY, join.nOutX);
-      const sweep = convexJoinArcSweep(a1, a2);
+      const sweep = convexJoinArcSweep(a1, a2, join.turnRad);
 
-      const arcSteps = Math.max(1, Math.ceil((Math.abs(sweep) * Math.abs(offset)) / segLen));
-      for (let s = 0; s <= arcSteps; s++) {
-        const ang = a1 + (sweep * s) / arcSteps;
+      if (Math.abs(sweep) > 1e-6) {
+        const arcSteps = Math.max(1, Math.ceil((Math.abs(sweep) * Math.abs(offset)) / segLen));
+        for (let s = 0; s <= arcSteps; s++) {
+          const ang = a1 + (sweep * s) / arcSteps;
+          result.push({
+            x: join.curr.x + offset * Math.cos(ang),
+            y: join.curr.y + offset * Math.sin(ang),
+            z: join.curr.z,
+          });
+        }
+      } else {
         result.push({
-          x: join.curr.x + offset * Math.cos(ang),
-          y: join.curr.y + offset * Math.sin(ang),
+          x: join.endX,
+          y: join.endY,
           z: join.curr.z,
         });
       }

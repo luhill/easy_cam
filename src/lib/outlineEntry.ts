@@ -86,7 +86,7 @@ export function buildOutlineToolCenterline(
 ): LoopPoint[] {
   const offset = innerToolCenterOffset(settings, stockAllowance) * offsetContext.offsetSign;
   const segLen = Math.max(maxSegmentLen, Math.abs(offset) * 0.22, 0.4);
-  const toolLoop = offsetLoop2DMinkowski(partLoop, offset, segLen);
+  const toolLoop = offsetLoop2DMinkowski(partLoop, offset, segLen, offsetContext.wallSide);
   const ccw = signedLoopArea2D(partLoop) >= 0;
   const reverse = settings.climbMilling ? ccw : !ccw;
   return reverse ? [...toolLoop].reverse() : toolLoop;

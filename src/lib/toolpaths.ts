@@ -219,7 +219,7 @@ function contourTraverse(
   const offset =
     (toolRadius(settings) + (settings.radialOffset ?? 0) + extraRadialStock) *
     offsetContext.offsetSign;
-  const toolLoop = offsetLoop2DMinkowski(loop, offset, minkowskiSegmentLen(resolution));
+  const toolLoop = offsetLoop2DMinkowski(loop, offset, minkowskiSegmentLen(resolution), offsetContext.wallSide);
   const ccw = signedLoopArea2D(loop) >= 0;
   const reverse = settings.climbMilling ? ccw : !ccw;
   return reverse ? [...toolLoop].reverse() : toolLoop;
@@ -744,7 +744,8 @@ function generateAdaptiveTrochoidalPath(
     finishSlot.innerCenterOffset,
     segLen,
     cornerSpurOptionsForRoughing(settings),
-    offsetContext.offsetSign
+    offsetContext.offsetSign,
+    offsetContext.wallSide
   );
   const { arcGuide, spurRanges } = mapSpurRangesToArcGuide(
     slotCenterGuide,
@@ -961,7 +962,8 @@ function generateFinishingOutline(
   const finishGuide = offsetLoop2DMinkowski(
     partLoop,
     finishSlot.innerCenterOffset * offsetContext.offsetSign,
-    segLen
+    segLen,
+    offsetContext.wallSide
   );
   const { guide: roughCenterGuide } = buildSlotCenterGuideWithCornerSpurs(
     partLoop,
@@ -969,7 +971,8 @@ function generateFinishingOutline(
     finishSlot.innerCenterOffset,
     segLen,
     cornerSpurOptionsForRoughing(settings),
-    offsetContext.offsetSign
+    offsetContext.offsetSign,
+    offsetContext.wallSide
   );
   if (finishGuide.length < 3) return [];
 

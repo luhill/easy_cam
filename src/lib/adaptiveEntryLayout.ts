@@ -74,7 +74,8 @@ export function resolveAdaptiveEntryLayout(
     finishSlot.innerCenterOffset,
     centerGuideSegLen,
     cornerSpurOptionsForRoughing(settings),
-    offsetContext.offsetSign
+    offsetContext.offsetSign,
+    offsetContext.wallSide
   );
   if (slotCenterGuide.length < 3) return null;
 
@@ -103,9 +104,16 @@ export function resolveAdaptiveEntryLayout(
         settings,
         toolStartOverride,
         toolOrigin,
-        offsetContext.offsetSign
+        offsetContext.offsetSign,
+        offsetContext.wallSide
       )
-    : computeDefaultEntryPoint(partLoop, settings, toolOrigin, offsetContext.offsetSign);
+    : computeDefaultEntryPoint(
+        partLoop,
+        settings,
+        toolOrigin,
+        offsetContext.offsetSign,
+        offsetContext.wallSide
+      );
 
   const slotJoinSnap = overrides?.slotJoinPoint
     ? findClosestSOnGuide(arcGuide, overrides.slotJoinPoint)

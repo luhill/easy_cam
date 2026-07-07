@@ -126,12 +126,18 @@ export function computeDefaultEntryPoint(
   partLoop: LoopPoint[],
   settings: OperationDefaults,
   toolOrigin?: Pick<ToolOrigin, 'x' | 'y'> | null,
-  offsetSign = 1
+  offsetSign = 1,
+  wallSide: 'exterior' | 'interior' = 'exterior'
 ): { x: number; y: number } {
   if (partLoop.length < 2) return { x: toolOrigin?.x ?? 0, y: toolOrigin?.y ?? 0 };
 
   const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
-  const guide = offsetLoop2DMinkowski(partLoop, slot.innerCenterOffset * offsetSign);
+  const guide = offsetLoop2DMinkowski(
+    partLoop,
+    slot.innerCenterOffset * offsetSign,
+    0.3,
+    wallSide
+  );
   const centerDist = minimumEntryCenterDist(settings);
   const innerDist = slot.minCenterDist;
   const outwardOffset = boreCenterOffsetFromInnerGuide(settings);
@@ -174,11 +180,12 @@ export function resolveAdaptiveEntryPoint(
   settings: OperationDefaults,
   entry?: { x: number; y: number } | null,
   toolOrigin?: Pick<ToolOrigin, 'x' | 'y'> | null,
-  offsetSign = 1
+  offsetSign = 1,
+  wallSide: 'exterior' | 'interior' = 'exterior'
 ): { x: number; y: number } {
   const minDist = minimumEntryCenterDist(settings);
   if (entry) {
     return ensureEntryOutsidePart(partLoop, entry, minDist);
   }
-  return computeDefaultEntryPoint(partLoop, settings, toolOrigin, offsetSign);
+  return computeDefaultEntryPoint(partLoop, settings, toolOrigin, offsetSign, wallSide);
 }

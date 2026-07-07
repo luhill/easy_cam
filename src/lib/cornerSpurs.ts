@@ -5,11 +5,12 @@
 
 import type { LoopPoint } from '../types/operations';
 import {
-  offsetVertexMiter,
+  offsetMiterVertex,
   signedLoopArea2D,
   outwardEdgeNormal2D,
   closestPointOnLoop2D,
   convexJoinArcSweep,
+  type OutlineWallSide,
 } from './geometryProcessing';
 import {
   buildArcLengthGuide,
@@ -194,7 +195,8 @@ export function buildSlotCenterGuideWithCornerSpurs(
   finishInnerOffset: number,
   maxSegmentLen: number,
   options: CornerSpurOptions = {},
-  offsetSign = 1
+  offsetSign = 1,
+  wallSide: OutlineWallSide = 'exterior'
 ): SlotCenterGuideResult {
   const signedSlotCenter = slotCenterOffset * offsetSign;
   const signedFinishInner = finishInnerOffset * offsetSign;
@@ -209,10 +211,12 @@ export function buildSlotCenterGuideWithCornerSpurs(
 
   const ccw = signedLoopArea2D(partLoop) >= 0;
   const side = ccw ? 1 : -1;
+  const workingSide = wallSide === 'interior' ? (ccw ? -side : side) : side;
   const segLen = Math.max(maxSegmentLen, Math.abs(signedSlotCenter) / 6);
 
   interface VertexJoin {
     convex: boolean;
+    turnRad: number;
     curr: LoopPoint;
     startX: number;
     startY: number;
@@ -232,18 +236,20 @@ export function buildSlotCenterGuideWithCornerSpurs(
     const curr = partLoop[i];
     const next = partLoop[(i + 1) % n];
 
-    const nIn = outwardEdgeNormal2D(prev.x, prev.y, curr.x, curr.y, side);
-    const nOut = outwardEdgeNormal2D(curr.x, curr.y, next.x, next.y, side);
+    const nIn = outwardEdgeNormal2D(prev.x, prev.y, curr.x, curr.y, workingSide);
+    const nOut = outwardEdgeNormal2D(curr.x, curr.y, next.x, next.y, workingSide);
     const u1x = curr.x - prev.x;
     const u1y = curr.y - prev.y;
     const u2x = next.x - curr.x;
     const u2y = next.y - curr.y;
     const cross = u1x * u2y - u1y * u2x;
-    const convex = side * cross > 0;
+    const turnRad = Math.atan2(Math.abs(cross), u1x * u2x + u1y * u2y);
+    const convex = workingSide * cross > 0;
 
     if (convex) {
       joins.push({
         convex: true,
+        turnRad,
         curr,
         startX: curr.x + nIn.nx * signedSlotCenter,
         startY: curr.y + nIn.ny * signedSlotCenter,
@@ -255,18 +261,18 @@ export function buildSlotCenterGuideWithCornerSpurs(
         nOutY: nOut.ny,
       });
     } else {
-      const slotMiter = offsetVertexMiter(partLoop, i, signedSlotCenter);
+      const slotMiter = offsetMiterVertex(prev, curr, next, signedSlotCenter, workingSide);
       let spurTip: LoopPoint | undefined;
 
       const internalAngle = vertexInternalAngleDeg(prev, curr, next);
       if (internalAngle < maxInternalAngleDeg) {
         const tipOffset = roughTipInnerOffset ?? signedFinishInner;
-        const spurTipMiter = offsetVertexMiter(partLoop, i, tipOffset);
-        spurTip = spurTipMiter;
+        spurTip = offsetMiterVertex(prev, curr, next, tipOffset, workingSide);
       }
 
       joins.push({
         convex: false,
+        turnRad,
         curr,
         startX: slotMiter.x,
         startY: slotMiter.y,
@@ -291,14 +297,25 @@ export function buildSlotCenterGuideWithCornerSpurs(
     if (join.convex) {
       const a1 = Math.atan2(join.nInY, join.nInX);
       const a2 = Math.atan2(join.nOutY, join.nOutX);
-      const sweep = convexJoinArcSweep(a1, a2);
+      const sweep = convexJoinArcSweep(a1, a2, join.turnRad);
 
-      const arcSteps = Math.max(1, Math.ceil((Math.abs(sweep) * Math.abs(signedSlotCenter)) / segLen));
-      for (let s = 0; s <= arcSteps; s++) {
-        const ang = a1 + (sweep * s) / arcSteps;
+      if (Math.abs(sweep) > 1e-6) {
+        const arcSteps = Math.max(
+          1,
+          Math.ceil((Math.abs(sweep) * Math.abs(signedSlotCenter)) / segLen)
+        );
+        for (let s = 0; s <= arcSteps; s++) {
+          const ang = a1 + (sweep * s) / arcSteps;
+          result.push({
+            x: join.curr.x + signedSlotCenter * Math.cos(ang),
+            y: join.curr.y + signedSlotCenter * Math.sin(ang),
+            z: join.curr.z,
+          });
+        }
+      } else {
         result.push({
-          x: join.curr.x + signedSlotCenter * Math.cos(ang),
-          y: join.curr.y + signedSlotCenter * Math.sin(ang),
+          x: join.endX,
+          y: join.endY,
           z: join.curr.z,
         });
       }
