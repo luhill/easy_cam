@@ -170,6 +170,46 @@ for (const marker of acute.spurMarkers) {
   );
 }
 
+assert(!hasSelfIntersection(acute.guide), 'acute notch guide must not self-intersect');
+
+// Narrow symmetric taper to a point — convex needle tips must not get spurs or bow-ties
+const taper: LoopPoint[] = [
+  pt(0, 0),
+  pt(6, 16),
+  pt(10, 18),
+  pt(14, 16),
+  pt(20, 0),
+  pt(30, 0),
+  pt(30, 25),
+  pt(0, 25),
+];
+const taperGuide = buildSlotCenterGuideWithCornerSpurs(
+  taper,
+  slotCenter,
+  innerOffset,
+  0.15,
+  { maxInternalAngleDeg: 160 },
+  1,
+  'exterior'
+);
+assert(
+  taperGuide.spurMarkers.length <= 2,
+  'convex needle apex must not insert a spur (notch base corners may)'
+);
+// No spur anchored at the taper apex
+const apex = taper[2];
+for (const marker of taperGuide.spurMarkers) {
+  const anchor = taperGuide.guide[marker.miterIdx];
+  assert(
+    Math.hypot(anchor.x - apex.x, anchor.y - apex.y) > 1,
+    'spur must not anchor at the convex taper apex'
+  );
+}
+assert(
+  !hasSelfIntersection(taperGuide.guide),
+  'narrow taper must not produce bow-tie chord at apex'
+);
+
 // Interior pocket (CW) — spur tips stay on finish inner envelope
 const pocketInterior = [
   pt(0, 0),
