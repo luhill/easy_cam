@@ -2,7 +2,10 @@
  * Slot centerline spur checks — run with: npx tsx src/lib/cornerSpurs.test.ts
  */
 import { buildSlotCenterGuideWithCornerSpurs } from './cornerSpurs';
-import { closestPointOnLoop2D } from './geometryProcessing';
+import {
+  closestPointOnLoop2D,
+  offsetConcaveMiter,
+} from './geometryProcessing';
 import type { LoopPoint } from '../types/operations';
 
 const Z = 0;
@@ -56,6 +59,9 @@ function hasSelfIntersection(loop: LoopPoint[]): boolean {
   return false;
 }
 
+const slotCenter = 3;
+const innerOffset = 1.5;
+
 // Exterior L-shape with sharp re-entrant corner
 const lShape: LoopPoint[] = [
   pt(0, 0),
@@ -65,9 +71,6 @@ const lShape: LoopPoint[] = [
   pt(10, 30),
   pt(0, 30),
 ];
-
-const slotCenter = 3;
-const innerOffset = 1.5;
 
 const { guide, spurMarkers } = buildSlotCenterGuideWithCornerSpurs(
   lShape,
@@ -87,27 +90,93 @@ for (const marker of spurMarkers) {
   const end = guide[marker.returnIdx];
   assert(
     Math.hypot(start.x - end.x, start.y - end.y) < 0.02,
-    'spur should return to the same anchor point'
+    'spur should return to the slot-center miter'
   );
 
   const tip = guide[marker.peakIdx];
   const atPart = closestPointOnLoop2D(tip.x, tip.y, lShape);
   assert(
     atPart.dist >= innerOffset - 0.05,
-    'spur tip should not penetrate inside finish inner offset'
+    'spur tip should sit on finish inner offset, not inside it'
   );
 }
 
 assert(!hasSelfIntersection(guide), 'slot center guide with spurs must not self-intersect');
 
-// Interior pocket (CW) — spur tips stay outside part envelope
-const pocket: LoopPoint[] = [
+// 145° concave corner — sharpen miter but no spur (max 130°), no bow-tie loop
+const shallowNotch: LoopPoint[] = [
+  pt(0, 0),
+  pt(10, 0),
+  pt(25, 4.7),
+  pt(40, 0),
+  pt(50, 0),
+  pt(50, 30),
+  pt(0, 30),
+];
+
+const obtuseGuide = buildSlotCenterGuideWithCornerSpurs(
+  shallowNotch,
+  slotCenter,
+  innerOffset,
+  0.2,
+  { maxInternalAngleDeg: 130 },
+  1,
+  'exterior'
+);
+assert(obtuseGuide.spurMarkers.length === 0, '145° corner should not insert a spur');
+assert(
+  !hasSelfIntersection(obtuseGuide.guide),
+  '145° concave corner should not leave a bow-tie on the centerline'
+);
+
+// Acute re-entrant notch — spur tip must be the finish-inner miter, not past it toward the part vertex
+const acuteV: LoopPoint[] = [
+  pt(0, 0),
+  pt(12, 0),
+  pt(15, 12),
+  pt(18, 0),
+  pt(30, 0),
+  pt(30, 25),
+  pt(0, 25),
+];
+const acute = buildSlotCenterGuideWithCornerSpurs(
+  acuteV,
+  slotCenter,
+  innerOffset,
+  0.2,
+  { maxInternalAngleDeg: 160 },
+  1,
+  'exterior'
+);
+assert(acute.spurMarkers.length >= 1, 'acute notch should insert a spur');
+
+const vPrev = acuteV[1];
+const vCurr = acuteV[2];
+const vNext = acuteV[3];
+const expectedFinish = offsetConcaveMiter(vPrev, vCurr, vNext, innerOffset, 1);
+
+for (const marker of acute.spurMarkers) {
+  const tip = acute.guide[marker.peakIdx];
+  assert(
+    Math.hypot(tip.x - expectedFinish.x, tip.y - expectedFinish.y) < 0.05,
+    'spur tip should match finish-inner corner miter'
+  );
+
+  const slotAnchor = acute.guide[marker.miterIdx];
+  const expectedSlot = offsetConcaveMiter(vPrev, vCurr, vNext, slotCenter, 1);
+  assert(
+    Math.hypot(slotAnchor.x - expectedSlot.x, slotAnchor.y - expectedSlot.y) < 0.05,
+    'spur anchor should match slot-center corner miter'
+  );
+}
+
+// Interior pocket (CW) — spur tips stay on finish inner envelope
+const pocketInterior = [
   pt(0, 0),
   pt(0, 20),
   pt(20, 20),
   pt(20, 0),
-];
-const pocketInterior = [...pocket].reverse();
+].reverse();
 
 const interiorGuide = buildSlotCenterGuideWithCornerSpurs(
   pocketInterior,

@@ -5,7 +5,7 @@
 
 import type { LoopPoint } from '../types/operations';
 import {
-  offsetMiterVertex,
+  offsetConcaveMiter,
   offsetLoop2DMinkowski,
   normalizeOutlineLoopWinding,
   closestPointOnLoop2D,
@@ -185,13 +185,12 @@ function mapSpurMarkerToArcRange(
   return { sStart, sPeak, sEnd, peakX: tip.x, peakY: tip.y, miterX: miter.x, miterY: miter.y };
 }
 
-interface SpurCandidate {
-  corner: LoopPoint;
-  anchor: LoopPoint;
-  spurTip: LoopPoint;
-  guideIdx: number;
+interface ConcaveCornerTreatment {
+  slotMiter: LoopPoint;
+  finishMiter: LoopPoint;
+  guideSpanStart: number;
   guideSpanEnd: number;
-  used: boolean;
+  insertSpur: boolean;
 }
 
 /** Offset-normal side for analytic miters — follows winding and signed offset direction. */
@@ -201,70 +200,49 @@ function resolveOffsetWorkingSide(partLoop: LoopPoint[], offsetSign: number): nu
   return offsetSign >= 0 ? windingSide : -windingSide;
 }
 
-function findGuideAnchorNearCorner(
+function guideCornerSpan(
   baseGuide: LoopPoint[],
-  corner: LoopPoint
-): { anchor: LoopPoint; guideIdx: number } {
-  let guideIdx = 0;
+  corner: LoopPoint,
+  spanRadius: number
+): { start: number; end: number } {
+  let peakIdx = 0;
   let bestDist = Infinity;
 
   for (let j = 0; j < baseGuide.length; j++) {
     const d = Math.hypot(baseGuide[j].x - corner.x, baseGuide[j].y - corner.y);
     if (d < bestDist) {
       bestDist = d;
-      guideIdx = j;
+      peakIdx = j;
     }
   }
 
-  return { anchor: { ...baseGuide[guideIdx] }, guideIdx };
-}
-
-function guideCornerSpanEnd(
-  baseGuide: LoopPoint[],
-  guideIdx: number,
-  corner: LoopPoint,
-  spanRadius: number
-): number {
-  let endIdx = guideIdx;
-  for (let j = guideIdx + 1; j < baseGuide.length; j++) {
-    const d = Math.hypot(baseGuide[j].x - corner.x, baseGuide[j].y - corner.y);
-    if (d <= spanRadius) {
-      endIdx = j;
-      continue;
-    }
-    break;
+  let start = peakIdx;
+  let end = peakIdx;
+  while (start > 0) {
+    const d = Math.hypot(baseGuide[start - 1].x - corner.x, baseGuide[start - 1].y - corner.y);
+    if (d <= spanRadius) start--;
+    else break;
   }
-  return endIdx;
+  while (end < baseGuide.length - 1) {
+    const d = Math.hypot(baseGuide[end + 1].x - corner.x, baseGuide[end + 1].y - corner.y);
+    if (d <= spanRadius) end++;
+    else break;
+  }
+
+  return { start, end };
 }
 
-function clampSpurTipStandoff(
-  tip: LoopPoint,
-  partLoop: LoopPoint[],
-  minStandoff: number
-): LoopPoint {
-  const atPart = closestPointOnLoop2D(tip.x, tip.y, partLoop);
-  if (atPart.dist >= minStandoff - 1e-4) return tip;
-  return {
-    x: atPart.x + atPart.outX * minStandoff,
-    y: atPart.y + atPart.outY * minStandoff,
-    z: tip.z,
-  };
-}
-
-function collectSpurCandidates(
+function collectConcaveCornerTreatments(
   partLoop: LoopPoint[],
   baseGuide: LoopPoint[],
   signedSlotCenter: number,
-  signedFinishInner: number,
+  signedTipOffset: number,
   workingSide: number,
-  maxInternalAngleDeg: number,
-  roughTipInnerOffset: number | undefined
-): SpurCandidate[] {
+  maxInternalAngleDeg: number
+): ConcaveCornerTreatment[] {
   const n = partLoop.length;
-  const candidates: SpurCandidate[] = [];
-  const tipOffset = roughTipInnerOffset ?? signedFinishInner;
-  const minTipStandoff = Math.abs(tipOffset);
-  const cornerSpan = Math.max(Math.abs(signedSlotCenter) * 0.35, 0.35);
+  const treatments: ConcaveCornerTreatment[] = [];
+  const cornerSpan = Math.max(Math.abs(signedSlotCenter) * 0.4, 0.4);
 
   for (let i = 0; i < n; i++) {
     const prev = partLoop[(i - 1 + n) % n];
@@ -280,34 +258,54 @@ function collectSpurCandidates(
     if (convex) continue;
 
     const internalAngle = vertexInternalAngleDeg(prev, curr, next);
-    if (internalAngle >= maxInternalAngleDeg) continue;
+    const { start, end } = guideCornerSpan(baseGuide, curr, cornerSpan);
 
-    const { anchor, guideIdx } = findGuideAnchorNearCorner(baseGuide, curr);
-    const spurTip = clampSpurTipStandoff(
-      offsetMiterVertex(prev, curr, next, tipOffset, workingSide),
-      partLoop,
-      minTipStandoff
-    );
-
-    candidates.push({
-      corner: curr,
-      anchor,
-      spurTip,
-      guideIdx,
-      guideSpanEnd: guideCornerSpanEnd(baseGuide, guideIdx, curr, cornerSpan),
-      used: false,
+    treatments.push({
+      slotMiter: offsetConcaveMiter(prev, curr, next, signedSlotCenter, workingSide),
+      finishMiter: offsetConcaveMiter(prev, curr, next, signedTipOffset, workingSide),
+      guideSpanStart: start,
+      guideSpanEnd: end,
+      insertSpur: internalAngle < maxInternalAngleDeg,
     });
   }
 
-  return candidates;
+  return treatments.sort((a, b) => a.guideSpanStart - b.guideSpanStart);
 }
 
-function insertSpurAtGuideIndex(
+function connectResultToPoint(
   result: LoopPoint[],
-  spur: SpurCandidate,
+  target: LoopPoint,
+  segLen: number
+): void {
+  const tail = lastGuidePoint(result);
+  if (!tail) {
+    result.push({ ...target });
+    return;
+  }
+  if (pointsNear(tail, target)) {
+    result[result.length - 1] = { ...target };
+    return;
+  }
+  appendDensifiedSegment(
+    result,
+    tail.x,
+    tail.y,
+    tail.z,
+    target.x,
+    target.y,
+    target.z,
+    segLen,
+    true
+  );
+}
+
+function insertSpurBetweenMiters(
+  result: LoopPoint[],
+  slotMiter: LoopPoint,
+  finishMiter: LoopPoint,
   segLen: number
 ): CornerSpurMarker {
-  const anchor = { ...spur.anchor };
+  const anchor = { ...slotMiter };
   const tail = lastGuidePoint(result);
   let miterIdx: number;
   if (!tail || !pointsNear(tail, anchor)) {
@@ -318,25 +316,25 @@ function insertSpurAtGuideIndex(
     miterIdx = result.length - 1;
   }
 
-  const outboundLen = Math.hypot(spur.spurTip.x - anchor.x, spur.spurTip.y - anchor.y);
+  const outboundLen = Math.hypot(finishMiter.x - anchor.x, finishMiter.y - anchor.y);
   const spurSegLen = Math.min(segLen, Math.max(outboundLen / 4, 0.05));
   appendDensifiedSegment(
     result,
     anchor.x,
     anchor.y,
     anchor.z,
-    spur.spurTip.x,
-    spur.spurTip.y,
-    spur.spurTip.z,
+    finishMiter.x,
+    finishMiter.y,
+    finishMiter.z,
     spurSegLen,
     true
   );
   const peakIdx = result.length - 1;
   appendDensifiedSegment(
     result,
-    spur.spurTip.x,
-    spur.spurTip.y,
-    spur.spurTip.z,
+    finishMiter.x,
+    finishMiter.y,
+    finishMiter.z,
     anchor.x,
     anchor.y,
     anchor.z,
@@ -347,46 +345,35 @@ function insertSpurAtGuideIndex(
   return { miterIdx, peakIdx, returnIdx };
 }
 
-function mergeSpursIntoClipperGuide(
+function mergeGuideWithConcaveCorners(
   baseGuide: LoopPoint[],
-  spurCandidates: SpurCandidate[],
-  segLen: number,
-  miterMatchEps: number
+  treatments: ConcaveCornerTreatment[],
+  segLen: number
 ): { guide: LoopPoint[]; spurMarkers: CornerSpurMarker[] } {
   const result: LoopPoint[] = [];
   const spurMarkers: CornerSpurMarker[] = [];
-  const spursAtIdx = new Map<number, SpurCandidate[]>();
+  let emitted = 0;
 
-  for (const spur of spurCandidates) {
-    const bucket = spursAtIdx.get(spur.guideIdx) ?? [];
-    bucket.push(spur);
-    spursAtIdx.set(spur.guideIdx, bucket);
-  }
+  for (const treatment of treatments) {
+    if (treatment.guideSpanEnd < emitted) continue;
 
-  let i = 0;
-  while (i < baseGuide.length) {
-    const directSpurs = (spursAtIdx.get(i) ?? []).filter((s) => !s.used);
-    const nearbySpur = directSpurs[0] ?? spurCandidates.find(
-      (c) => !c.used && pointsNear(baseGuide[i], c.anchor, miterMatchEps)
-    );
-
-    if (!nearbySpur) {
+    for (let i = emitted; i < treatment.guideSpanStart; i++) {
       result.push({ ...baseGuide[i] });
-      i++;
-      continue;
     }
 
-    nearbySpur.used = true;
-    spurMarkers.push(insertSpurAtGuideIndex(result, nearbySpur, segLen));
+    connectResultToPoint(result, treatment.slotMiter, segLen);
 
-    const skipThrough = Math.max(nearbySpur.guideSpanEnd, i);
-    i = skipThrough + 1;
+    if (treatment.insertSpur) {
+      spurMarkers.push(
+        insertSpurBetweenMiters(result, treatment.slotMiter, treatment.finishMiter, segLen)
+      );
+    }
+
+    emitted = treatment.guideSpanEnd + 1;
   }
 
-  for (const spur of spurCandidates) {
-    if (spur.used) continue;
-    spur.used = true;
-    spurMarkers.push(insertSpurAtGuideIndex(result, spur, segLen));
+  for (let i = emitted; i < baseGuide.length; i++) {
+    result.push({ ...baseGuide[i] });
   }
 
   return { guide: result, spurMarkers };
@@ -394,7 +381,8 @@ function mergeSpursIntoClipperGuide(
 
 /**
  * Build slot center guide with bisector spurs at sharp concave corners.
- * Base offset uses Clipper; spurs branch from the rounded guide and return to the same anchor.
+ * Clipper provides the base offset; concave corners are sharpened to analytic slot
+ * miters, with spurs running slot-miter → finish-inner-miter → slot-miter.
  */
 export function buildSlotCenterGuideWithCornerSpurs(
   partLoop: LoopPoint[],
@@ -408,9 +396,12 @@ export function buildSlotCenterGuideWithCornerSpurs(
   const normalizedLoop = normalizeOutlineLoopWinding(partLoop, wallSide);
   const signedSlotCenter = slotCenterOffset * offsetSign;
   const signedFinishInner = finishInnerOffset * offsetSign;
+  const signedTipOffset =
+    options.roughTipInnerOffset !== undefined
+      ? options.roughTipInnerOffset * (offsetSign >= 0 ? 1 : -1)
+      : signedFinishInner;
 
   const maxInternalAngleDeg = options.maxInternalAngleDeg ?? 160;
-  const roughTipInnerOffset = options.roughTipInnerOffset;
 
   const n = normalizedLoop.length;
   if (n < 3 || Math.abs(signedSlotCenter) < 1e-9) {
@@ -427,23 +418,16 @@ export function buildSlotCenterGuideWithCornerSpurs(
     wallSide
   );
 
-  const spurCandidates = collectSpurCandidates(
+  const treatments = collectConcaveCornerTreatments(
     normalizedLoop,
     baseGuide,
     signedSlotCenter,
-    signedFinishInner,
+    signedTipOffset,
     workingSide,
-    maxInternalAngleDeg,
-    roughTipInnerOffset
+    maxInternalAngleDeg
   );
 
-  const miterMatchEps = Math.max(segLen * 0.75, Math.abs(signedSlotCenter) * 0.15, 0.12);
-  const { guide, spurMarkers } = mergeSpursIntoClipperGuide(
-    baseGuide,
-    spurCandidates,
-    segLen,
-    miterMatchEps
-  );
+  const { guide, spurMarkers } = mergeGuideWithConcaveCorners(baseGuide, treatments, segLen);
 
   return { guide, spurMarkers };
 }

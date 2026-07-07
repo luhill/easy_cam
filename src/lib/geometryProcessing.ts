@@ -323,6 +323,50 @@ export function offsetMiterVertex(
   };
 }
 
+/**
+ * Exact offset-path vertex at a concave corner — intersection of the two offset edge lines.
+ * Prefer over bisector extrapolation so spur tips land on the finish-inner miter, not past it.
+ */
+export function offsetConcaveMiter(
+  prev: LoopPoint,
+  curr: LoopPoint,
+  next: LoopPoint,
+  offset: number,
+  side: number
+): LoopPoint {
+  const e1x = curr.x - prev.x;
+  const e1y = curr.y - prev.y;
+  const e2x = next.x - curr.x;
+  const e2y = next.y - curr.y;
+  const len1 = Math.hypot(e1x, e1y) || 1;
+  const len2 = Math.hypot(e2x, e2y) || 1;
+
+  const n1x = side * (e1y / len1);
+  const n1y = side * (-e1x / len1);
+  const n2x = side * (e2y / len2);
+  const n2y = side * (-e2x / len2);
+
+  const p1x = curr.x + n1x * offset;
+  const p1y = curr.y + n1y * offset;
+  const p2x = curr.x + n2x * offset;
+  const p2y = curr.y + n2y * offset;
+
+  const denom = e1x * e2y - e1y * e2x;
+  if (Math.abs(denom) < 1e-10) {
+    return offsetMiterVertex(prev, curr, next, offset, side);
+  }
+
+  const dx = p2x - p1x;
+  const dy = p2y - p1y;
+  const t = (dx * e2y - dy * e2x) / denom;
+
+  return {
+    x: p1x + e1x * t,
+    y: p1y + e1y * t,
+    z: curr.z,
+  };
+}
+
 export function outwardEdgeNormal2D(
   ax: number,
   ay: number,
