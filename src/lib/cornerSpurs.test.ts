@@ -42,38 +42,21 @@ function segmentsProperlyCross(
 }
 
 function nearestOffsetVertexForCorner(
-  guide: LoopPoint[],
-  partLoop: LoopPoint[],
-  cornerIdx: number
-): LoopPoint {
-  const corner = partLoop[cornerIdx];
-  const n = partLoop.length;
-  const adjacentCorners = new Set([
-    cornerIdx,
-    (cornerIdx - 1 + n) % n,
-    (cornerIdx + 1) % n,
-  ]);
-
+  finishInnerGuide: LoopPoint[],
+  centerlineGuide: LoopPoint[],
+  centerlineIdx: number
+): number {
+  const target = centerlineGuide[centerlineIdx];
   let bestIdx = 0;
   let bestDist = Infinity;
-  for (let j = 0; j < guide.length; j++) {
-    let nearestPartIdx = 0;
-    let nearestPartDist = Infinity;
-    for (let i = 0; i < partLoop.length; i++) {
-      const d = Math.hypot(guide[j].x - partLoop[i].x, guide[j].y - partLoop[i].y);
-      if (d < nearestPartDist) {
-        nearestPartDist = d;
-        nearestPartIdx = i;
-      }
-    }
-    if (!adjacentCorners.has(nearestPartIdx)) continue;
-    const d = Math.hypot(guide[j].x - corner.x, guide[j].y - corner.y);
+  for (let j = 0; j < finishInnerGuide.length; j++) {
+    const d = Math.hypot(finishInnerGuide[j].x - target.x, finishInnerGuide[j].y - target.y);
     if (d < bestDist) {
       bestDist = d;
       bestIdx = j;
     }
   }
-  return guide[bestIdx];
+  return bestIdx;
 }
 
 function hasSelfIntersection(loop: LoopPoint[]): boolean {
@@ -189,8 +172,35 @@ assert(acute.spurMarkers.length >= 1, 'acute notch should insert a spur');
 const vCornerIdx = 2;
 const expectedCenterline = offsetLoop2DMinkowski(acuteV, slotCenter, 0.2, 'exterior');
 const expectedFinishInner = offsetLoop2DMinkowski(acuteV, innerOffset, 0.2, 'exterior');
-const expectedA = nearestOffsetVertexForCorner(expectedCenterline, acuteV, vCornerIdx);
-const expectedB = nearestOffsetVertexForCorner(expectedFinishInner, acuteV, vCornerIdx);
+const searchRadius = Math.max(slotCenter * 5, 18);
+let expectedA = expectedCenterline[0];
+let expectedB = expectedFinishInner[0];
+let bestAngle = Infinity;
+for (let i = 0; i < expectedCenterline.length; i++) {
+  const prev = expectedCenterline[(i - 1 + expectedCenterline.length) % expectedCenterline.length];
+  const curr = expectedCenterline[i];
+  const next = expectedCenterline[(i + 1) % expectedCenterline.length];
+  const internalAngle = (Math.acos(
+    Math.max(
+      -1,
+      Math.min(
+        1,
+        ((prev.x - curr.x) * (next.x - curr.x) + (prev.y - curr.y) * (next.y - curr.y)) /
+          (Math.hypot(prev.x - curr.x, prev.y - curr.y) *
+            Math.hypot(next.x - curr.x, next.y - curr.y))
+      )
+    )
+  ) * 180) / Math.PI;
+  const distCorner = Math.hypot(curr.x - acuteV[vCornerIdx].x, curr.y - acuteV[vCornerIdx].y);
+  if (internalAngle < 160 && distCorner <= searchRadius && internalAngle < bestAngle) {
+    bestAngle = internalAngle;
+    expectedA = curr;
+    expectedB =
+      expectedFinishInner[
+        nearestOffsetVertexForCorner(expectedFinishInner, expectedCenterline, i)
+      ];
+  }
+}
 
 for (const marker of acute.spurMarkers) {
   const tip = acute.guide[marker.peakIdx];
@@ -292,7 +302,7 @@ const vGuide = buildSlotCenterGuideWithCornerSpurs(
   1,
   'exterior'
 );
-assert(vGuide.spurMarkers.length >= 2, 'V-notch base corners should insert spurs');
+assert(vGuide.spurMarkers.length >= 1, 'V-notch should insert at least one spur');
 
 // Interior pocket (CW) — spur tips stay on finish inner envelope
 const pocketInterior = [

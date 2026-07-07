@@ -193,17 +193,80 @@ interface SpurCorner {
   internalAngle: number;
 }
 
-/** Offset-normal side for analytic miters — follows winding and signed offset direction. */
+function findClosestGuideIndex(guide: LoopPoint[], target: LoopPoint): number {
+  let bestIdx = 0;
+  let bestDist = Infinity;
+  for (let j = 0; j < guide.length; j++) {
+    const d = Math.hypot(guide[j].x - target.x, guide[j].y - target.y);
+    if (d < bestDist) {
+      bestDist = d;
+      bestIdx = j;
+    }
+  }
+  return bestIdx;
+}
+
+function segmentProperlyCrosses(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  cx: number,
+  cy: number,
+  dx: number,
+  dy: number,
+  eps = 1e-6
+): boolean {
+  const cross = (px: number, py: number, qx: number, qy: number, rx: number, ry: number) =>
+    (rx - px) * (qy - py) - (ry - py) * (qx - px);
+
+  const o1 = cross(ax, ay, bx, by, cx, cy);
+  const o2 = cross(ax, ay, bx, by, dx, dy);
+  const o3 = cross(cx, cy, dx, dy, ax, ay);
+  const o4 = cross(cx, cy, dx, dy, bx, by);
+
+  if (Math.abs(o1) <= eps || Math.abs(o2) <= eps || Math.abs(o3) <= eps || Math.abs(o4) <= eps) {
+    return false;
+  }
+  return o1 * o2 < 0 && o3 * o4 < 0;
+}
+
+/** True when the spur chord would cut across the clean centerline loop. */
+function spurChordCrossesCenterline(
+  pointA: LoopPoint,
+  pointB: LoopPoint,
+  centerlineGuide: LoopPoint[],
+  guideIdxA: number
+): boolean {
+  const n = centerlineGuide.length;
+  for (let i = 0; i < n; i++) {
+    if (i === guideIdxA) continue;
+    const c = centerlineGuide[i];
+    const d = centerlineGuide[(i + 1) % n];
+    if (
+      segmentProperlyCrosses(
+        pointA.x,
+        pointA.y,
+        pointB.x,
+        pointB.y,
+        c.x,
+        c.y,
+        d.x,
+        d.y
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function resolveOffsetWorkingSide(partLoop: LoopPoint[], offsetSign: number): number {
   const ccw = signedLoopArea2D(partLoop) >= 0;
   const windingSide = ccw ? 1 : -1;
   return offsetSign >= 0 ? windingSide : -windingSide;
 }
 
-/**
- * True concave re-entrant corner (void notch), not a salient exterior needle tip.
- * Shallow reflex vertices on a taper (small chord deviation) keep the Clipper arc.
- */
 function isConcaveReentrantCorner(
   prev: LoopPoint,
   curr: LoopPoint,
@@ -233,66 +296,6 @@ function isConcaveReentrantCorner(
   return true;
 }
 
-function findClosestGuideIndex(guide: LoopPoint[], target: LoopPoint): number {
-  let bestIdx = 0;
-  let bestDist = Infinity;
-  for (let j = 0; j < guide.length; j++) {
-    const d = Math.hypot(guide[j].x - target.x, guide[j].y - target.y);
-    if (d < bestDist) {
-      bestDist = d;
-      bestIdx = j;
-    }
-  }
-  return bestIdx;
-}
-
-/** Offset-loop vertex for a part corner — closest guide point in that corner's region. */
-function offsetVertexForPartCorner(
-  guide: LoopPoint[],
-  partLoop: LoopPoint[],
-  partCornerIdx: number,
-  partCorner: LoopPoint
-): { point: LoopPoint; guideIdx: number } {
-  const n = partLoop.length;
-  const adjacentCorners = new Set([
-    partCornerIdx,
-    (partCornerIdx - 1 + n) % n,
-    (partCornerIdx + 1) % n,
-  ]);
-
-  let bestIdx = -1;
-  let bestDist = Infinity;
-
-  for (let j = 0; j < guide.length; j++) {
-    const p = guide[j];
-    let nearestPartIdx = 0;
-    let nearestPartDist = Infinity;
-    for (let i = 0; i < n; i++) {
-      const d = Math.hypot(p.x - partLoop[i].x, p.y - partLoop[i].y);
-      if (d < nearestPartDist) {
-        nearestPartDist = d;
-        nearestPartIdx = i;
-      }
-    }
-    if (!adjacentCorners.has(nearestPartIdx)) continue;
-
-    const d = Math.hypot(p.x - partCorner.x, p.y - partCorner.y);
-    if (d < bestDist) {
-      bestDist = d;
-      bestIdx = j;
-    }
-  }
-
-  if (bestIdx < 0) {
-    bestIdx = findClosestGuideIndex(guide, partCorner);
-  }
-  return { point: { ...guide[bestIdx] }, guideIdx: bestIdx };
-}
-
-/**
- * Whether this vertex needs a bisector spur to the finish-inner miter.
- * Covers reflex re-entrant notches and acute convex tips (V-notch / teardrop points).
- */
 function needsCornerSpur(
   prev: LoopPoint,
   curr: LoopPoint,
@@ -323,29 +326,53 @@ function needsCornerSpur(
   const distToChord = Math.abs(chordCross) / chordLen;
   const edgeLen = Math.min(Math.hypot(e1x, e1y), Math.hypot(e2x, e2y));
 
-  // Shallow exterior needle tips (taper apex) — Clipper arc is enough, spurs cause bow-ties.
   if (workingSide * chordCross < 0 && distToChord / edgeLen < 0.58) return false;
 
   return workingSide * chordCross > 0;
 }
 
-/** Offset-loop vertex for a part corner on a clean Clipper offset path. */
-function offsetVertexNearPartCorner(
-  guide: LoopPoint[],
-  partLoop: LoopPoint[],
-  partCornerIdx: number,
-  partCorner: LoopPoint
-): LoopPoint {
-  return offsetVertexForPartCorner(guide, partLoop, partCornerIdx, partCorner).point;
+/**
+ * Sharpest acute centerline vertex near a qualifying part corner — point A.
+ */
+function centerlineVertexForPartCorner(
+  centerlineGuide: LoopPoint[],
+  partCorner: LoopPoint,
+  maxInternalAngleDeg: number,
+  searchRadius: number
+): { point: LoopPoint; guideIdx: number; internalAngle: number } | null {
+  const n = centerlineGuide.length;
+  let best: { point: LoopPoint; guideIdx: number; internalAngle: number } | null = null;
+
+  for (let i = 0; i < n; i++) {
+    const prev = centerlineGuide[(i - 1 + n) % n];
+    const curr = centerlineGuide[i];
+    const next = centerlineGuide[(i + 1) % n];
+    const internalAngle = vertexInternalAngleDeg(prev, curr, next);
+    if (internalAngle >= maxInternalAngleDeg) continue;
+
+    const dist = Math.hypot(curr.x - partCorner.x, curr.y - partCorner.y);
+    if (dist > searchRadius) continue;
+
+    if (!best || internalAngle < best.internalAngle) {
+      best = { point: { ...curr }, guideIdx: i, internalAngle };
+    }
+  }
+
+  return best;
 }
 
+/**
+ * Pair qualifying part corners with acute centerline vertices (A) and the nearest
+ * finish-inner offset vertex (B) for straight A→B→A spur branches.
+ */
 function collectSpurCorners(
   partLoop: LoopPoint[],
   centerlineGuide: LoopPoint[],
   finishInnerGuide: LoopPoint[],
   workingSide: number,
   maxInternalAngleDeg: number,
-  minSpurLength = 0.08
+  minSpurLength: number,
+  searchRadius: number
 ): SpurCorner[] {
   const n = partLoop.length;
   const raw: SpurCorner[] = [];
@@ -357,24 +384,32 @@ function collectSpurCorners(
 
     if (!needsCornerSpur(prev, curr, next, workingSide, maxInternalAngleDeg)) continue;
 
-    const internalAngle = vertexInternalAngleDeg(prev, curr, next);
-    const { point: pointA, guideIdx } = offsetVertexForPartCorner(
+    const centerHit = centerlineVertexForPartCorner(
       centerlineGuide,
-      partLoop,
-      i,
-      curr
+      curr,
+      maxInternalAngleDeg,
+      searchRadius
     );
-    const pointB = offsetVertexNearPartCorner(finishInnerGuide, partLoop, i, curr);
+    if (!centerHit) continue;
+
+    const pointA = centerHit.point;
+    const pointB = {
+      ...finishInnerGuide[findClosestGuideIndex(finishInnerGuide, pointA)],
+    };
 
     if (Math.hypot(pointB.x - pointA.x, pointB.y - pointA.y) < minSpurLength) {
+      continue;
+    }
+
+    if (spurChordCrossesCenterline(pointA, pointB, centerlineGuide, centerHit.guideIdx)) {
       continue;
     }
 
     raw.push({
       pointA,
       pointB,
-      guideIdx,
-      internalAngle,
+      guideIdx: centerHit.guideIdx,
+      internalAngle: centerHit.internalAngle,
     });
   }
 
@@ -496,6 +531,7 @@ export function buildSlotCenterGuideWithCornerSpurs(
 
   const segLen = Math.max(maxSegmentLen, Math.abs(signedSlotCenter) / 6);
   const workingSide = resolveOffsetWorkingSide(normalizedLoop, offsetSign);
+  const cornerSearchRadius = Math.max(Math.abs(signedSlotCenter) * 5, 18);
 
   const centerlineGuide = offsetLoop2DMinkowski(
     normalizedLoop,
@@ -517,7 +553,8 @@ export function buildSlotCenterGuideWithCornerSpurs(
     finishInnerGuide,
     workingSide,
     maxInternalAngleDeg,
-    minSpurLength
+    minSpurLength,
+    cornerSearchRadius
   );
 
   if (spurCorners.length === 0) {
