@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import type { Operation } from '../../types/operations';
 import {
-  getSelectionStrategy,
+  getSelectedEdgeLoops,
   getSelectedHoles,
   DEFAULT_SETTINGS,
   isAdaptiveOutlineOperation,
@@ -30,6 +30,16 @@ interface OperationGeometrySectionProps {
 function formatGeometrySummary(operation: Operation, cutZContext: CutZContext): string {
   const geo = operation.geometry;
   if (!geo) return 'None selected';
+
+  const edgeLoops = getSelectedEdgeLoops(geo);
+  if (edgeLoops.length > 0 && isOutlineOperation(operation)) {
+    if (edgeLoops.length === 1) {
+      const el = edgeLoops[0];
+      const depth = el.topZ - el.bottomZ;
+      return `edge loop, Z ${el.topZ.toFixed(1)} → ${el.bottomZ.toFixed(1)} mm (${depth.toFixed(1)} mm deep)`;
+    }
+    return `${edgeLoops.length} edge loops`;
+  }
 
   const holes = getSelectedHoles(geo);
   if (holes.length > 0 && (operation.type === 'drill' || operation.type === 'helix')) {
@@ -111,12 +121,11 @@ function formatGeometrySummary(operation: Operation, cutZContext: CutZContext): 
     return parts.join(', ');
   }
 
-  if (!geo.faceIndices.length) return 'None selected';
+  if (!geo.faceIndices.length && edgeLoops.length === 0) return 'None selected';
 
-  const strategy = getSelectionStrategy(operation.type);
   const faceCount = geo.faceIndices.length;
 
-  if (strategy === 'outline-loop' && geo.loops && geo.loops.length > 0) {
+  if (isOutlineOperation(operation) && geo.loops && geo.loops.length > 0) {
     const points = geo.loops.reduce((sum, loop) => sum + loop.length, 0);
     return `${geo.loops.length} loop(s), ${points} pts`;
   }
@@ -150,6 +159,7 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
     !!operation.geometry &&
     (operation.geometry.faceIndices.length > 0 ||
       getSelectedHoles(operation.geometry).length > 0 ||
+      getSelectedEdgeLoops(operation.geometry).length > 0 ||
       !!operation.geometry.entryPoint ||
       !!operation.geometry.toolStartPoint ||
       !!operation.geometry.slotJoinPoint ||
@@ -276,7 +286,10 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
         : 'Use Edit Entry Points to set where the ramp, helix tangent, or straight plunge begins on the outline.';
     }
     if (isSelectingGeometry && isOutlineOperation(operation)) {
-      return 'Select top-facing part outline';
+      return 'Click vertical wall faces along a closed edge loop — add/remove like holes';
+    }
+    if (isActive && selectionMode && isOutlineOperation(operation)) {
+      return 'Click vertical wall faces along a closed edge loop — add/remove like holes';
     }
     if (isActive && selectionMode && (operation.type === 'drill' || operation.type === 'helix')) {
       return 'Click holes to add or remove — multiple holes supported';

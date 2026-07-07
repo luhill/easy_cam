@@ -4,6 +4,7 @@ import { loopArea2D, pointInPolygon2D, boundsFromGeometry, loopCentroid, distanc
 import {
   classifyRegionKind,
   effectiveOutlineLoop,
+  isEdgeLoopSelectableForOperation,
   isHoleSelectable,
   isHoleSelectableForOperation,
   isUpwardFacingRegion,
@@ -27,7 +28,19 @@ export interface SelectionGroup {
   faceIndices: number[];
   loops: LoopPoint[][];
   holeId?: number;
+  edgeLoopId?: number;
+  topZ?: number;
+  bottomZ?: number;
   outerLoop?: LoopPoint[] | null;
+}
+
+export interface EdgeLoopFeature {
+  id: number;
+  faceIndices: number[];
+  topLoop: LoopPoint[];
+  bottomLoop: LoopPoint[];
+  topZ: number;
+  bottomZ: number;
 }
 
 export interface HoleFeature {
@@ -283,36 +296,6 @@ function classifyLoops(loops: LoopPoint[][]): {
   return { outerLoop: sorted[0], innerLoops: sorted.slice(1) };
 }
 
-/** Pick the next boundary edge with the tightest left turn (CCW outer walk). */
-function pickLeftmostBoundaryTurn(
-  prevPoint: THREE.Vector3,
-  currentPoint: THREE.Vector3,
-  candidates: Array<{ key: string; point: THREE.Vector3 }>
-): { key: string; point: THREE.Vector3 } | null {
-  if (candidates.length === 0) return null;
-
-  let best = candidates[0];
-  let bestAngle = Infinity;
-
-  const inX = currentPoint.x - prevPoint.x;
-  const inY = currentPoint.y - prevPoint.y;
-
-  for (const candidate of candidates) {
-    const outX = candidate.point.x - currentPoint.x;
-    const outY = candidate.point.y - currentPoint.y;
-    const cross = inX * outY - inY * outX;
-    const dot = inX * outX + inY * outY;
-    let angle = Math.atan2(cross, dot);
-    if (angle <= 1e-9) angle += 2 * Math.PI;
-    if (angle < bestAngle) {
-      bestAngle = angle;
-      best = candidate;
-    }
-  }
-
-  return best;
-}
-
 function traceLoops(edges: Array<[THREE.Vector3, THREE.Vector3]>, epsilon: number): LoopPoint[][] {
   if (edges.length === 0) return [];
 
@@ -336,7 +319,6 @@ function traceLoops(edges: Array<[THREE.Vector3, THREE.Vector3]>, epsilon: numbe
 
     const loop: THREE.Vector3[] = [startA.clone()];
     let prevKey = vertexKey(startA, epsilon);
-    let prevPoint = startA.clone();
     let currentKey = vertexKey(startB, epsilon);
     let currentPoint = startB.clone();
     loop.push(currentPoint.clone());
@@ -347,12 +329,10 @@ function traceLoops(edges: Array<[THREE.Vector3, THREE.Vector3]>, epsilon: numbe
       if (currentKey === startLoopKey && loop.length > 2) break;
 
       const neighbors = adjacency.get(currentKey) ?? [];
-      const candidates = neighbors.filter((n) => n.key !== prevKey);
-      const next = pickLeftmostBoundaryTurn(prevPoint, currentPoint, candidates);
+      const next = neighbors.find((n) => n.key !== prevKey);
       if (!next) break;
 
       prevKey = currentKey;
-      prevPoint = currentPoint.clone();
       currentKey = next.key;
       currentPoint = next.point.clone();
 
@@ -385,6 +365,7 @@ export class MeshIndex {
   readonly faceCount: number;
   readonly regions: SelectionRegion[];
   readonly holes: HoleFeature[];
+  readonly edgeLoops: EdgeLoopFeature[];
   readonly bounds: PartBounds;
   readonly faceToRegion: Int32Array;
   private readonly edgeToFaces: Map<string, number[]>;
@@ -398,6 +379,7 @@ export class MeshIndex {
     this.faceCount = getFaceCount(geometry);
     this.edgeToFaces = new Map();
     this.holes = [];
+    this.edgeLoops = [];
     this.bounds = boundsFromGeometry(geometry);
     this.epsilon = computeEpsilon(this.bounds);
 
@@ -504,6 +486,191 @@ export class MeshIndex {
     for (const hole of this.holes) {
       this.refineHoleToInnerBore(hole);
     }
+
+    this.edgeLoops = this.indexEdgeLoops();
+  }
+
+  private isVerticalFace(faceIndex: number): boolean {
+    return Math.abs(this.faceNormals[faceIndex].z) <= 0.35;
+  }
+
+  private collectVerticalFaceComponents(): number[][] {
+    const verticalFaces: number[] = [];
+    for (let faceIndex = 0; faceIndex < this.faceCount; faceIndex++) {
+      if (this.isVerticalFace(faceIndex)) verticalFaces.push(faceIndex);
+    }
+
+    const verticalSet = new Set(verticalFaces);
+    const visited = new Set<number>();
+    const components: number[][] = [];
+
+    for (const start of verticalFaces) {
+      if (visited.has(start)) continue;
+      const component: number[] = [];
+      const queue = [start];
+      visited.add(start);
+
+      while (queue.length > 0) {
+        const faceIndex = queue.shift()!;
+        component.push(faceIndex);
+
+        for (let i = 0; i < 3; i++) {
+          const a = getFaceVertex(this.geometry, this.positions, faceIndex, i, new THREE.Vector3());
+          const b = getFaceVertex(
+            this.geometry,
+            this.positions,
+            faceIndex,
+            (i + 1) % 3,
+            new THREE.Vector3()
+          );
+          const key = edgeKey(a, b, this.epsilon);
+          for (const neighbor of this.edgeToFaces.get(key) ?? []) {
+            if (verticalSet.has(neighbor) && !visited.has(neighbor)) {
+              visited.add(neighbor);
+              queue.push(neighbor);
+            }
+          }
+        }
+      }
+
+      if (component.length >= 2) components.push(component);
+    }
+
+    return components;
+  }
+
+  private zExtentForFaces(faceIndices: number[]): { topZ: number; bottomZ: number } {
+    let topZ = -Infinity;
+    let bottomZ = Infinity;
+    for (const faceIndex of faceIndices) {
+      for (let i = 0; i < 3; i++) {
+        const v = getFaceVertex(this.geometry, this.positions, faceIndex, i, new THREE.Vector3());
+        topZ = Math.max(topZ, v.z);
+        bottomZ = Math.min(bottomZ, v.z);
+      }
+    }
+    return { topZ, bottomZ };
+  }
+
+  private extractHorizontalRimLoop(
+    faceIndices: number[],
+    rim: 'top' | 'bottom'
+  ): LoopPoint[] | null {
+    const { topZ, bottomZ } = this.zExtentForFaces(faceIndices);
+    const span = Math.max(topZ - bottomZ, this.epsilon);
+    const zTol = Math.max(this.epsilon * 4, span * 0.02);
+    const targetZ = rim === 'top' ? topZ : bottomZ;
+
+    const faceSet = new Set(faceIndices);
+    const rimEdges: Array<[THREE.Vector3, THREE.Vector3]> = [];
+
+    for (const faceIndex of faceIndices) {
+      const verts = [
+        getFaceVertex(this.geometry, this.positions, faceIndex, 0, new THREE.Vector3()),
+        getFaceVertex(this.geometry, this.positions, faceIndex, 1, new THREE.Vector3()),
+        getFaceVertex(this.geometry, this.positions, faceIndex, 2, new THREE.Vector3()),
+      ];
+
+      for (let i = 0; i < 3; i++) {
+        const a = verts[i];
+        const b = verts[(i + 1) % 3];
+        const key = edgeKey(a, b, this.epsilon);
+        const facesOnEdge = this.edgeToFaces.get(key) ?? [];
+
+        let countInGroup = 0;
+        for (const f of facesOnEdge) {
+          if (faceSet.has(f)) countInGroup++;
+        }
+        if (countInGroup !== 1) continue;
+
+        if (
+          Math.abs(a.z - targetZ) <= zTol &&
+          Math.abs(b.z - targetZ) <= zTol &&
+          Math.abs(a.z - b.z) <= zTol
+        ) {
+          rimEdges.push([a, b]);
+        }
+      }
+    }
+
+    const loops = traceLoops(rimEdges, this.epsilon);
+    if (loops.length === 0) return null;
+    return [...loops].sort((a, b) => Math.abs(loopArea2D(b)) - Math.abs(loopArea2D(a)))[0];
+  }
+
+  private indexEdgeLoops(): EdgeLoopFeature[] {
+    const features: EdgeLoopFeature[] = [];
+
+    for (const faceIndices of this.collectVerticalFaceComponents()) {
+      const topLoop = this.extractHorizontalRimLoop(faceIndices, 'top');
+      if (!topLoop || topLoop.length < 3) continue;
+
+      const area = Math.abs(loopArea2D(topLoop));
+      if (area < 4) continue;
+
+      const { topZ, bottomZ } = this.zExtentForFaces(faceIndices);
+      if (topZ - bottomZ < 0.2) continue;
+
+      const bottomLoop = this.extractHorizontalRimLoop(faceIndices, 'bottom') ?? [];
+
+      features.push({
+        id: features.length,
+        faceIndices,
+        topLoop,
+        bottomLoop,
+        topZ,
+        bottomZ,
+      });
+    }
+
+    return features;
+  }
+
+  private scoreEdgeLoopPick(
+    edgeLoop: EdgeLoopFeature,
+    x: number,
+    y: number,
+    z: number | undefined,
+    faceIndex: number
+  ): number | null {
+    if (edgeLoop.faceIndices.includes(faceIndex)) {
+      const zPenalty = z !== undefined ? Math.abs(edgeLoop.topZ - z) * 2 : 0;
+      return zPenalty;
+    }
+
+    const dist = distanceToLoop2D(x, y, edgeLoop.topLoop);
+    const maxPick = 6;
+    if (dist > maxPick) return null;
+
+    const zPenalty = z !== undefined ? Math.abs(edgeLoop.topZ - z) * 3 : 0;
+    return dist + zPenalty;
+  }
+
+  findEdgeLoopAtPoint(
+    x: number,
+    y: number,
+    z: number | undefined,
+    faceIndex: number
+  ): EdgeLoopFeature | null {
+    let best: { edgeLoop: EdgeLoopFeature; score: number } | null = null;
+
+    for (const edgeLoop of this.edgeLoops) {
+      const score = this.scoreEdgeLoopPick(edgeLoop, x, y, z, faceIndex);
+      if (score === null) continue;
+      if (!best || score < best.score) {
+        best = { edgeLoop, score };
+      }
+    }
+
+    return best?.edgeLoop ?? null;
+  }
+
+  getWallFacesForEdgeLoop(edgeLoop: { edgeLoopId?: number; faceIndices: number[] }): number[] {
+    if (edgeLoop.edgeLoopId !== undefined && edgeLoop.edgeLoopId >= 0) {
+      const feature = this.edgeLoops.find((el) => el.id === edgeLoop.edgeLoopId);
+      if (feature?.faceIndices.length) return feature.faceIndices;
+    }
+    return edgeLoop.faceIndices;
   }
 
   /** Snap hole to the innermost cylindrical wall when a boss outer ring was traced. */
@@ -777,6 +944,21 @@ export class MeshIndex {
         faceIndices: hole.wallFaceIndices,
         loops: [hole.loop],
         holeId: hole.id >= 0 ? hole.id : undefined,
+        outerLoop: null,
+      };
+    }
+
+    if (isEdgeLoopSelectableForOperation(operationType)) {
+      if (!point) return null;
+      const edgeLoop = this.findEdgeLoopAtPoint(point.x, point.y, point.z, faceIndex);
+      if (!edgeLoop) return null;
+
+      return {
+        faceIndices: edgeLoop.faceIndices,
+        loops: [edgeLoop.topLoop],
+        edgeLoopId: edgeLoop.id,
+        topZ: edgeLoop.topZ,
+        bottomZ: edgeLoop.bottomZ,
         outerLoop: null,
       };
     }

@@ -7,8 +7,10 @@ import { useAppStore } from '../../store/useAppStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import {
   OPERATION_COLORS,
+  getSelectedEdgeLoops,
   getSelectedHoles,
   isAdaptiveOutlineOperation,
+  isEdgeLoopInSelection,
   isOutlineHelixEntryOperation,
   isOutlineOperation,
   isStandardOutlineEntryEditable,
@@ -28,7 +30,7 @@ import {
   type PartBounds,
   type ProcessedMesh,
 } from '../../lib/geometryProcessing';
-import { getSelectionHint, isHoleSelectableForOperation, isRegionSelectableForOperation } from '../../lib/selectionRules';
+import { getSelectionHint, isEdgeLoopSelectableForOperation, isHoleSelectableForOperation, isRegionSelectableForOperation } from '../../lib/selectionRules';
 import {
   clearMeshIndexCache,
   collectVertexIndices,
@@ -207,8 +209,19 @@ function StlMesh({
         if (hole.loop && hole.loop.length > 0) loops.push(hole.loop);
       }
     }
+    if (
+      activeOperationType &&
+      isOutlineOperation({
+        type: activeOperationType,
+        settings: activeOperationSettings ?? DEFAULT_SETTINGS,
+      })
+    ) {
+      for (const edgeLoop of getSelectedEdgeLoops(activeGeometry)) {
+        if (edgeLoop.loop.length > 0) loops.push(edgeLoop.loop);
+      }
+    }
     return loops;
-  }, [activeGeometry, activeOperationType]);
+  }, [activeGeometry, activeOperationType, activeOperationSettings]);
 
   const cutZContext = useMemo(() => createCutZContext(partBounds), [partBounds]);
 
@@ -294,6 +307,19 @@ function StlMesh({
         }
       }
     }
+    if (
+      isOutlineOperation({
+        type: activeOperationType ?? 'outline',
+        settings: activeOperationSettings ?? DEFAULT_SETTINGS,
+      }) &&
+      meshIndexRef.current
+    ) {
+      for (const edgeLoop of getSelectedEdgeLoops(activeGeometry)) {
+        for (const faceIndex of meshIndexRef.current.getWallFacesForEdgeLoop(edgeLoop)) {
+          nextSelected.add(faceIndex);
+        }
+      }
+    }
 
     const hovered = new Set(prevHoveredFacesRef.current);
     const hoverColor =
@@ -372,6 +398,10 @@ function StlMesh({
       if (!opType) return null;
 
       if (isHoleSelectableForOperation(opType)) {
+        return meshIndex.resolveSelection(faceIndex, opType, point ?? undefined);
+      }
+
+      if (isEdgeLoopSelectableForOperation(opType)) {
         return meshIndex.resolveSelection(faceIndex, opType, point ?? undefined);
       }
 
@@ -555,6 +585,55 @@ function StlMesh({
             loops: [...existingHoles.map((h) => h.loop).filter(Boolean), loop].filter(
               (l): l is LoopPoint[] => !!l?.length
             ),
+          });
+        }
+        return;
+      }
+
+      if (
+        operationType === 'outline' ||
+        operationType === 'adaptive-outline'
+      ) {
+        const loop = group.loops?.[0];
+        if (!loop?.length || group.topZ === undefined || group.bottomZ === undefined) return;
+
+        const candidate = {
+          loop,
+          faceIndices: group.faceIndices,
+          topZ: group.topZ,
+          bottomZ: group.bottomZ,
+          edgeLoopId: group.edgeLoopId,
+        };
+        const existingEdgeLoops = getSelectedEdgeLoops(existing);
+
+        if (isEdgeLoopInSelection(existingEdgeLoops, candidate)) {
+          const edgeLoops = existingEdgeLoops.filter((el) => !isEdgeLoopInSelection([el], candidate));
+          setOperationGeometry(
+            activeOperationId,
+            edgeLoops.length > 0
+              ? {
+                  faceIndices: [...new Set(edgeLoops.flatMap((el) => el.faceIndices))],
+                  vertexIndices: collectVertexIndices(
+                    meshIndexRef.current,
+                    [...new Set(edgeLoops.flatMap((el) => el.faceIndices))]
+                  ),
+                  edgeLoops,
+                  loops: edgeLoops.map((el) => el.loop),
+                  toolStartPoint: existing?.toolStartPoint,
+                  slotJoinPoint: existing?.slotJoinPoint,
+                }
+              : null
+          );
+        } else {
+          const edgeLoops = [...existingEdgeLoops, candidate];
+          const faceIndices = [...new Set(edgeLoops.flatMap((el) => el.faceIndices))];
+          setOperationGeometry(activeOperationId, {
+            faceIndices,
+            vertexIndices: collectVertexIndices(meshIndexRef.current, faceIndices),
+            edgeLoops,
+            loops: edgeLoops.map((el) => el.loop),
+            toolStartPoint: existing?.toolStartPoint,
+            slotJoinPoint: existing?.slotJoinPoint,
           });
         }
         return;

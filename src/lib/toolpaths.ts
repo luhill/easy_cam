@@ -9,7 +9,7 @@ import {
   offsetLoop2DMinkowski,
   signedLoopArea2D,
 } from './geometryProcessing';
-import { OPERATION_COLORS, getSelectedHoles, normalizeOperation } from '../types/operations';
+import { OPERATION_COLORS, getSelectedEdgeLoops, getSelectedHoles, normalizeOperation } from '../types/operations';
 import { clampOperationSettings } from './settingLimits';
 import {
   buildSlotCenterGuideWithCornerSpurs,
@@ -69,9 +69,14 @@ import {
 import {
   createCutZContext,
   cutLayersWorldZ,
+  cutLayersWorldZForExtent,
+  defaultOutlineCutExtent,
   finalCutWorldZ,
+  finalCutWorldZForExtent,
+  outlineCutExtentFromLoopZ,
   stockTopWorldZ,
   type CutZContext,
+  type OutlineCutExtent,
 } from './cutDepth';
 import {
   helixHoleInvalidLabel,
@@ -146,8 +151,30 @@ function getBounds(geometry: Operation['geometry']): {
   return { minX: -25, maxX: 25, minY: -25, maxY: 25 };
 }
 
-function hasOutlineLoopGeometry(geometry: Operation['geometry'] | null | undefined): boolean {
-  return !!(geometry?.loops?.[0] && geometry.loops[0].length >= 2);
+interface OutlinePathJob {
+  loop: LoopPoint[];
+  extent: OutlineCutExtent;
+}
+
+function resolveOutlinePathJobs(
+  geometry: Operation['geometry'] | null | undefined,
+  ctx: CutZContext
+): OutlinePathJob[] {
+  const edgeLoops = getSelectedEdgeLoops(geometry);
+  if (edgeLoops.length > 0) {
+    return edgeLoops
+      .filter((el) => el.loop.length >= 2)
+      .map((el) => ({
+        loop: el.loop,
+        extent: outlineCutExtentFromLoopZ(el.topZ, el.bottomZ),
+      }));
+  }
+
+  if (geometry?.loops?.[0] && geometry.loops[0].length >= 2) {
+    return [{ loop: geometry.loops[0], extent: defaultOutlineCutExtent(ctx) }];
+  }
+
+  return [];
 }
 
 function hasRegionGeometry(geometry: Operation['geometry'] | null | undefined): boolean {
@@ -265,11 +292,12 @@ function generateStandardHelixOutlinePath(
   settings: Operation['settings'],
   ctx: CutZContext,
   globals: ToolpathGlobalOptions,
-  geometry: Operation['geometry'] | null
+  geometry: Operation['geometry'] | null,
+  extent: OutlineCutExtent
 ): ToolpathPoint[] {
-  const topZ = stockTopWorldZ(ctx);
+  const topZ = extent.cutTopZ;
   const safeZ = safeHeightWorldZ(ctx, globals.safeHeight);
-  const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
+  const layers = cutLayersWorldZForExtent(extent, settings.depthOffset, settings.stepDown);
   const points: ToolpathPoint[] = [];
 
   if (loop.length === 0 || layers.length === 0) return points;
@@ -283,7 +311,7 @@ function generateStandardHelixOutlinePath(
     globals.toolOrigin
   );
   if (!entryLayout) {
-    return generateStandardOutlinePath(loop, settings, ctx, globals, geometry, 'straight');
+    return generateStandardOutlinePath(loop, settings, ctx, globals, geometry, 'straight', extent);
   }
 
   const { toolStart, joinPoint, layout } = entryLayout;
@@ -418,17 +446,19 @@ function generateStandardOutlinePath(
   ctx: CutZContext,
   globals: ToolpathGlobalOptions,
   geometry: Operation['geometry'] | null = null,
-  entryTypeOverride?: Operation['settings']['outlineEntryType']
+  entryTypeOverride?: Operation['settings']['outlineEntryType'],
+  extent?: OutlineCutExtent
 ): ToolpathPoint[] {
+  const cutExtent = extent ?? defaultOutlineCutExtent(ctx);
   const entryType = entryTypeOverride ?? settings.outlineEntryType ?? 'linear';
 
   if (entryType === 'helix') {
-    return generateStandardHelixOutlinePath(loop, settings, ctx, globals, geometry);
+    return generateStandardHelixOutlinePath(loop, settings, ctx, globals, geometry, cutExtent);
   }
 
-  const topZ = stockTopWorldZ(ctx);
+  const topZ = cutExtent.cutTopZ;
   const safeZ = safeHeightWorldZ(ctx, globals.safeHeight);
-  const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
+  const layers = cutLayersWorldZForExtent(cutExtent, settings.depthOffset, settings.stepDown);
   const points: ToolpathPoint[] = [];
 
   if (loop.length === 0 || layers.length === 0) return points;
@@ -587,16 +617,26 @@ function generateOutlinePath(
   globals: ToolpathGlobalOptions
 ): ToolpathPoint[] {
   const { settings, geometry } = op;
+  const jobs = resolveOutlinePathJobs(geometry, ctx);
+  if (jobs.length === 0) return [];
 
-  if (settings.adaptiveMode) {
-    return generateAdaptiveOutlinePath(op, ctx, globals);
+  const points: ToolpathPoint[] = [];
+  for (const job of jobs) {
+    const path = settings.adaptiveMode
+      ? generateAdaptiveOutlinePath(op, ctx, globals, job.loop, job.extent)
+      : generateStandardOutlinePath(
+          job.loop,
+          settings,
+          ctx,
+          globals,
+          geometry,
+          undefined,
+          job.extent
+        );
+    if (!appendPoints(points, path)) break;
   }
 
-  if (!hasOutlineLoopGeometry(geometry)) {
-    return [];
-  }
-
-  return generateStandardOutlinePath(geometry!.loops![0], settings, ctx, globals, geometry);
+  return points;
 }
 
 function trochoidParams(
@@ -1040,19 +1080,22 @@ function lastPathPoint(points: ToolpathPoint[]): { x: number; y: number; z: numb
 function generateAdaptiveOutlinePath(
   op: Operation,
   ctx: CutZContext,
-  globals: ToolpathGlobalOptions
+  globals: ToolpathGlobalOptions,
+  loopOverride?: LoopPoint[],
+  extent?: OutlineCutExtent
 ): ToolpathPoint[] {
   const { settings, geometry } = op;
-  const loop = geometry?.loops?.[0];
+  const loop = loopOverride ?? geometry?.loops?.[0];
 
   if (!loop) {
     return [];
   }
 
-  const topZ = stockTopWorldZ(ctx);
+  const cutExtent = extent ?? defaultOutlineCutExtent(ctx);
+  const topZ = cutExtent.cutTopZ;
   const safeZ = safeHeightWorldZ(ctx, globals.safeHeight);
-  const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
-  const finalZ = finalCutWorldZ(ctx, settings.depthOffset);
+  const layers = cutLayersWorldZForExtent(cutExtent, settings.depthOffset, settings.stepDown);
+  const finalZ = finalCutWorldZForExtent(cutExtent, settings.depthOffset);
 
   const roughSlot = resolveAdaptiveSlotGeometry(settings, { roughing: true });
   const segLen = minkowskiSegmentLen(globals.resolution);

@@ -100,7 +100,10 @@ function fieldLabel(operation: Operation, key: NumericSettingKey, fallback: stri
 
 function fieldHint(operation: Operation, key: NumericSettingKey): string | undefined {
   if (key === 'depthOffset' || key === 'stepDown') {
-    if (isOutlineOperation(operation) || operation.type === 'helix') {
+    if (isOutlineOperation(operation)) {
+      return 'Passes run from the selected edge-loop top down. Depth offset is measured from the loop bottom (+ stops short of it).';
+    }
+    if (operation.type === 'helix') {
       return DEPTH_HINT;
     }
   }
@@ -123,7 +126,7 @@ function fieldHint(operation: Operation, key: NumericSettingKey): string | undef
     return 'Set to 0 to disable. At each pass bottom the tool spirals outward to full diameter using stepover.';
   }
   if (key === 'zStartOffset' && isOutlineOperation(operation)) {
-    return 'Entry ramp, helix bore, or straight plunge begins at min(global safe height, this offset above stock top).';
+    return 'Entry ramp, helix bore, or straight plunge begins at min(global safe height, this offset above the edge-loop top).';
   }
   if (key === 'zStartOffset' && operation.type === 'helix') {
     return 'Helix ramp begins at the lower of this offset above stock top or the global safe height.';
