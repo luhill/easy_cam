@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { LoopPoint, OperationType, SelectionStrategy } from '../types/operations';
-import { loopArea2D, pointInPolygon2D, boundsFromGeometry, loopCentroid, distanceToLoop2D, resolveOutlineWallSide, resolveWallOutwardOffsetSign, signedLoopArea2D, type PartBounds } from './geometryProcessing';
+import { loopArea2D, pointInPolygon2D, boundsFromGeometry, loopCentroid, distanceToLoop2D, resolveOutlineWallSideByNesting, resolveWallOutwardOffsetSign, signedLoopArea2D, type PartBounds } from './geometryProcessing';
 import {
   classifyRegionKind,
   effectiveOutlineLoop,
@@ -627,7 +627,16 @@ export class MeshIndex {
   }
 
   private indexEdgeLoops(): EdgeLoopFeature[] {
-    const features: EdgeLoopFeature[] = [];
+    interface EdgeLoopCandidate {
+      faceIndices: number[];
+      topLoop: LoopPoint[];
+      bottomLoop: LoopPoint[];
+      topZ: number;
+      bottomZ: number;
+      wallNormal: { x: number; y: number };
+    }
+
+    const candidates: EdgeLoopCandidate[] = [];
 
     for (const faceIndices of this.collectVerticalFaceComponents()) {
       const topLoop = this.extractHorizontalRimLoop(faceIndices, 'top');
@@ -640,23 +649,43 @@ export class MeshIndex {
       if (topZ - bottomZ < 0.2) continue;
 
       const bottomLoop = this.extractHorizontalRimLoop(faceIndices, 'bottom') ?? [];
-      const wallNormal = this.averageWallNormalXY(faceIndices);
-      const wallSide = resolveOutlineWallSide(topLoop, wallNormal.x, wallNormal.y, this.bounds);
-      const normalizedLoop = normalizeEdgeLoopWinding(topLoop, wallSide);
+      candidates.push({
+        faceIndices,
+        topLoop,
+        bottomLoop,
+        topZ,
+        bottomZ,
+        wallNormal: this.averageWallNormalXY(faceIndices),
+      });
+    }
+
+    const allLoops = candidates.map((c) => c.topLoop);
+    const features: EdgeLoopFeature[] = [];
+
+    for (let i = 0; i < candidates.length; i++) {
+      const candidate = candidates[i];
+      const wallSide = resolveOutlineWallSideByNesting(
+        candidate.topLoop,
+        allLoops,
+        i,
+        candidate.wallNormal.x,
+        candidate.wallNormal.y
+      );
+      const normalizedLoop = normalizeEdgeLoopWinding(candidate.topLoop, wallSide);
       const offsetSign = resolveWallOutwardOffsetSign(
         normalizedLoop,
-        wallNormal.x,
-        wallNormal.y,
+        candidate.wallNormal.x,
+        candidate.wallNormal.y,
         wallSide
       );
 
       features.push({
         id: features.length,
-        faceIndices,
+        faceIndices: candidate.faceIndices,
         topLoop: normalizedLoop,
-        bottomLoop,
-        topZ,
-        bottomZ,
+        bottomLoop: candidate.bottomLoop,
+        topZ: candidate.topZ,
+        bottomZ: candidate.bottomZ,
         offsetSign,
         wallSide,
       });

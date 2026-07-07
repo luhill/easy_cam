@@ -355,59 +355,80 @@ export function resolveWallOutwardOffsetSign(
   return wallSide === 'interior' ? -1 : 1;
 }
 
+/** Ray cast from (px, py) toward +X; count edge crossings (even-odd test). */
+export function horizontalRayCrossings(px: number, py: number, loop: LoopPoint[]): number {
+  let crossings = 0;
+  for (let i = 0; i < loop.length; i++) {
+    const a = loop[i];
+    const b = loop[(i + 1) % loop.length];
+    if ((a.y > py) !== (b.y > py)) {
+      const xInt = a.x + ((py - a.y) * (b.x - a.x)) / (b.y - a.y + 1e-12);
+      if (xInt > px) crossings++;
+    }
+  }
+  return crossings;
+}
+
+export function isPointInsideLoopByRay(px: number, py: number, loop: LoopPoint[]): boolean {
+  return horizontalRayCrossings(px, py, loop) % 2 === 1;
+}
+
 /**
- * Exterior vs interior void wall.
- * Large loops (perimeter) → exterior. Small loops use wall normal vs radial
- * direction to distinguish boss outer walls (normal outward) from hole walls
- * (normal inward). Normalized winding: exterior CCW + positive delta,
- * interior CW + negative delta.
+ * Classify wall side by loop nesting: shoot a ray from the loop centroid and test
+ * whether that center lies inside other loops. Walk up the parent chain via the
+ * smallest-area enclosing loop with strictly larger area — even depth is an
+ * exterior material boundary, odd depth is an interior void wall.
  */
+export function resolveOutlineWallSideByNesting(
+  loop: LoopPoint[],
+  allLoops: LoopPoint[][],
+  loopIndex: number,
+  _wallNormalX = 0,
+  _wallNormalY = 0
+): OutlineWallSide {
+  if (loop.length < 3) return 'exterior';
+
+  let depth = 0;
+  let currentIndex = loopIndex;
+  let currentArea = loopArea2D(loop);
+
+  while (true) {
+    const currentCenter = loopCentroid(allLoops[currentIndex]);
+    let parentIndex = -1;
+    let parentArea = Infinity;
+
+    for (let j = 0; j < allLoops.length; j++) {
+      if (j === currentIndex) continue;
+      const otherArea = loopArea2D(allLoops[j]);
+      if (otherArea <= currentArea) continue;
+      if (!isPointInsideLoopByRay(currentCenter.x, currentCenter.y, allLoops[j])) continue;
+      if (otherArea < parentArea) {
+        parentArea = otherArea;
+        parentIndex = j;
+      }
+    }
+
+    if (parentIndex < 0) break;
+    depth++;
+    currentIndex = parentIndex;
+    currentArea = parentArea;
+  }
+
+  return depth % 2 === 1 ? 'interior' : 'exterior';
+}
+
+/** @deprecated Use resolveOutlineWallSideByNesting with all indexed loops. */
 export function resolveOutlineWallSide(
   loop: LoopPoint[],
   wallNormalX: number,
   wallNormalY: number,
-  partBounds?: PartBounds
+  _partBounds?: PartBounds,
+  allLoops?: LoopPoint[][],
+  loopIndex?: number
 ): OutlineWallSide {
-  if (!partBounds || loop.length < 3) return 'exterior';
-
-  const partArea =
-    Math.max(partBounds.maxX - partBounds.minX, 1e-6) *
-    Math.max(partBounds.maxY - partBounds.minY, 1e-6);
-  const loopArea = Math.abs(signedLoopArea2D(loop));
-
-  if (loopArea >= partArea * 0.35) return 'exterior';
-
-  const nLen = Math.hypot(wallNormalX, wallNormalY);
-  if (nLen < 1e-6) return 'interior';
-
-  const nx = wallNormalX / nLen;
-  const ny = wallNormalY / nLen;
-  const center = loopCentroid(loop);
-
-  // On circular/pocket rims, pick the rim point whose outward radial best matches
-  // the wall face normal, then probe whether void lies along +normal.
-  let rimPoint = loop[0];
-  let bestAlign = -Infinity;
-  for (const p of loop) {
-    const dx = p.x - center.x;
-    const dy = p.y - center.y;
-    const len = Math.hypot(dx, dy);
-    if (len < 1e-6) continue;
-    const align = nx * (dx / len) + ny * (dy / len);
-    if (align > bestAlign) {
-      bestAlign = align;
-      rimPoint = p;
-    }
-  }
-
-  const probeDist = 0.3;
-  const voidAlongNormal = pointInPolygon2D(
-    rimPoint.x + nx * probeDist,
-    rimPoint.y + ny * probeDist,
-    loop
-  );
-
-  return voidAlongNormal ? 'interior' : 'exterior';
+  const loops = allLoops ?? [loop];
+  const index = loopIndex ?? 0;
+  return resolveOutlineWallSideByNesting(loop, loops, index, wallNormalX, wallNormalY);
 }
 
 /**

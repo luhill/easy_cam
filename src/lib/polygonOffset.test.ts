@@ -4,7 +4,7 @@
 import { offsetClosedLoop2D } from './polygonOffset';
 import {
   offsetLoop2DMinkowski,
-  resolveOutlineWallSide,
+  resolveOutlineWallSideByNesting,
   resolveWallOutwardOffsetSign,
   signedLoopArea2D,
 } from './geometryProcessing';
@@ -85,6 +85,15 @@ function signedOffset(
   return offsetLoop2DMinkowski(loop, magnitude * sign, segLen, wallSide);
 }
 
+function circleLoop(cx: number, cy: number, r: number, segments = 16): LoopPoint[] {
+  const loop: LoopPoint[] = [];
+  for (let i = 0; i < segments; i++) {
+    const t = (2 * Math.PI * i) / segments;
+    loop.push(pt(cx + r * Math.cos(t), cy + r * Math.sin(t)));
+  }
+  return loop;
+}
+
 // CCW square 0..10 — exterior
 const square: LoopPoint[] = [
   pt(0, 0),
@@ -117,26 +126,68 @@ const tearBounds = loopBounds(tearIn);
 assert(tearBounds.maxY < 19.5, 'interior teardrop should inset into void');
 assert(!hasSelfIntersection(tearIn), 'interior teardrop offset must not self-intersect');
 
-const squarePartBounds = { minX: 0, maxX: 10, minY: 0, maxY: 10, minZ: 0, maxZ: 10 };
-const largePartBounds = { minX: 0, maxX: 50, minY: 0, maxY: 30, minZ: 0, maxZ: 10 };
-assert(resolveOutlineWallSide(square, 0, 0, squarePartBounds) === 'exterior', 'large loop is exterior');
-assert(resolveOutlineWallSide(teardrop, 0, 0, largePartBounds) === 'interior', 'small loop is interior');
-
-// Cylindrical boss outer wall: small circle, face normal points radially outward.
-const bossR = 8;
-const bossLoop: LoopPoint[] = [];
-for (let i = 0; i < 16; i++) {
-  const t = (2 * Math.PI * i) / 16;
-  bossLoop.push(pt(20 + bossR * Math.cos(t), 15 + bossR * Math.sin(t)));
-}
-const bossNormalX = Math.cos(0);
-const bossNormalY = Math.sin(0);
+// Nesting: lone perimeter loop is exterior
 assert(
-  resolveOutlineWallSide(bossLoop, bossNormalX, bossNormalY, largePartBounds) === 'exterior',
-  'boss outer wall with outward normal should be exterior'
+  resolveOutlineWallSideByNesting(square, [square], 0) === 'exterior',
+  'unnested loop is exterior'
+);
+
+// Nesting: pocket centroid inside part perimeter loop
+const partPerimeter: LoopPoint[] = [
+  pt(0, 0),
+  pt(40, 0),
+  pt(40, 30),
+  pt(0, 30),
+];
+const allWithPocket = [partPerimeter, teardrop];
+assert(
+  resolveOutlineWallSideByNesting(teardrop, allWithPocket, 1) === 'interior',
+  'pocket nested inside perimeter is interior'
+);
+
+// Cylindrical boss outer wall alone
+const bossLoop = circleLoop(20, 15, 8);
+assert(
+  resolveOutlineWallSideByNesting(bossLoop, [bossLoop], 0, 1, 0) === 'exterior',
+  'isolated boss outer wall is exterior'
 );
 const bossOut = signedOffset(bossLoop, 1, 'exterior');
 const bossBounds = loopBounds(bossOut);
-assert(bossBounds.maxX > 20 + bossR + 0.5, 'boss outer wall should offset outward');
+assert(bossBounds.maxX > 28.5, 'boss outer wall should offset outward');
+
+// Coaxial boss + hole: boss OD exterior, hole ID interior
+const holeLoop = circleLoop(20, 15, 4);
+const bossAndHole = [bossLoop, holeLoop];
+assert(
+  resolveOutlineWallSideByNesting(bossLoop, bossAndHole, 0, 1, 0) === 'exterior',
+  'boss OD nested in hole centroid but faces outward'
+);
+assert(
+  resolveOutlineWallSideByNesting(holeLoop, bossAndHole, 1, -1, 0) === 'interior',
+  'hole ID inside boss is interior'
+);
+
+// Island inside pocket: even nesting depth → exterior
+const island: LoopPoint[] = [
+  pt(8, 8),
+  pt(12, 8),
+  pt(12, 12),
+  pt(8, 12),
+];
+const pocket: LoopPoint[] = [
+  pt(0, 0),
+  pt(20, 0),
+  pt(20, 20),
+  pt(0, 20),
+];
+const partWithPocketAndIsland = [partPerimeter, pocket, island];
+assert(
+  resolveOutlineWallSideByNesting(island, partWithPocketAndIsland, 2) === 'exterior',
+  'island nested inside pocket (depth 2) is exterior'
+);
+assert(
+  resolveOutlineWallSideByNesting(pocket, partWithPocketAndIsland, 1) === 'interior',
+  'pocket nested inside part (depth 1) is interior'
+);
 
 console.log('polygonOffset tests passed');
