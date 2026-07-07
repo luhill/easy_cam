@@ -247,7 +247,7 @@ export function buildOutlineSplineEntryGuide(
   }
 
   const startHandle = Math.min(Math.max(chord * 0.22, sampleSpacing), chord * 0.38);
-  const endHandle = Math.min(Math.max(chord * 0.48, sampleSpacing * 1.5), chord * 0.72);
+  const endHandle = Math.max(chord * 0.72, sampleSpacing * 2.5);
   const startDir = startTangent ?? { x: dx / chord, y: dy / chord };
   const sLen = Math.hypot(startDir.x, startDir.y) || 1;
   const t0 = {
@@ -316,7 +316,7 @@ export function buildHelixOutlineSplineLeadIn(
 
   const startTan = helixBoreExitTangent(boreCenter, boreBottom, rotDir);
   const startHandle = Math.min(Math.max(chord * 0.12, sampleSpacing * 0.4), chord * 0.22);
-  const endHandle = Math.min(Math.max(chord * 0.16, sampleSpacing * 0.5), chord * 0.28);
+  const endHandle = Math.max(chord * 0.72, sampleSpacing * 2.5);
   const sLen = Math.hypot(startTan.x, startTan.y) || 1;
   const t0 = {
     x: (startTan.x / sLen) * startHandle,

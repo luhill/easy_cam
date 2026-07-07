@@ -52,6 +52,7 @@ import {
   helixRadiusTaperedFromStart,
   interiorHelixRadiusAtZ,
   isGuideOutwardCCW,
+  resolveHelixRadius,
   resolveHelixRotationDir,
   resolveInteriorHelixRadius,
   resolveInteriorHelixRotationDir,
@@ -288,10 +289,13 @@ function generateStandardHelixOutlinePath(
   const { traverse, arcGuide } = layout;
   if (traverse.length === 0) return points;
   const approachZ = outlineApproachWorldZ(topZ, globals.safeHeight, settings.zStartOffset);
+  const helixR = resolveHelixRadius(settings);
   const helixOpts = { stockTopZ: topZ, globals };
   const plungeFeed = settings.plungeRate;
   const cutFeed = settings.feedRate;
   const rotDir = resolveHelixRotationDir(settings.climbMilling);
+  const segmentsPerRev = helixSegmentsPerRev(globals.resolution);
+  const stepoverIncrement = adaptiveForwardIncrement(settings.toolDiameter, settings.stepover);
   const sampleSpacing = pathSampleSpacing(globals.resolution);
 
   appendOutlineApproachToStart(points, toolStart, safeZ, approachZ, plungeFeed);
@@ -343,20 +347,32 @@ function generateStandardHelixOutlinePath(
         if (!appendPoints(points, leadIn)) break;
       }
     } else {
-      const last = lastPathPoint(points);
-      const rampStart = last ?? joinPoint;
-      const layerRamp = generateContourLinearRamp(
-        traverse,
-        rampStart,
+      appendFreshSlotWidthBore(
+        points,
+        toolStart,
         layerPrevZ,
         layerZ,
-        outlineRampLengthMm(settings),
-        settings.rampAngleDeg,
-        plungeFeed,
-        sampleSpacing,
-        layout.guideTraverseSign >= 0
+        helixR,
+        settings,
+        helixOpts
       );
-      if (!appendPoints(points, layerRamp.points)) break;
+
+      if (
+        !appendBoreBottomWidenAndLeadIn(
+          points,
+          toolStart,
+          layerZ,
+          helixR,
+          helixRadiusTaperedFromStart(settings, layerZ, layerPrevZ, helixR),
+          stepoverIncrement,
+          rotDir,
+          segmentsPerRev,
+          plungeFeed,
+          { x: joinPoint.x, y: joinPoint.y, z: layerZ, feedRate: cutFeed }
+        )
+      ) {
+        break;
+      }
     }
 
     const loopStartS = layout.contourJoinS;
