@@ -155,6 +155,15 @@ const spike = acuteV[2];
 for (const marker of acute.spurMarkers) {
   const tip = acute.guide[marker.peakIdx];
   const slotAnchor = acute.guide[marker.miterIdx];
+  const returnPt = acute.guide[marker.returnIdx];
+  assert(
+    Math.hypot(returnPt.x - slotAnchor.x, returnPt.y - slotAnchor.y) < 0.02,
+    'spur branch must return to A before continuing the centerline'
+  );
+  assert(
+    marker.peakIdx === marker.miterIdx + 1 && marker.returnIdx === marker.miterIdx + 2,
+    'spur branch must be exactly A, B, A with no densified backtracking'
+  );
   const distA = Math.hypot(slotAnchor.x - spike.x, slotAnchor.y - spike.y);
   const distB = Math.hypot(tip.x - spike.x, tip.y - spike.y);
   assert(
