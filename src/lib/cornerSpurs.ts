@@ -590,12 +590,23 @@ function indexAfterCornerCap(
   maxInternalAngleDeg: number
 ): number {
   const n = guide.length;
+  const prev = guide[(spurIdx - 1 + n) % n];
+  const curr = guide[spurIdx];
+  const next = guide[(spurIdx + 1) % n];
+  const anchorAngle = vertexInternalAngleDeg(prev, curr, next);
+
+  // Round join already exposes a sharp vertex — continue on the next point.
+  if (anchorAngle < 120) {
+    return Math.min(spurIdx + 1, n);
+  }
+
+  // Skip obtuse fillet-arc vertices that replace a rounded-off corner.
   let j = spurIdx + 1;
   while (j < n) {
-    const prev = guide[j - 1];
-    const curr = guide[j];
-    const next = guide[(j + 1) % n];
-    const internalAngle = vertexInternalAngleDeg(prev, curr, next);
+    const prevG = guide[j - 1];
+    const currG = guide[j];
+    const nextG = guide[(j + 1) % n];
+    const internalAngle = vertexInternalAngleDeg(prevG, currG, nextG);
     if (internalAngle < maxInternalAngleDeg) {
       return j;
     }

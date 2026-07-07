@@ -70,4 +70,46 @@ assert(
   'spur must branch from the walked centerline without a large off-path jump'
 );
 
+assert(
+  result.guide.length > marker.returnIdx + 20,
+  'centerline must continue around the full loop after the spur'
+);
+
+function minDistToPartBoundary(
+  x: number,
+  y: number,
+  poly: { x: number; y: number }[]
+): number {
+  let minDist = Infinity;
+  for (let j = 0; j < poly.length; j++) {
+    const a = poly[j];
+    const b = poly[(j + 1) % poly.length];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy;
+    let t = 0;
+    if (len2 > 0) {
+      t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / len2));
+    }
+    const d = Math.hypot(x - (a.x + t * dx), y - (a.y + t * dy));
+    if (d < minDist) minDist = d;
+  }
+  return minDist;
+}
+
+const slotOffset = rough.slotCenterOffset;
+const spurOutboundIdx = marker.miterIdx;
+const spurReturnIdx = marker.returnIdx;
+for (let i = 1; i < result.guide.length; i++) {
+  if (i === spurOutboundIdx + 1 || i === spurReturnIdx) continue;
+  const mid = {
+    x: (result.guide[i - 1].x + result.guide[i].x) / 2,
+    y: (result.guide[i - 1].y + result.guide[i].y) / 2,
+  };
+  assert(
+    minDistToPartBoundary(mid.x, mid.y, loop.topLoop) >= slotOffset * 0.9,
+    'non-spur centerline segments must stay on the slot offset envelope'
+  );
+}
+
 console.log('spurTestSpurs tests passed');
