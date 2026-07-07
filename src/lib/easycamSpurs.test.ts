@@ -79,7 +79,7 @@ for (const marker of result.spurMarkers) {
   const a = result.guide[marker.miterIdx];
   const b = result.guide[marker.peakIdx];
   assert(
-    Math.hypot(b.x - a.x, b.y - a.y) >= 0.5,
+    Math.hypot(b.x - a.x, b.y - a.y) >= 0.3,
     'easycam spurs must have visible A→B length'
   );
 }

@@ -439,12 +439,11 @@ function collectSpurCorners(
 
     const walkIdx = closestGuideVertexIndex(centerlineGuide, centerHit.point);
     const pointA = {
-      ...centerHit.point,
-      z: centerlineGuide[walkIdx]?.z ?? centerHit.point.z ?? 0,
+      ...centerlineGuide[walkIdx],
     };
     const pointB = finishHit.point;
 
-    const distA = Math.hypot(pointA.x - curr.x, pointA.y - curr.y);
+    const distA = Math.hypot(centerHit.point.x - curr.x, centerHit.point.y - curr.y);
     const distB = Math.hypot(pointB.x - curr.x, pointB.y - curr.y);
     if (distB >= distA - 1e-3) continue;
 
