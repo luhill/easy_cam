@@ -1268,9 +1268,9 @@ export function generateOpenPolylineLinearRamp(
       continue;
     }
 
-    let legLen = Math.min(rampLengthMm, remaining);
-    const legDz = rampLegDz(legLen, rampAngleDeg, currentZ - toZ);
-    legLen = legDz / Math.tan(angleRad);
+    const legDz = Math.min(dzPerLeg, currentZ - toZ);
+    let legLen = legDz / Math.tan(angleRad);
+    legLen = Math.min(legLen, remaining);
     if (legLen < 1e-6) {
       forward = !forward;
       iterations++;
@@ -1298,8 +1298,7 @@ export function generateOpenPolylineLinearRamp(
     currentS = forward ? currentS + legLen : currentS - legLen;
 
     if (currentZ <= toZ + 1e-5) break;
-    if (forward && currentS >= total - 1e-5) forward = false;
-    else if (!forward && currentS <= 1e-5) forward = true;
+    forward = !forward;
     iterations++;
   }
 
