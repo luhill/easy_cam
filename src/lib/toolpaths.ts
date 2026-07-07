@@ -174,8 +174,6 @@ function resolveOutlinePathJobs(
         offsetContext: {
           offsetSign: el.offsetSign ?? 1,
           wallSide: el.wallSide ?? 'exterior',
-          voidNormalX: el.voidNormalX,
-          voidNormalY: el.voidNormalY,
         },
       }));
   }
@@ -750,9 +748,7 @@ function generateAdaptiveTrochoidalPath(
     segLen,
     cornerSpurOptionsForRoughing(settings),
     offsetContext.offsetSign,
-    offsetContext.wallSide,
-    offsetContext.voidNormalX,
-    offsetContext.voidNormalY
+    offsetContext.wallSide
   );
   const { arcGuide, spurRanges } = mapSpurRangesToArcGuide(
     slotCenterGuide,
@@ -979,9 +975,7 @@ function generateFinishingOutline(
     segLen,
     cornerSpurOptionsForRoughing(settings),
     offsetContext.offsetSign,
-    offsetContext.wallSide,
-    offsetContext.voidNormalX,
-    offsetContext.voidNormalY
+    offsetContext.wallSide
   );
   if (finishGuide.length < 3) return [];
 

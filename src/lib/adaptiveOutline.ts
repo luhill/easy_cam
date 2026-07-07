@@ -1,7 +1,7 @@
 import type { LoopPoint, OperationDefaults } from '../types/operations';
 import type { ToolOrigin } from './geometryProcessing';
 import type { CornerSpurOptions } from './cornerSpurs';
-import { offsetLoop2DMinkowski, distanceToLoop2D, closestPointOnLoop2D, resolveOutlineOffsetDelta } from './geometryProcessing';
+import { offsetLoop2DMinkowski, distanceToLoop2D, closestPointOnLoop2D } from './geometryProcessing';
 import { adaptiveForwardIncrement } from './trochoidalPath';
 import { ensureEntryOutsidePart, resolveBoreOuterRadius } from './entryPath';
 
@@ -127,18 +127,17 @@ export function computeDefaultEntryPoint(
   settings: OperationDefaults,
   toolOrigin?: Pick<ToolOrigin, 'x' | 'y'> | null,
   offsetSign = 1,
-  wallSide: 'exterior' | 'interior' = 'exterior',
-  voidNormalX?: number,
-  voidNormalY?: number
+  wallSide: 'exterior' | 'interior' = 'exterior'
 ): { x: number; y: number } {
   if (partLoop.length < 2) return { x: toolOrigin?.x ?? 0, y: toolOrigin?.y ?? 0 };
 
   const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
-  const innerOffset =
-    voidNormalX !== undefined && voidNormalY !== undefined
-      ? resolveOutlineOffsetDelta(partLoop, voidNormalX, voidNormalY, slot.innerCenterOffset)
-      : slot.innerCenterOffset * offsetSign;
-  const guide = offsetLoop2DMinkowski(partLoop, innerOffset, 0.3, wallSide);
+  const guide = offsetLoop2DMinkowski(
+    partLoop,
+    slot.innerCenterOffset * offsetSign,
+    0.3,
+    wallSide
+  );
   const centerDist = minimumEntryCenterDist(settings);
   const innerDist = slot.minCenterDist;
   const outwardOffset = boreCenterOffsetFromInnerGuide(settings);
@@ -166,12 +165,11 @@ export function computeDefaultEntryPoint(
   }
 
   const outward = closestPointOnLoop2D(bestGuide.x, bestGuide.y, partLoop);
-  const bumpSign = innerOffset >= 0 ? 1 : -1;
   return ensureEntryOutsidePart(
     partLoop,
     {
-      x: bestGuide.x + outward.outX * outwardOffset * bumpSign,
-      y: bestGuide.y + outward.outY * outwardOffset * bumpSign,
+      x: bestGuide.x + outward.outX * outwardOffset * offsetSign,
+      y: bestGuide.y + outward.outY * outwardOffset * offsetSign,
     },
     centerDist * 0.98
   );

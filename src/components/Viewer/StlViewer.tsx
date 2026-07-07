@@ -607,8 +607,6 @@ function StlMesh({
           edgeLoopId: group.edgeLoopId,
           offsetSign: group.offsetSign,
           wallSide: group.wallSide,
-          voidNormalX: group.voidNormalX,
-          voidNormalY: group.voidNormalY,
         };
         const existingEdgeLoops = getSelectedEdgeLoops(existing);
 

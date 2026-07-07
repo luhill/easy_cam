@@ -130,9 +130,7 @@ export function buildSlotCenterlineArcGuide(
     segLen,
     cornerSpurOptionsForRoughing(settings),
     offsetContext.offsetSign,
-    offsetContext.wallSide,
-    offsetContext.voidNormalX,
-    offsetContext.voidNormalY
+    offsetContext.wallSide
   );
   return buildArcLengthGuide(slotCenterGuide, pathSampleSpacing(globals.resolution));
 }

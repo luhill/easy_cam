@@ -345,69 +345,6 @@ export function partCentroidXY(bounds: PartBounds): { x: number; y: number } {
   };
 }
 
-/** Orient mesh wall normal to point into the void (tool side). */
-export function orientNormalIntoVoid(
-  loop: LoopPoint[],
-  wallNormalX: number,
-  wallNormalY: number,
-  probeDelta = 0.5
-): { nx: number; ny: number } {
-  const nLen = Math.hypot(wallNormalX, wallNormalY);
-  if (nLen < 1e-9 || loop.length < 3) return { nx: 1, ny: 0 };
-
-  let nx = wallNormalX / nLen;
-  let ny = wallNormalY / nLen;
-  const probe = Math.max(Math.abs(probeDelta), 0.25);
-  const center = loopCentroid(loop);
-
-  const plusOut = offsetClosedLoop2D(loop, probe, { maxSegmentLen: 0 });
-  const minusOut = offsetClosedLoop2D(loop, -probe, { maxSegmentLen: 0 });
-  const plusC = loopCentroid(plusOut);
-  const minusC = loopCentroid(minusOut);
-
-  const plusDot = (plusC.x - center.x) * nx + (plusC.y - center.y) * ny;
-  const minusDot = (minusC.x - center.x) * nx + (minusC.y - center.y) * ny;
-
-  if (plusDot < minusDot) {
-    nx = -nx;
-    ny = -ny;
-  }
-
-  return { nx, ny };
-}
-
-/**
- * Signed Clipper delta that moves the loop toward the void along voidNormal.
- * Empirical — works regardless of loop trace winding or mesh normal orientation.
- */
-export function resolveOutlineOffsetDelta(
-  loop: LoopPoint[],
-  voidNormalX: number,
-  voidNormalY: number,
-  offsetMagnitude: number
-): number {
-  const mag = Math.abs(offsetMagnitude);
-  if (mag < 1e-9 || loop.length < 3) return 0;
-
-  const nLen = Math.hypot(voidNormalX, voidNormalY);
-  if (nLen < 1e-9) return mag;
-
-  const nx = voidNormalX / nLen;
-  const ny = voidNormalY / nLen;
-  const probe = Math.min(mag * 0.4, Math.max(mag * 0.25, 0.25));
-  const center = loopCentroid(loop);
-
-  const plusOut = offsetClosedLoop2D(loop, probe, { maxSegmentLen: 0 });
-  const minusOut = offsetClosedLoop2D(loop, -probe, { maxSegmentLen: 0 });
-  const plusC = loopCentroid(plusOut);
-  const minusC = loopCentroid(minusOut);
-
-  const plusDot = (plusC.x - center.x) * nx + (plusC.y - center.y) * ny;
-  const minusDot = (minusC.x - center.x) * nx + (minusC.y - center.y) * ny;
-
-  return plusDot >= minusDot ? mag : -mag;
-}
-
 /** +1 or −1 so offset moves away from selected wall faces (given normalized winding). */
 export function resolveWallOutwardOffsetSign(
   _loop: LoopPoint[],
@@ -418,35 +355,24 @@ export function resolveWallOutwardOffsetSign(
   return wallSide === 'interior' ? -1 : 1;
 }
 
-/** Whether the wall faces bound an exterior perimeter or an interior void. */
+/**
+ * Exterior vs interior void — loop area relative to part footprint.
+ * Normalized winding: exterior CCW + positive delta, interior CW + negative delta.
+ */
 export function resolveOutlineWallSide(
   loop: LoopPoint[],
-  wallNormalX: number,
-  wallNormalY: number,
+  _wallNormalX: number,
+  _wallNormalY: number,
   partBounds?: PartBounds
 ): OutlineWallSide {
-  const voidNormal = orientNormalIntoVoid(loop, wallNormalX, wallNormalY);
-  const loopCenter = loopCentroid(loop);
-  const anchor = closestPointOnLoop2D(loopCenter.x, loopCenter.y, loop);
-  const probeDist = 0.3;
+  if (!partBounds || loop.length < 3) return 'exterior';
 
-  const voidInside = pointInPolygon2D(
-    anchor.x + voidNormal.nx * probeDist,
-    anchor.y + voidNormal.ny * probeDist,
-    loop
-  );
+  const partArea =
+    Math.max(partBounds.maxX - partBounds.minX, 1e-6) *
+    Math.max(partBounds.maxY - partBounds.minY, 1e-6);
+  const loopArea = Math.abs(signedLoopArea2D(loop));
 
-  if (partBounds) {
-    const partArea =
-      Math.max(partBounds.maxX - partBounds.minX, 1e-6) *
-      Math.max(partBounds.maxY - partBounds.minY, 1e-6);
-    const loopArea = Math.abs(signedLoopArea2D(loop));
-    if (loopArea < partArea * 0.35) return 'interior';
-    if (!voidInside) return 'exterior';
-    return 'exterior';
-  }
-
-  return voidInside ? 'interior' : 'exterior';
+  return loopArea < partArea * 0.35 ? 'interior' : 'exterior';
 }
 
 /**

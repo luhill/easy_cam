@@ -71,9 +71,6 @@ export interface EdgeLoopSelection {
   /** +1 / −1 — tool path offsets away from selected wall faces */
   offsetSign?: number;
   wallSide?: 'exterior' | 'interior';
-  /** Oriented unit normal pointing into the void (tool side). */
-  voidNormalX?: number;
-  voidNormalY?: number;
 }
 
 export interface SelectedGeometry {

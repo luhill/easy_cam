@@ -99,7 +99,7 @@ function removeDuplicateClosingPoint(loop: LoopPoint[]): LoopPoint[] {
  * - exterior walls: CCW → positive delta expands away from the part
  * - interior void walls: CW → negative delta insets into the void
  *
- * The signed `deltaMm` argument should already include offsetSign.
+ * Pass `magnitude * offsetSign` as deltaMm (offsetSign: exterior +1, interior −1).
  */
 export function offsetClosedLoop2D(
   loop: LoopPoint[],

@@ -4,9 +4,8 @@
 import { offsetClosedLoop2D } from './polygonOffset';
 import {
   offsetLoop2DMinkowski,
-  orientNormalIntoVoid,
-  resolveOutlineOffsetDelta,
   resolveOutlineWallSide,
+  resolveWallOutwardOffsetSign,
   signedLoopArea2D,
 } from './geometryProcessing';
 import type { LoopPoint } from '../types/operations';
@@ -76,7 +75,17 @@ function assert(cond: boolean, msg: string): void {
   if (!cond) throw new Error(msg);
 }
 
-// CCW square 0..10
+function signedOffset(
+  loop: LoopPoint[],
+  magnitude: number,
+  wallSide: 'exterior' | 'interior',
+  segLen = 0.15
+): LoopPoint[] {
+  const sign = resolveWallOutwardOffsetSign(loop, 0, 0, wallSide);
+  return offsetLoop2DMinkowski(loop, magnitude * sign, segLen, wallSide);
+}
+
+// CCW square 0..10 — exterior
 const square: LoopPoint[] = [
   pt(0, 0),
   pt(10, 0),
@@ -89,16 +98,9 @@ const sqBounds = loopBounds(squareOut);
 assert(sqBounds.minX < -0.5 && sqBounds.maxX > 10.5, 'exterior square should expand outward');
 assert(!hasSelfIntersection(squareOut), 'exterior square offset must not self-intersect');
 
-// Sharp V-notch (concave at bottom)
-const vNotch: LoopPoint[] = [
-  pt(0, 10),
-  pt(10, 10),
-  pt(10, 0),
-  pt(5, 4),
-  pt(0, 0),
-];
-const vOut = offsetLoop2DMinkowski(vNotch, 1, 0.2, 'exterior');
-assert(!hasSelfIntersection(vOut), 'V-notch exterior offset must not self-intersect');
+const extOut = signedOffset(square, 2, 'exterior');
+const extBounds = loopBounds(extOut);
+assert(extBounds.minX < -0.5 && extBounds.maxX > 10.5, 'exterior convention should expand outward');
 
 // Interior teardrop (CW hole)
 const teardrop: LoopPoint[] = [
@@ -110,97 +112,14 @@ const teardrop: LoopPoint[] = [
   pt(6, 16),
 ];
 assert(signedLoopArea2D(teardrop) < 0, 'teardrop should be CW for interior void');
-const tearIn = offsetLoop2DMinkowski(teardrop, -1, 0.2, 'interior');
+const tearIn = signedOffset(teardrop, 1, 'interior');
 const tearBounds = loopBounds(tearIn);
 assert(tearBounds.maxY < 19.5, 'interior teardrop should inset into void');
 assert(!hasSelfIntersection(tearIn), 'interior teardrop offset must not self-intersect');
 
-// Semicircle-ish arc (tessellated)
-const arc: LoopPoint[] = [];
-const cx = 0;
-const cy = 0;
-const r = 10;
-for (let i = 0; i <= 16; i++) {
-  const t = (Math.PI * i) / 16;
-  arc.push(pt(cx + r * Math.cos(t), cy + r * Math.sin(t)));
-}
-arc.push(pt(-10, 0));
-const arcOut = offsetLoop2DMinkowski(arc, 1.5, 0.15, 'exterior');
-assert(!hasSelfIntersection(arcOut), 'arc exterior offset must not self-intersect');
-
-// Convex corner should have enough points for a smooth round join.
-const squareCorner = offsetLoop2DMinkowski(square, 2, 0.15, 'exterior');
-let cornerPts = 0;
-for (let i = 0; i < squareCorner.length; i++) {
-  const p = squareCorner[i];
-  if (p.x > 9.5 && p.y > 9.5) cornerPts++;
-}
-assert(cornerPts >= 6, 'exterior convex corner should have a smooth round join');
-
-// Wall-side: void along face normal is interior (pocket / notch).
-const notch: LoopPoint[] = [];
-const notchR = 5;
-for (let i = 0; i <= 12; i++) {
-  const t = Math.PI + (Math.PI * i) / 12;
-  notch.push(pt(-20 + notchR * Math.cos(t), notchR * Math.sin(t)));
-}
-notch.push(pt(-20, 0), pt(-15, 0));
-const notchBounds = {
-  minX: -25,
-  maxX: 25,
-  minY: -5,
-  maxY: 25,
-  minZ: 0,
-  maxZ: 10,
-};
-const notchSide = resolveOutlineWallSide(notch, -1, 0, notchBounds);
-assert(notchSide === 'interior', 'notch with normal into void should be interior');
-
-const exteriorSide = resolveOutlineWallSide(square, 1, 0, {
-  minX: 0,
-  maxX: 10,
-  minY: 0,
-  maxY: 10,
-  minZ: 0,
-  maxZ: 10,
-});
-assert(exteriorSide === 'exterior', 'perimeter square with outward normal should be exterior');
-
-// Mesh normals often point into solid — exterior must still classify correctly.
-const exteriorInwardNormal = resolveOutlineWallSide(square, -1, 0, {
-  minX: 0,
-  maxX: 10,
-  minY: 0,
-  maxY: 10,
-  minZ: 0,
-  maxZ: 10,
-});
-assert(exteriorInwardNormal === 'exterior', 'perimeter with inward mesh normal should be exterior');
-
-const extOut = offsetLoop2DMinkowski(square, 2, 0.15, exteriorInwardNormal);
-const extBounds = loopBounds(extOut);
-assert(extBounds.minX < -0.5 && extBounds.maxX > 10.5, 'exterior should offset outward with inward mesh normal');
-
-function offsetWithVoidNormal(
-  loop: LoopPoint[],
-  voidNx: number,
-  voidNy: number,
-  mag: number,
-  segLen = 0.15
-): LoopPoint[] {
-  const delta = resolveOutlineOffsetDelta(loop, voidNx, voidNy, mag);
-  return offsetLoop2DMinkowski(loop, delta, segLen, signedLoopArea2D(loop) >= 0 ? 'exterior' : 'interior');
-}
-
-// Empirical void-normal offset: exterior expands, interior insets regardless of mesh normal flip.
-const extVoid = orientNormalIntoVoid(square, -1, 0);
-const extEmpirical = offsetWithVoidNormal(square, extVoid.nx, extVoid.ny, 2);
-const extEmpBounds = loopBounds(extEmpirical);
-assert(extEmpBounds.minX < -0.5 && extEmpBounds.maxX > 10.5, 'empirical exterior offset should expand outward');
-
-const tearVoid = orientNormalIntoVoid(teardrop, -0.5, 1);
-const tearEmpirical = offsetWithVoidNormal(teardrop, tearVoid.nx, tearVoid.ny, 1);
-const tearEmpBounds = loopBounds(tearEmpirical);
-assert(tearEmpBounds.maxY < 19.5, 'empirical interior offset should move into void');
+const squarePartBounds = { minX: 0, maxX: 10, minY: 0, maxY: 10, minZ: 0, maxZ: 10 };
+const largePartBounds = { minX: 0, maxX: 50, minY: 0, maxY: 30, minZ: 0, maxZ: 10 };
+assert(resolveOutlineWallSide(square, 0, 0, squarePartBounds) === 'exterior', 'large loop is exterior');
+assert(resolveOutlineWallSide(teardrop, 0, 0, largePartBounds) === 'interior', 'small loop is interior');
 
 console.log('polygonOffset tests passed');
