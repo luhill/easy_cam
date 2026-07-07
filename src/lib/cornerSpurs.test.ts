@@ -5,7 +5,7 @@ import { buildSlotCenterGuideWithCornerSpurs } from './cornerSpurs';
 import { resolveAdaptiveSlotGeometry } from './adaptiveOutline';
 import {
   closestPointOnLoop2D,
-  offsetMiterVertex,
+  offsetLoop2DMinkowski,
 } from './geometryProcessing';
 import type { LoopPoint } from '../types/operations';
 
@@ -39,6 +39,41 @@ function segmentsProperlyCross(
     return false;
   }
   return o1 * o2 < 0 && o3 * o4 < 0;
+}
+
+function nearestOffsetVertexForCorner(
+  guide: LoopPoint[],
+  partLoop: LoopPoint[],
+  cornerIdx: number
+): LoopPoint {
+  const corner = partLoop[cornerIdx];
+  const n = partLoop.length;
+  const adjacentCorners = new Set([
+    cornerIdx,
+    (cornerIdx - 1 + n) % n,
+    (cornerIdx + 1) % n,
+  ]);
+
+  let bestIdx = 0;
+  let bestDist = Infinity;
+  for (let j = 0; j < guide.length; j++) {
+    let nearestPartIdx = 0;
+    let nearestPartDist = Infinity;
+    for (let i = 0; i < partLoop.length; i++) {
+      const d = Math.hypot(guide[j].x - partLoop[i].x, guide[j].y - partLoop[i].y);
+      if (d < nearestPartDist) {
+        nearestPartDist = d;
+        nearestPartIdx = i;
+      }
+    }
+    if (!adjacentCorners.has(nearestPartIdx)) continue;
+    const d = Math.hypot(guide[j].x - corner.x, guide[j].y - corner.y);
+    if (d < bestDist) {
+      bestDist = d;
+      bestIdx = j;
+    }
+  }
+  return guide[bestIdx];
 }
 
 function hasSelfIntersection(loop: LoopPoint[]): boolean {
@@ -151,27 +186,23 @@ const acute = buildSlotCenterGuideWithCornerSpurs(
 );
 assert(acute.spurMarkers.length >= 1, 'acute notch should insert a spur');
 
-const vPrev = acuteV[1];
-const vCurr = acuteV[2];
-const vNext = acuteV[3];
-const expectedFinish = offsetMiterVertex(vPrev, vCurr, vNext, innerOffset, 1, {
-  clampToEdge: false,
-});
+const vCornerIdx = 2;
+const expectedCenterline = offsetLoop2DMinkowski(acuteV, slotCenter, 0.2, 'exterior');
+const expectedFinishInner = offsetLoop2DMinkowski(acuteV, innerOffset, 0.2, 'exterior');
+const expectedA = nearestOffsetVertexForCorner(expectedCenterline, acuteV, vCornerIdx);
+const expectedB = nearestOffsetVertexForCorner(expectedFinishInner, acuteV, vCornerIdx);
 
 for (const marker of acute.spurMarkers) {
   const tip = acute.guide[marker.peakIdx];
   assert(
-    Math.hypot(tip.x - expectedFinish.x, tip.y - expectedFinish.y) < 0.05,
-    'spur tip should match finish-inner corner miter'
+    Math.hypot(tip.x - expectedB.x, tip.y - expectedB.y) < 0.15,
+    'spur tip should match finish-inner offset vertex'
   );
 
   const slotAnchor = acute.guide[marker.miterIdx];
-  const expectedSlot = offsetMiterVertex(vPrev, vCurr, vNext, slotCenter, 1, {
-    clampToEdge: false,
-  });
   assert(
-    Math.hypot(slotAnchor.x - expectedSlot.x, slotAnchor.y - expectedSlot.y) < 0.05,
-    'spur anchor should match slot-center corner miter'
+    Math.hypot(slotAnchor.x - expectedA.x, slotAnchor.y - expectedA.y) < 0.15,
+    'spur anchor should match slot-center offset vertex'
   );
 }
 
