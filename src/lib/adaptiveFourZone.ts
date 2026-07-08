@@ -154,7 +154,7 @@ export function trochoidOrbitAngleAtPhase(phase: number, rotSign: number): numbe
     const u = phase / CUT_PHASE_START;
     theta = -rotSign * (Math.PI * u);
   }
-  return theta + rotSign * CUT_PHASE_ROTATION;
+  return theta - rotSign * CUT_PHASE_ROTATION;
 }
 
 export type AdaptiveOutlineSide = 'exterior' | 'interior';
