@@ -1053,6 +1053,34 @@ function SceneContent({
     [adaptiveEntry, updateOperation]
   );
 
+  const snapEntryToolStart = useCallback(
+    (x: number, y: number) => {
+      if (!adaptiveEntry?.op.geometry?.loops?.[0]) return { x, y };
+      const loop = adaptiveEntry.op.geometry.loops[0];
+      const offsetContext = resolveOutlineOffsetContext(adaptiveEntry.op.geometry, loop);
+      return resolveAdaptiveEntryPoint(
+        loop,
+        adaptiveEntry.op.settings,
+        { x, y },
+        toolOrigin,
+        offsetContext.offsetSign,
+        offsetContext.wallSide
+      );
+    },
+    [adaptiveEntry, toolOrigin]
+  );
+
+  const snapEntrySlotJoin = useCallback(
+    (x: number, y: number) => {
+      if (!adaptiveEntry?.slotArcGuide) return { x, y };
+      if (isStandardOutlineEntryEditable(adaptiveEntry.op)) {
+        return snapPointToOutlineCenterline(adaptiveEntry.slotArcGuide, { x, y });
+      }
+      return snapPointToSlotCenterline(adaptiveEntry.slotArcGuide, { x, y });
+    },
+    [adaptiveEntry]
+  );
+
   const previewFeedRate = useMemo(() => {
     const visible = operations.filter((o) => o.visible);
     if (visible.length === 0) return 1200;
@@ -1103,12 +1131,12 @@ function SceneContent({
         <AdaptiveEntryHandles
           toolStart={adaptiveEntry.layout.toolStart}
           slotJoin={adaptiveEntry.layout.slotJoin}
-          slotArcGuide={adaptiveEntry.slotArcGuide}
-          toolStartArcGuide={adaptiveEntry.toolStartArcGuide}
           topZ={partBounds.maxZ}
           toolStartManual={adaptiveEntry.toolStartManual}
           slotJoinManual={adaptiveEntry.slotJoinManual}
           showSlotJoin={adaptiveEntry.showSlotJoin}
+          snapToolStart={snapEntryToolStart}
+          snapSlotJoin={snapEntrySlotJoin}
           onToolStartChange={handleToolStartChange}
           onSlotJoinChange={handleSlotJoinChange}
         />

@@ -2,19 +2,15 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { Html, Line } from '@react-three/drei';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
-import type { ArcLengthGuide } from '../../lib/trochoidalPath';
-import { findClosestSOnGuide, sampleGuideAtS } from '../../lib/trochoidalPath';
-import { snapPointToSlotCenterline } from '../../lib/adaptiveEntryLayout';
-
 interface AdaptiveEntryHandlesProps {
   toolStart: { x: number; y: number };
   slotJoin?: { x: number; y: number };
-  slotArcGuide?: ArcLengthGuide;
-  toolStartArcGuide?: ArcLengthGuide;
   topZ: number;
   toolStartManual: boolean;
   slotJoinManual?: boolean;
   showSlotJoin?: boolean;
+  snapToolStart?: (x: number, y: number) => { x: number; y: number };
+  snapSlotJoin?: (x: number, y: number) => { x: number; y: number };
   onToolStartChange: (point: { x: number; y: number }) => void;
   onSlotJoinChange?: (point: { x: number; y: number }) => void;
 }
@@ -43,10 +39,15 @@ function CalloutDragHandle({
   const hit = useRef(new THREE.Vector3());
   const [dragging, setDragging] = useState(false);
   const [labelDelta, setLabelDelta] = useState({ x: 0, y: 0 });
+  const [ghostPoint, setGhostPoint] = useState<{ x: number; y: number } | null>(null);
   const dragOrigin = useRef<{ x: number; y: number } | null>(null);
+  const pointOrigin = useRef<{ x: number; y: number } | null>(null);
+  const deltaRef = useRef({ x: 0, y: 0 });
+  const ghostRef = useRef<{ x: number; y: number } | null>(null);
 
   const labelX = point.x + labelOffset.x + labelDelta.x;
   const labelY = point.y + labelOffset.y + labelDelta.y;
+  const calloutTarget = dragging && ghostPoint ? ghostPoint : point;
 
   const pickRawXY = useCallback(
     (clientX: number, clientY: number) => {
@@ -62,13 +63,12 @@ function CalloutDragHandle({
     [camera, dragPlane, gl.domElement, raycaster]
   );
 
-  const pickCommitXY = useCallback(
-    (clientX: number, clientY: number) => {
-      const raw = pickRawXY(clientX, clientY);
-      if (!raw) return null;
-      return onSnap ? onSnap(raw.x, raw.y) : raw;
+  const resolveGhost = useCallback(
+    (origin: { x: number; y: number }, delta: { x: number; y: number }) => {
+      const candidate = { x: origin.x + delta.x, y: origin.y + delta.y };
+      return onSnap ? onSnap(candidate.x, candidate.y) : candidate;
     },
-    [onSnap, pickRawXY]
+    [onSnap]
   );
 
   const handlePointerDown = useCallback(
@@ -78,41 +78,68 @@ function CalloutDragHandle({
       const origin = pickRawXY(e.clientX, e.clientY);
       if (!origin) return;
       dragOrigin.current = origin;
+      pointOrigin.current = { x: point.x, y: point.y };
+      deltaRef.current = { x: 0, y: 0 };
       setLabelDelta({ x: 0, y: 0 });
+      const initialGhost = resolveGhost(pointOrigin.current, { x: 0, y: 0 });
+      ghostRef.current = initialGhost;
+      setGhostPoint(initialGhost);
       setDragging(true);
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     },
-    [pickRawXY]
+    [pickRawXY, point.x, point.y, resolveGhost]
   );
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
-      if (!dragging || !dragOrigin.current) return;
+      if (!dragging || !dragOrigin.current || !pointOrigin.current) return;
       e.stopPropagation();
       const xy = pickRawXY(e.clientX, e.clientY);
       if (!xy) return;
-      setLabelDelta({
+      const delta = {
         x: xy.x - dragOrigin.current.x,
         y: xy.y - dragOrigin.current.y,
-      });
+      };
+      deltaRef.current = delta;
+      setLabelDelta(delta);
+      const nextGhost = resolveGhost(pointOrigin.current, delta);
+      ghostRef.current = nextGhost;
+      setGhostPoint(nextGhost);
     },
-    [dragging, pickRawXY]
+    [dragging, pickRawXY, resolveGhost]
   );
+
+  const finishDrag = useCallback(() => {
+    setDragging(false);
+    const moved = Math.hypot(deltaRef.current.x, deltaRef.current.y) > 0.35;
+    const ghost = ghostRef.current;
+    if (moved && ghost) {
+      onCommit(ghost.x, ghost.y);
+    }
+    dragOrigin.current = null;
+    pointOrigin.current = null;
+    deltaRef.current = { x: 0, y: 0 };
+    ghostRef.current = null;
+    setGhostPoint(null);
+    setLabelDelta({ x: 0, y: 0 });
+  }, [onCommit]);
 
   const handlePointerUp = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
       e.stopPropagation();
-      setDragging(false);
       (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-      const moved = Math.hypot(labelDelta.x, labelDelta.y) > 0.35;
-      if (moved) {
-        const xy = pickCommitXY(e.clientX, e.clientY);
-        if (xy) onCommit(xy.x, xy.y);
-      }
-      dragOrigin.current = null;
-      setLabelDelta({ x: 0, y: 0 });
+      finishDrag();
     },
-    [labelDelta.x, labelDelta.y, onCommit, pickCommitXY]
+    [finishDrag]
+  );
+
+  const handlePointerCancel = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      e.stopPropagation();
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      finishDrag();
+    },
+    [finishDrag]
   );
 
   return (
@@ -120,20 +147,27 @@ function CalloutDragHandle({
       <Line
         points={[
           [labelX, labelY, z],
-          [point.x, point.y, z],
+          [calloutTarget.x, calloutTarget.y, z],
         ]}
         color={color}
         lineWidth={1.5}
       />
       <mesh position={[point.x, point.y, z]}>
         <sphereGeometry args={[1.1, 12, 12]} />
-        <meshBasicMaterial color={color} />
+        <meshBasicMaterial color={color} transparent={dragging} opacity={dragging ? 0.35 : 1} />
       </mesh>
+      {dragging && ghostPoint ? (
+        <mesh position={[ghostPoint.x, ghostPoint.y, z]}>
+          <sphereGeometry args={[1.9, 14, 14]} />
+          <meshBasicMaterial color={color} transparent opacity={0.55} depthWrite={false} />
+        </mesh>
+      ) : null}
       <Html position={[labelX, labelY, z]} center style={{ pointerEvents: 'none', userSelect: 'none' }}>
         <div
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerCancel}
           style={{
             background: 'rgba(15, 23, 42, 0.92)',
             border: `1px solid ${color}`,
@@ -159,12 +193,12 @@ function CalloutDragHandle({
 export function AdaptiveEntryHandles({
   toolStart,
   slotJoin,
-  slotArcGuide,
-  toolStartArcGuide,
   topZ,
   toolStartManual,
   slotJoinManual = false,
   showSlotJoin = true,
+  snapToolStart,
+  snapSlotJoin,
   onToolStartChange,
   onSlotJoinChange,
 }: AdaptiveEntryHandlesProps) {
@@ -175,36 +209,17 @@ export function AdaptiveEntryHandles({
 
   const handleToolStartCommit = useCallback(
     (x: number, y: number) => {
-      if (toolStartArcGuide) {
-        const hit = findClosestSOnGuide(toolStartArcGuide, { x, y });
-        const frame = sampleGuideAtS(toolStartArcGuide, hit.s);
-        onToolStartChange({ x: frame.x, y: frame.y });
-        return;
-      }
       onToolStartChange({ x, y });
     },
-    [onToolStartChange, toolStartArcGuide]
+    [onToolStartChange]
   );
 
   const handleSlotJoinCommit = useCallback(
     (x: number, y: number) => {
       if (!onSlotJoinChange) return;
-      if (slotArcGuide) {
-        const snapped = snapPointToSlotCenterline(slotArcGuide, { x, y });
-        onSlotJoinChange({ x: snapped.x, y: snapped.y });
-      } else {
-        onSlotJoinChange({ x, y });
-      }
+      onSlotJoinChange({ x, y });
     },
-    [onSlotJoinChange, slotArcGuide]
-  );
-
-  const snapSlotJoin = useCallback(
-    (x: number, y: number) => {
-      if (!slotArcGuide) return { x, y };
-      return snapPointToSlotCenterline(slotArcGuide, { x, y });
-    },
-    [slotArcGuide]
+    [onSlotJoinChange]
   );
 
   return (
@@ -216,6 +231,7 @@ export function AdaptiveEntryHandles({
         label="Start"
         labelOffset={{ x: 4, y: 4 }}
         onCommit={handleToolStartCommit}
+        onSnap={snapToolStart}
         dragPlane={dragPlane}
       />
       {showSlotJoin && slotJoin && (
