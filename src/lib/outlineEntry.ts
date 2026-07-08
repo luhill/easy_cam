@@ -4,6 +4,7 @@ import {
   closestPointOnLoop2D,
   offsetLoop2DMinkowski,
   signedLoopArea2D,
+  type OutlineWallSide,
 } from './geometryProcessing';
 import {
   advanceGuideArcLength,
@@ -18,6 +19,7 @@ import {
 import {
   ensureEntryOutsidePart,
   resolveHelixRadius,
+  buildSplineEntryGuide,
 } from './entryPath';
 import { resolveGuideTraverseSign } from './adaptiveFourZone';
 
@@ -46,15 +48,59 @@ function innerToolCenterOffset(settings: OperationDefaults, stockAllowance = 0):
   return toolRadius(settings) + (settings.radialOffset ?? 0) + stockAllowance;
 }
 
+export interface OutlineOffsetContext {
+  offsetSign: number;
+  wallSide: OutlineWallSide;
+}
+
+export const DEFAULT_OUTLINE_OFFSET_CONTEXT: OutlineOffsetContext = {
+  offsetSign: 1,
+  wallSide: 'exterior',
+};
+
+export function resolveSignedOutlineOffset(
+  _partLoop: LoopPoint[],
+  offsetMagnitude: number,
+  offsetContext: OutlineOffsetContext
+): number {
+  return offsetMagnitude * offsetContext.offsetSign;
+}
+
+export function resolveOutlineOffsetContext(
+  geometry: SelectedGeometry | null | undefined,
+  partLoop: LoopPoint[]
+): OutlineOffsetContext {
+  const edgeLoops = geometry?.edgeLoops;
+  if (edgeLoops && edgeLoops.length > 0) {
+    const match =
+      edgeLoops.find(
+        (el) =>
+          el.loop.length === partLoop.length &&
+          Math.hypot(el.loop[0].x - partLoop[0].x, el.loop[0].y - partLoop[0].y) < 0.5
+      ) ?? edgeLoops[0];
+    return {
+      offsetSign: match.offsetSign ?? 1,
+      wallSide:
+        match.wallSide ?? (signedLoopArea2D(partLoop) >= 0 ? 'exterior' : 'interior'),
+    };
+  }
+  return DEFAULT_OUTLINE_OFFSET_CONTEXT;
+}
+
 export function buildOutlineToolCenterline(
   partLoop: LoopPoint[],
   settings: OperationDefaults,
   stockAllowance = 0,
-  maxSegmentLen = 0.3
+  maxSegmentLen = 0.3,
+  offsetContext: OutlineOffsetContext = DEFAULT_OUTLINE_OFFSET_CONTEXT
 ): LoopPoint[] {
-  const offset = innerToolCenterOffset(settings, stockAllowance);
+  const offset = resolveSignedOutlineOffset(
+    partLoop,
+    innerToolCenterOffset(settings, stockAllowance),
+    offsetContext
+  );
   const segLen = Math.max(maxSegmentLen, Math.abs(offset) * 0.22, 0.4);
-  const toolLoop = offsetLoop2DMinkowski(partLoop, offset, segLen);
+  const toolLoop = offsetLoop2DMinkowski(partLoop, offset, segLen, offsetContext.wallSide);
   const ccw = signedLoopArea2D(partLoop) >= 0;
   const reverse = settings.climbMilling ? ccw : !ccw;
   return reverse ? [...toolLoop].reverse() : toolLoop;
@@ -64,10 +110,11 @@ export function buildOutlineEntryArcGuide(
   partLoop: LoopPoint[],
   settings: OperationDefaults,
   stockAllowance: number,
-  sampleSpacing: number
+  sampleSpacing: number,
+  offsetContext: OutlineOffsetContext = DEFAULT_OUTLINE_OFFSET_CONTEXT
 ): ArcLengthGuide {
   return buildArcLengthGuide(
-    buildOutlineToolCenterline(partLoop, settings, stockAllowance),
+    buildOutlineToolCenterline(partLoop, settings, stockAllowance, 0.3, offsetContext),
     Math.max(sampleSpacing, 0.25)
   );
 }
@@ -164,13 +211,24 @@ export function resolveStandardEntryLayout(
 ): StandardEntryLayout | null {
   if (partLoop.length < 2) return null;
 
-  const traverse = buildOutlineToolCenterline(partLoop, settings, stockAllowance, maxSegmentLen);
+  const offsetContext = resolveOutlineOffsetContext(geometry, partLoop);
+  const traverse = buildOutlineToolCenterline(
+    partLoop,
+    settings,
+    stockAllowance,
+    maxSegmentLen,
+    offsetContext
+  );
   if (traverse.length < 3) return null;
 
   const arcGuide = buildArcLengthGuide(traverse, Math.max(sampleSpacing, 0.25));
   if (arcGuide.totalLength <= 0) return null;
 
-  const guideTraverseSign = resolveGuideTraverseSign(traverse, settings.climbMilling, 'exterior');
+  const guideTraverseSign = resolveGuideTraverseSign(
+    traverse,
+    settings.climbMilling,
+    offsetContext.wallSide
+  );
   const tangentSign = guideTraverseSign >= 0 ? 1 : -1;
 
   const joinSnap = geometry?.slotJoinPoint
@@ -298,61 +356,39 @@ export function buildStandardSplineLeadIn(
   return spline.map((p) => ({ x: p.x, y: p.y, z }));
 }
 
-/** Spline from helix bore-bottom to contour join — tight departure, tangent arrival. */
+/** Spline from bore center to contour join — same chord-aligned Hermite as adaptive entry. */
 export function buildHelixOutlineSplineLeadIn(
   boreCenter: { x: number; y: number },
-  boreBottom: { x: number; y: number },
+  _boreBottom: { x: number; y: number },
   layout: StandardEntryLayout,
   z: number,
   sampleSpacing: number,
-  rotDir: number
+  _rotDir: number
 ): ToolpathPoint[] {
-  const dx = layout.contourJoin.x - boreBottom.x;
-  const dy = layout.contourJoin.y - boreBottom.y;
-  const chord = Math.hypot(dx, dy);
-  if (chord <= 1e-6) {
-    return [{ x: layout.contourJoin.x, y: layout.contourJoin.y, z }];
-  }
+  return buildSplineEntryGuide(
+    boreCenter,
+    layout.contourJoin,
+    layout.traverseTangent,
+    sampleSpacing,
+    z
+  ).map((p) => ({ x: p.x, y: p.y, z }));
+}
 
-  const startTan = helixBoreExitTangent(boreCenter, boreBottom, rotDir);
-  const startHandle = Math.min(Math.max(chord * 0.12, sampleSpacing * 0.4), chord * 0.22);
-  const endHandle = Math.max(chord * 0.72, sampleSpacing * 2.5);
-  const sLen = Math.hypot(startTan.x, startTan.y) || 1;
-  const t0 = {
-    x: (startTan.x / sLen) * startHandle,
-    y: (startTan.y / sLen) * startHandle,
-  };
-  const tLen = Math.hypot(layout.traverseTangent.x, layout.traverseTangent.y) || 1;
-  const t1 = {
-    x: (layout.traverseTangent.x / tLen) * endHandle,
-    y: (layout.traverseTangent.y / tLen) * endHandle,
-  };
-
-  const steps = Math.max(6, Math.ceil(chord / sampleSpacing));
-  const points: ToolpathPoint[] = [];
-  for (let i = 0; i <= steps; i++) {
-    const u = i / steps;
-    const u2 = u * u;
-    const u3 = u2 * u;
-    const h00 = 2 * u3 - 3 * u2 + 1;
-    const h10 = u3 - 2 * u2 + u;
-    const h01 = -2 * u3 + 3 * u2;
-    const h11 = u3 - u2;
-    points.push({
-      x:
-        h00 * boreBottom.x +
-        h10 * t0.x +
-        h01 * layout.contourJoin.x +
-        h11 * t1.x,
-      y:
-        h00 * boreBottom.y +
-        h10 * t0.y +
-        h01 * layout.contourJoin.y +
-        h11 * t1.y,
-      z,
-    });
-  }
-  return points;
+/** Layer-0 helix lead-in polyline sampled from the bore center (not bore-bottom tangent). */
+export function buildStandardHelixSplineLeadIn(
+  layout: StandardEntryLayout,
+  z: number,
+  sampleSpacing: number,
+  toolStartOverride?: { x: number; y: number }
+): ToolpathPoint[] {
+  const start = toolStartOverride ?? layout.toolStart;
+  return buildSplineEntryGuide(
+    start,
+    layout.contourJoin,
+    layout.traverseTangent,
+    sampleSpacing,
+    z
+  ).map((p) => ({ x: p.x, y: p.y, z }));
 }
 
 export function standardSplineLeadInFeed(
@@ -452,6 +488,7 @@ export function resolveStandardHelixEntryLayout(
 ): StandardHelixEntryLayout | null {
   if (partLoop.length < 2) return null;
 
+  const offsetContext = resolveOutlineOffsetContext(geometry, partLoop);
   const layout = resolveStandardEntryLayout(
     partLoop,
     settings,
@@ -476,7 +513,12 @@ export function resolveStandardHelixEntryLayout(
       x: joinPoint.x + outward.outX * helixR,
       y: joinPoint.y + outward.outY * helixR,
     };
-    toolStart = ensureEntryOutsidePart(partLoop, candidate, minDist * 0.98);
+    toolStart = ensureEntryOutsidePart(
+      partLoop,
+      candidate,
+      minDist * 0.98,
+      offsetContext.wallSide
+    );
   }
 
   return {
@@ -492,8 +534,10 @@ export function resolveStandardHelixLayerBoreCenter(
   partLoop: LoopPoint[],
   joinPoint: { x: number; y: number },
   settings: OperationDefaults,
-  stockAllowance = 0
+  stockAllowance = 0,
+  geometry?: SelectedGeometry | null
 ): { x: number; y: number } {
+  const offsetContext = resolveOutlineOffsetContext(geometry ?? null, partLoop);
   const helixR = resolveHelixRadius(settings);
   const outward = closestPointOnLoop2D(joinPoint.x, joinPoint.y, partLoop);
   const candidate = {
@@ -501,7 +545,12 @@ export function resolveStandardHelixLayerBoreCenter(
     y: joinPoint.y + outward.outY * helixR,
   };
   const minDist = minimumStandardHelixEntryCenterDist(settings, stockAllowance);
-  return ensureEntryOutsidePart(partLoop, candidate, minDist * 0.98);
+  return ensureEntryOutsidePart(
+    partLoop,
+    candidate,
+    minDist * 0.98,
+    offsetContext.wallSide
+  );
 }
 
 export interface ContourRampResult {

@@ -1,9 +1,9 @@
 import type { LoopPoint, OperationDefaults, ToolpathPoint } from '../types/operations';
 import {
   closestPointOnLoop2D,
-  distanceToLoop2D,
   pointInPolygon2D,
   signedLoopArea2D,
+  type OutlineWallSide,
 } from './geometryProcessing';
 import {
   advanceGuideArcLength,
@@ -162,17 +162,33 @@ export function loopCentroid2D(loop: LoopPoint[]): { x: number; y: number } {
   return { x: x / loop.length, y: y / loop.length };
 }
 
-/** Push entry outward if it lies inside the part or too close to the outline. */
+/** Enforce valid tool-start placement relative to the part outline. */
 export function ensureEntryOutsidePart(
   partLoop: LoopPoint[],
   point: { x: number; y: number },
-  minDist: number
+  minDist: number,
+  wallSide: OutlineWallSide = 'exterior'
 ): { x: number; y: number } {
-  const inside = pointInPolygon2D(point.x, point.y, partLoop);
-  const dist = distanceToLoop2D(point.x, point.y, partLoop);
-  if (!inside && dist >= minDist) return point;
-
   const closest = closestPointOnLoop2D(point.x, point.y, partLoop);
+
+  if (wallSide === 'interior') {
+    if (!pointInPolygon2D(point.x, point.y, partLoop)) {
+      const standoff = Math.max(minDist, 0.5);
+      return {
+        x: closest.x + closest.outX * standoff,
+        y: closest.y + closest.outY * standoff,
+      };
+    }
+    if (closest.dist >= minDist) return point;
+    return {
+      x: closest.x + closest.outX * minDist,
+      y: closest.y + closest.outY * minDist,
+    };
+  }
+
+  const inside = pointInPolygon2D(point.x, point.y, partLoop);
+  if (!inside && closest.dist >= minDist) return point;
+
   const standoff = Math.max(minDist, 0.5);
   return {
     x: closest.x + closest.outX * standoff,

@@ -94,13 +94,18 @@ export function resolveAdaptiveSlotGeometry(
   };
 }
 
+/** Slot geometry for entry bore placement (includes roughing stock when finishing pass is on). */
+function entryPlacementSlotGeometry(settings: OperationDefaults): AdaptiveSlotGeometry {
+  return resolveAdaptiveSlotGeometry(settings, { roughing: true });
+}
+
 /**
  * Largest tool-center radius from bore center during entry — derived from the
  * greater of bore outer diameter and slot width so the widen spiral cannot
  * cross the inner slot path.
  */
 export function resolveMaxEntryHelixRadius(settings: OperationDefaults): number {
-  const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
+  const slot = entryPlacementSlotGeometry(settings);
   const boreOuterD = 2 * resolveBoreOuterRadius(settings);
   const effectiveDiameter = Math.max(boreOuterD, slot.slotWidth);
   return Math.max(effectiveDiameter / 2 - slot.toolRadius, 0.05);
@@ -112,7 +117,7 @@ export function resolveMaxEntryHelixRadius(settings: OperationDefaults): number 
  * helix or bottom widen spiral, whichever is greater).
  */
 export function minimumEntryCenterDist(settings: OperationDefaults): number {
-  const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
+  const slot = entryPlacementSlotGeometry(settings);
   return slot.minCenterDist + resolveMaxEntryHelixRadius(settings);
 }
 
@@ -125,12 +130,19 @@ export function boreCenterOffsetFromInnerGuide(settings: OperationDefaults): num
 export function computeDefaultEntryPoint(
   partLoop: LoopPoint[],
   settings: OperationDefaults,
-  toolOrigin?: Pick<ToolOrigin, 'x' | 'y'> | null
+  toolOrigin?: Pick<ToolOrigin, 'x' | 'y'> | null,
+  offsetSign = 1,
+  wallSide: 'exterior' | 'interior' = 'exterior'
 ): { x: number; y: number } {
   if (partLoop.length < 2) return { x: toolOrigin?.x ?? 0, y: toolOrigin?.y ?? 0 };
 
-  const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
-  const guide = offsetLoop2DMinkowski(partLoop, slot.innerCenterOffset);
+  const slot = entryPlacementSlotGeometry(settings);
+  const guide = offsetLoop2DMinkowski(
+    partLoop,
+    slot.innerCenterOffset * offsetSign,
+    0.3,
+    wallSide
+  );
   const centerDist = minimumEntryCenterDist(settings);
   const innerDist = slot.minCenterDist;
   const outwardOffset = boreCenterOffsetFromInnerGuide(settings);
@@ -164,7 +176,8 @@ export function computeDefaultEntryPoint(
       x: bestGuide.x + outward.outX * outwardOffset,
       y: bestGuide.y + outward.outY * outwardOffset,
     },
-    centerDist * 0.98
+    centerDist * 0.98,
+    wallSide
   );
 }
 
@@ -172,11 +185,13 @@ export function resolveAdaptiveEntryPoint(
   partLoop: LoopPoint[],
   settings: OperationDefaults,
   entry?: { x: number; y: number } | null,
-  toolOrigin?: Pick<ToolOrigin, 'x' | 'y'> | null
+  toolOrigin?: Pick<ToolOrigin, 'x' | 'y'> | null,
+  offsetSign = 1,
+  wallSide: 'exterior' | 'interior' = 'exterior'
 ): { x: number; y: number } {
   const minDist = minimumEntryCenterDist(settings);
   if (entry) {
-    return ensureEntryOutsidePart(partLoop, entry, minDist);
+    return ensureEntryOutsidePart(partLoop, entry, minDist, wallSide);
   }
-  return computeDefaultEntryPoint(partLoop, settings, toolOrigin);
+  return computeDefaultEntryPoint(partLoop, settings, toolOrigin, offsetSign, wallSide);
 }

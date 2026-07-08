@@ -7,8 +7,10 @@ import { useAppStore } from '../../store/useAppStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import {
   OPERATION_COLORS,
+  getSelectedEdgeLoops,
   getSelectedHoles,
   isAdaptiveOutlineOperation,
+  isEdgeLoopInSelection,
   isOutlineHelixEntryOperation,
   isOutlineOperation,
   isStandardOutlineEntryEditable,
@@ -28,7 +30,7 @@ import {
   type PartBounds,
   type ProcessedMesh,
 } from '../../lib/geometryProcessing';
-import { getSelectionHint, isHoleSelectableForOperation, isRegionSelectableForOperation } from '../../lib/selectionRules';
+import { getSelectionHint, isEdgeLoopSelectableForOperation, isHoleSelectableForOperation, isRegionSelectableForOperation } from '../../lib/selectionRules';
 import {
   clearMeshIndexCache,
   collectVertexIndices,
@@ -58,11 +60,13 @@ import {
   computeAdaptiveOutlineDebugGuidesFromBounds,
   resolveAdaptiveEntryLayout,
   adaptiveEntryOverridesFromGeometry,
+  snapPointToSlotCenterline,
 } from '../../lib/adaptiveGuides';
 import { minkowskiSegmentLen, pathSampleSpacing, trochoidSampleSpacing } from '../../lib/toolpathConfig';
-import { resolveAdaptiveSlotGeometry, finishingStockAllowance } from '../../lib/adaptiveOutline';
+import { resolveAdaptiveSlotGeometry, finishingStockAllowance, resolveAdaptiveEntryPoint } from '../../lib/adaptiveOutline';
 import {
   buildOutlineEntryArcGuide,
+  resolveOutlineOffsetContext,
   resolveStandardEntryLayout,
   snapPointToOutlineCenterline,
 } from '../../lib/outlineEntry';
@@ -207,8 +211,19 @@ function StlMesh({
         if (hole.loop && hole.loop.length > 0) loops.push(hole.loop);
       }
     }
+    if (
+      activeOperationType &&
+      isOutlineOperation({
+        type: activeOperationType,
+        settings: activeOperationSettings ?? DEFAULT_SETTINGS,
+      })
+    ) {
+      for (const edgeLoop of getSelectedEdgeLoops(activeGeometry)) {
+        if (edgeLoop.loop.length > 0) loops.push(edgeLoop.loop);
+      }
+    }
     return loops;
-  }, [activeGeometry, activeOperationType]);
+  }, [activeGeometry, activeOperationType, activeOperationSettings]);
 
   const cutZContext = useMemo(() => createCutZContext(partBounds), [partBounds]);
 
@@ -294,6 +309,20 @@ function StlMesh({
         }
       }
     }
+    if (
+      activeOperationType &&
+      isOutlineOperation({
+        type: activeOperationType,
+        settings: activeOperationSettings ?? DEFAULT_SETTINGS,
+      }) &&
+      meshIndexRef.current
+    ) {
+      for (const edgeLoop of getSelectedEdgeLoops(activeGeometry)) {
+        for (const faceIndex of meshIndexRef.current.getWallFacesForEdgeLoop(edgeLoop)) {
+          nextSelected.add(faceIndex);
+        }
+      }
+    }
 
     const hovered = new Set(prevHoveredFacesRef.current);
     const hoverColor =
@@ -372,6 +401,10 @@ function StlMesh({
       if (!opType) return null;
 
       if (isHoleSelectableForOperation(opType)) {
+        return meshIndex.resolveSelection(faceIndex, opType, point ?? undefined);
+      }
+
+      if (isEdgeLoopSelectableForOperation(opType)) {
         return meshIndex.resolveSelection(faceIndex, opType, point ?? undefined);
       }
 
@@ -555,6 +588,57 @@ function StlMesh({
             loops: [...existingHoles.map((h) => h.loop).filter(Boolean), loop].filter(
               (l): l is LoopPoint[] => !!l?.length
             ),
+          });
+        }
+        return;
+      }
+
+      if (
+        operationType === 'outline' ||
+        operationType === 'adaptive-outline'
+      ) {
+        const loop = group.loops?.[0];
+        if (!loop?.length || group.topZ === undefined || group.bottomZ === undefined) return;
+
+        const candidate = {
+          loop,
+          faceIndices: group.faceIndices,
+          topZ: group.topZ,
+          bottomZ: group.bottomZ,
+          edgeLoopId: group.edgeLoopId,
+          offsetSign: group.offsetSign,
+          wallSide: group.wallSide,
+        };
+        const existingEdgeLoops = getSelectedEdgeLoops(existing);
+
+        if (isEdgeLoopInSelection(existingEdgeLoops, candidate)) {
+          const edgeLoops = existingEdgeLoops.filter((el) => !isEdgeLoopInSelection([el], candidate));
+          setOperationGeometry(
+            activeOperationId,
+            edgeLoops.length > 0
+              ? {
+                  faceIndices: [...new Set(edgeLoops.flatMap((el) => el.faceIndices))],
+                  vertexIndices: collectVertexIndices(
+                    meshIndexRef.current,
+                    [...new Set(edgeLoops.flatMap((el) => el.faceIndices))]
+                  ),
+                  edgeLoops,
+                  loops: edgeLoops.map((el) => el.loop),
+                  toolStartPoint: existing?.toolStartPoint,
+                  slotJoinPoint: existing?.slotJoinPoint,
+                }
+              : null
+          );
+        } else {
+          const edgeLoops = [...existingEdgeLoops, candidate];
+          const faceIndices = [...new Set(edgeLoops.flatMap((el) => el.faceIndices))];
+          setOperationGeometry(activeOperationId, {
+            faceIndices,
+            vertexIndices: collectVertexIndices(meshIndexRef.current, faceIndices),
+            edgeLoops,
+            loops: edgeLoops.map((el) => el.loop),
+            toolStartPoint: existing?.toolStartPoint,
+            slotJoinPoint: existing?.slotJoinPoint,
           });
         }
         return;
@@ -850,6 +934,7 @@ function SceneContent({
         roughSlot.trochoidRadius,
         toolpathResolution
       );
+      const offsetContext = resolveOutlineOffsetContext(op.geometry, loop);
       const layout = resolveAdaptiveEntryLayout(
         loop,
         op.settings,
@@ -857,7 +942,8 @@ function SceneContent({
         segLen,
         trochSampleSpacing,
         toolpathResolution,
-        toolOrigin
+        toolOrigin,
+        offsetContext
       );
       if (!layout) return null;
 
@@ -865,7 +951,7 @@ function SceneContent({
         safeHeight,
         resolution: toolpathResolution,
         travelFeedRate,
-      });
+      }, op.geometry);
 
       return {
         op,
@@ -892,11 +978,13 @@ function SceneContent({
     );
     if (!layout) return null;
 
+    const offsetContext = resolveOutlineOffsetContext(op.geometry, loop);
     const slotArcGuide = buildOutlineEntryArcGuide(
       loop,
       op.settings,
       stockAllowance,
-      sampleSpacing
+      sampleSpacing,
+      offsetContext
     );
 
     return {
@@ -921,15 +1009,26 @@ function SceneContent({
   const handleToolStartChange = useCallback(
     (point: { x: number; y: number }) => {
       if (!adaptiveEntry?.op.geometry) return;
+      const loop = adaptiveEntry.op.geometry.loops?.[0];
+      if (!loop) return;
+      const offsetContext = resolveOutlineOffsetContext(adaptiveEntry.op.geometry, loop);
+      const constrained = resolveAdaptiveEntryPoint(
+        loop,
+        adaptiveEntry.op.settings,
+        point,
+        toolOrigin,
+        offsetContext.offsetSign,
+        offsetContext.wallSide
+      );
       updateOperation(adaptiveEntry.op.id, {
         geometry: {
           ...adaptiveEntry.op.geometry,
-          toolStartPoint: point,
+          toolStartPoint: constrained,
           entryPoint: undefined,
         },
       });
     },
-    [adaptiveEntry, updateOperation]
+    [adaptiveEntry, updateOperation, toolOrigin]
   );
 
   const handleSlotJoinChange = useCallback(
@@ -937,8 +1036,12 @@ function SceneContent({
       if (!adaptiveEntry?.op.geometry) return;
       const loop = adaptiveEntry.op.geometry.loops?.[0];
       let next = point;
-      if (loop && isStandardOutlineEntryEditable(adaptiveEntry.op) && adaptiveEntry.slotArcGuide) {
-        next = snapPointToOutlineCenterline(adaptiveEntry.slotArcGuide, point);
+      if (loop && adaptiveEntry.slotArcGuide) {
+        if (isStandardOutlineEntryEditable(adaptiveEntry.op)) {
+          next = snapPointToOutlineCenterline(adaptiveEntry.slotArcGuide, point);
+        } else {
+          next = snapPointToSlotCenterline(adaptiveEntry.slotArcGuide, point);
+        }
       }
       updateOperation(adaptiveEntry.op.id, {
         geometry: {
@@ -948,6 +1051,34 @@ function SceneContent({
       });
     },
     [adaptiveEntry, updateOperation]
+  );
+
+  const snapEntryToolStart = useCallback(
+    (x: number, y: number) => {
+      if (!adaptiveEntry?.op.geometry?.loops?.[0]) return { x, y };
+      const loop = adaptiveEntry.op.geometry.loops[0];
+      const offsetContext = resolveOutlineOffsetContext(adaptiveEntry.op.geometry, loop);
+      return resolveAdaptiveEntryPoint(
+        loop,
+        adaptiveEntry.op.settings,
+        { x, y },
+        toolOrigin,
+        offsetContext.offsetSign,
+        offsetContext.wallSide
+      );
+    },
+    [adaptiveEntry, toolOrigin]
+  );
+
+  const snapEntrySlotJoin = useCallback(
+    (x: number, y: number) => {
+      if (!adaptiveEntry?.slotArcGuide) return { x, y };
+      if (isStandardOutlineEntryEditable(adaptiveEntry.op)) {
+        return snapPointToOutlineCenterline(adaptiveEntry.slotArcGuide, { x, y });
+      }
+      return snapPointToSlotCenterline(adaptiveEntry.slotArcGuide, { x, y });
+    },
+    [adaptiveEntry]
   );
 
   const previewFeedRate = useMemo(() => {
@@ -993,18 +1124,19 @@ function SceneContent({
         <DebugGuideLines
           slotCenterline={adaptiveDebugGuides.slotCenterline}
           leadInGuide={adaptiveDebugGuides.leadInGuide}
+          slotCenterlineOpen={adaptiveDebugGuides.slotCenterlineOpen}
         />
       )}
       {adaptiveEntry && partBounds && selectionMode && selectionSubMode === 'entry-point' && (
         <AdaptiveEntryHandles
           toolStart={adaptiveEntry.layout.toolStart}
           slotJoin={adaptiveEntry.layout.slotJoin}
-          slotArcGuide={adaptiveEntry.slotArcGuide}
-          toolStartArcGuide={adaptiveEntry.toolStartArcGuide}
           topZ={partBounds.maxZ}
           toolStartManual={adaptiveEntry.toolStartManual}
           slotJoinManual={adaptiveEntry.slotJoinManual}
           showSlotJoin={adaptiveEntry.showSlotJoin}
+          snapToolStart={snapEntryToolStart}
+          snapSlotJoin={snapEntrySlotJoin}
           onToolStartChange={handleToolStartChange}
           onSlotJoinChange={handleSlotJoinChange}
         />

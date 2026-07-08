@@ -11,7 +11,7 @@ import {
   type ArcLengthGuide,
 } from './trochoidalPath';
 import { clampToolCenterMinDistanceFromPart, signedLoopArea2D } from './geometryProcessing';
-import { resolveHelixRotationDir } from './entryPath';
+import { resolveHelixRotationDir, buildUnifiedEntryCenterlineGuide } from './entryPath';
 import {
   trochoidRadiusAtGuideS,
   spurPeakHoldAtGuideS,
@@ -75,11 +75,15 @@ export interface FourZoneParams {
     forward: boolean;
     loopLength: number;
   };
+  /** Arc length of spline lead-in before slot loop (spur snapping on entry path). */
+  splineLeadInLen?: number;
 }
 
 const CUT_PHASE_START = 0.5;
 const RETURN_LIFT_START = 0.08;
 const RETURN_LIFT_END = 0.38;
+/** Rotate micro-loop so cut arc sits ahead of travel (climb CCW / conventional CW). */
+const CUT_PHASE_ROTATION = (105 * Math.PI) / 180;
 
 function normalizeFrame(frame: ReturnType<typeof sampleGuideAtS>) {
   let tx = frame.tx;
@@ -93,6 +97,16 @@ function normalizeFrame(frame: ReturnType<typeof sampleGuideAtS>) {
   tx /= tlen;
   ty /= tlen;
   return { x: frame.x, y: frame.y, tx, ty, nx, ny };
+}
+
+/** Align guide tangent/normal with actual traverse when guideSign is negative. */
+function travelAlignedFrame(
+  frame: ReturnType<typeof sampleGuideAtS>,
+  guideSign: number
+): ReturnType<typeof normalizeFrame> {
+  const f = normalizeFrame(frame);
+  if (guideSign >= 0) return f;
+  return { x: f.x, y: f.y, tx: -f.tx, ty: -f.ty, nx: -f.nx, ny: -f.ny };
 }
 
 function orbitPoint(
@@ -130,9 +144,17 @@ function orbitZProfile(
   return { z: zCut + liftAmount * Math.sin(Math.PI * u), rapid: true };
 }
 
-/** Trochoid orbit angle (radians) at a given phase within one micro-loop. */
+/** Trochoid orbit angle: cut (phase ≥ 0.5) sweeps the front (+tangent) semicircle. */
 export function trochoidOrbitAngleAtPhase(phase: number, rotSign: number): number {
-  return -Math.PI / 2 + rotSign * (0.5 - phase) * 2 * Math.PI;
+  let theta: number;
+  if (phase >= CUT_PHASE_START) {
+    const u = (phase - CUT_PHASE_START) / (1 - CUT_PHASE_START);
+    theta = rotSign * (Math.PI * (1 - u));
+  } else {
+    const u = phase / CUT_PHASE_START;
+    theta = -rotSign * (Math.PI * u);
+  }
+  return theta - rotSign * CUT_PHASE_ROTATION;
 }
 
 export type AdaptiveOutlineSide = 'exterior' | 'interior';
@@ -172,7 +194,7 @@ function sampleOrbitPoint(
   minCenterDist?: number
 ): ToolpathPoint {
   const theta = trochoidOrbitAngleAtPhase(phase, rotSign);
-  const frame = normalizeFrame(sampleAtS(s));
+  const frame = travelAlignedFrame(sampleAtS(s), 1);
   let pt = orbitPoint(frame, trochoidR, theta, z);
   if (partLoop && minCenterDist !== undefined) {
     const c = clampToolCenterMinDistanceFromPart(partLoop, pt.x, pt.y, minCenterDist);
@@ -400,8 +422,8 @@ function generateTrochoidAlongGuide(
       : params.spurFrameHold?.(sSample, sampled.z) ?? null;
 
     const frame = spurFrame
-      ? normalizeFrame({ ...sampled, ...spurFrame, s: sampled.s })
-      : normalizeFrame(sampled);
+      ? travelAlignedFrame({ ...sampled, ...spurFrame, s: sampled.s }, guideSign)
+      : travelAlignedFrame(sampled, guideSign);
 
     const orbitR = spurState ? spurOrbitRadius(spurState, baseTrochoidR) : baseTrochoidR;
 
@@ -538,7 +560,11 @@ function generateTrochoidAlongGuide(
     for (let i = 0; i <= steps; i++) {
       const phase = i / steps;
       const sAlong = arcProgress + phase * segLen;
-      emitOrbit(sAlong, phase, cycle > 0 && i === 0);
+      emitOrbit(
+        sAlong,
+        phase,
+        cycle > 0 && i === 0
+      );
     }
 
     arcProgress = segEnd;
@@ -608,7 +634,7 @@ export function generateOpenTrochoidPath(
 
 /**
  * Continuous trochoid roughing from a spline lead-in into a full slot-center loop.
- * Loop section uses closed-guide frames (same as deeper layers) for consistent lift.
+ * Spline and loop share one open arc-length guide so micro-loops stay continuous.
  */
 export function generateContinuousEntryTrochoidPath(
   splineGuide: LoopPoint[],
@@ -616,37 +642,34 @@ export function generateContinuousEntryTrochoidPath(
   trochoidStartS: number,
   guideTraverseSign: number,
   params: FourZoneParams,
-  outwardCCW: boolean,
+  slotCenterGuide: LoopPoint[],
   loopSpurRanges: CornerSpurRange[] = []
 ): ToolpathPoint[] {
-  if (trochArcGuide.totalLength <= 0) return [];
+  if (trochArcGuide.totalLength <= 0 || splineGuide.length < 2) return [];
 
   const sampleSpacing =
     params.sampleSpacing ??
     Math.min(params.forwardIncrement / 4, params.slotClearance / 4, 0.5);
 
-  const splineArcGuide =
-    splineGuide.length >= 2
-      ? buildOpenArcLengthGuide(splineGuide, sampleSpacing, outwardCCW)
-      : null;
-  const splineLen = splineArcGuide?.totalLength ?? 0;
-  const totalLength = splineLen + trochArcGuide.totalLength;
+  const z = params.z;
+  const outwardCCW = signedLoopArea2D(slotCenterGuide) >= 0;
+  const unifiedGuide = buildUnifiedEntryCenterlineGuide(
+    splineGuide,
+    trochArcGuide,
+    trochoidStartS,
+    guideTraverseSign,
+    sampleSpacing,
+    z
+  );
+  if (unifiedGuide.length < 2) return [];
+
+  const splineArcGuide = buildOpenArcLengthGuide(splineGuide, sampleSpacing, outwardCCW);
+  const splineLen = splineArcGuide.totalLength;
+  const openArcGuide = buildOpenArcLengthGuide(unifiedGuide, sampleSpacing, outwardCCW);
+  const totalLength = openArcGuide.totalLength;
   if (totalLength <= 0) return [];
 
   const forward = guideTraverseSign >= 0;
-  const sampleAtGlobalS = (s: number) => {
-    if (splineArcGuide && s < splineLen - 1e-6) {
-      return sampleOpenGuideAtS(splineArcGuide, Math.max(0, s));
-    }
-    const loopDelta = Math.max(0, s - splineLen);
-    const loopS = forward
-      ? trochoidStartS + loopDelta
-      : trochoidStartS - loopDelta;
-    return sampleGuideAtS(trochArcGuide, loopS);
-  };
-
-  // Always emit spline (tool start → slot join) then the loop so bore lead-in
-  // connects to troch[0] near the entry; loop traverse follows guideTraverseSign.
   const baseTrochoidR = params.slotClearance / 2;
   const loopTotal = trochArcGuide.totalLength;
   let trochoidRAtGuide = params.trochoidRAtGuide;
@@ -664,25 +687,31 @@ export function generateContinuousEntryTrochoidPath(
     return forward ? trochoidStartS + loopDelta : trochoidStartS - loopDelta;
   };
 
-  return generateTrochoidAlongGuide(totalLength, false, sampleAtGlobalS, {
-    ...params,
-    guideSign: 1,
-    startS: 0,
-    guideLoopLength: loopTotal,
-    trochoidRAtGuide,
-    spurRanges: loopSpurRanges,
-    openSpurSnap:
-      loopSpurRanges.length > 0
-        ? { splineLen, trochoidStartS, forward, loopLength: loopTotal }
-        : undefined,
-    spurPeakHold:
-      loopSpurRanges.length > 0
-        ? (globalS: number) => {
-            if (globalS < splineLen - 1e-5) return null;
-            return spurPeakHoldAtGuideS(toLoopS(globalS), loopTotal, loopSpurRanges);
-          }
-        : undefined,
-  });
+  return generateTrochoidAlongGuide(
+    totalLength,
+    false,
+    (s) => sampleOpenGuideAtS(openArcGuide, s),
+    {
+      ...params,
+      guideSign: 1,
+      startS: 0,
+      guideLoopLength: loopTotal,
+      splineLeadInLen: splineLen,
+      trochoidRAtGuide,
+      spurRanges: loopSpurRanges,
+      openSpurSnap:
+        loopSpurRanges.length > 0
+          ? { splineLen, trochoidStartS, forward, loopLength: loopTotal }
+          : undefined,
+      spurPeakHold:
+        loopSpurRanges.length > 0
+          ? (globalS: number) => {
+              if (globalS < splineLen - 1e-5) return null;
+              return spurPeakHoldAtGuideS(toLoopS(globalS), loopTotal, loopSpurRanges);
+            }
+          : undefined,
+    }
+  );
 }
 
 export function generateConstantEngagementTrochoid(

@@ -123,6 +123,56 @@ export function finalCutWorldZ(ctx: CutZContext, depthOffset: number): number {
   return camZToWorld(resolveFinalCutCamZ(ctx.partHeight, depthOffset), ctx.worldTopZ);
 }
 
+/** Cut extent for outline from selected vertical edge loop(s), or full stock when unset. */
+export interface OutlineCutExtent {
+  cutTopZ: number;
+  cutBottomZ: number;
+  cutHeight: number;
+}
+
+export function outlineCutExtentFromLoopZ(topZ: number, bottomZ: number): OutlineCutExtent {
+  return {
+    cutTopZ: topZ,
+    cutBottomZ: bottomZ,
+    cutHeight: Math.max(topZ - bottomZ, 0),
+  };
+}
+
+export function defaultOutlineCutExtent(ctx: CutZContext): OutlineCutExtent {
+  return {
+    cutTopZ: ctx.worldTopZ,
+    cutBottomZ: ctx.worldBottomZ,
+    cutHeight: ctx.partHeight,
+  };
+}
+
+/** Z layers from a selected edge-loop extent; depth offset is relative to cutBottomZ. */
+export function cutLayersWorldZForExtent(
+  extent: OutlineCutExtent,
+  depthOffset: number,
+  maxStepDown: number
+): number[] {
+  const finalZ = extent.cutBottomZ + depthOffset;
+  const totalDepth = extent.cutTopZ - finalZ;
+  if (totalDepth <= 1e-6) return [];
+
+  const passCount = Math.min(
+    Math.max(1, Math.ceil(totalDepth / safeStepDown(maxStepDown))),
+    MAX_Z_LAYERS
+  );
+  const equalStep = totalDepth / passCount;
+  const layers: number[] = [];
+  for (let i = 1; i <= passCount; i++) {
+    layers.push(extent.cutTopZ - i * equalStep);
+  }
+  layers[layers.length - 1] = finalZ;
+  return layers;
+}
+
+export function finalCutWorldZForExtent(extent: OutlineCutExtent, depthOffset: number): number {
+  return extent.cutBottomZ + depthOffset;
+}
+
 /** Convert world Z to CAM Z (0 at stock top). */
 export function worldZToCamZ(worldZ: number, stockTopWorldZ: number): number {
   return worldZ - stockTopWorldZ;

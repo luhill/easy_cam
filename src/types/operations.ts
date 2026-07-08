@@ -61,11 +61,25 @@ export interface HoleSelection {
   holeId?: number;
 }
 
+/** Closed vertical wall loop for outline — top rim defines offset path and Z extent. */
+export interface EdgeLoopSelection {
+  loop: LoopPoint[];
+  faceIndices: number[];
+  topZ: number;
+  bottomZ: number;
+  edgeLoopId?: number;
+  /** +1 / −1 — tool path offsets away from selected wall faces */
+  offsetSign?: number;
+  wallSide?: 'exterior' | 'interior';
+}
+
 export interface SelectedGeometry {
   faceIndices: number[];
   vertexIndices: number[];
   /** Closed boundary loops for outline-type selections */
   loops?: LoopPoint[][];
+  /** Outline — one or more vertical edge loops */
+  edgeLoops?: EdgeLoopSelection[];
   /** Drill/helix — one or more holes */
   holes?: HoleSelection[];
   /** @deprecated use holes[] */
@@ -257,7 +271,7 @@ export function getSelectionStrategy(type: OperationType): SelectionStrategy {
   switch (type) {
     case 'outline':
     case 'adaptive-outline':
-      return 'outline-loop';
+      return 'point';
     case 'drill':
     case 'helix':
       return 'point';
@@ -293,4 +307,31 @@ export function getSelectedHoles(geometry: SelectedGeometry | null | undefined):
 export function holesMatch(a: HoleSelection, b: HoleSelection, epsilon = 0.5): boolean {
   if (a.holeId !== undefined && b.holeId !== undefined && a.holeId === b.holeId) return true;
   return Math.hypot(a.center.x - b.center.x, a.center.y - b.center.y) < epsilon;
+}
+
+export function getSelectedEdgeLoops(
+  geometry: SelectedGeometry | null | undefined
+): EdgeLoopSelection[] {
+  if (!geometry) return [];
+  if (geometry.edgeLoops && geometry.edgeLoops.length > 0) return geometry.edgeLoops;
+  return [];
+}
+
+export function edgeLoopsMatch(a: EdgeLoopSelection, b: EdgeLoopSelection): boolean {
+  if (a.edgeLoopId !== undefined && b.edgeLoopId !== undefined && a.edgeLoopId === b.edgeLoopId) {
+    return true;
+  }
+  if (a.faceIndices.length > 0 && b.faceIndices.length > 0) {
+    const bSet = new Set(b.faceIndices);
+    const shared = a.faceIndices.filter((f) => bSet.has(f)).length;
+    if (shared >= Math.min(a.faceIndices.length, b.faceIndices.length) * 0.5) return true;
+  }
+  return false;
+}
+
+export function isEdgeLoopInSelection(
+  edgeLoops: EdgeLoopSelection[],
+  candidate: EdgeLoopSelection
+): boolean {
+  return edgeLoops.some((el) => edgeLoopsMatch(el, candidate));
 }

@@ -35,6 +35,10 @@ export function isUpwardFacingRegion(region: Pick<SelectionRegion, 'normal'>): b
   return region.normal.z >= HORIZONTAL_DOT;
 }
 
+export function isEdgeLoopSelectableForOperation(operationType: OperationType): boolean {
+  return operationType === 'outline' || operationType === 'adaptive-outline';
+}
+
 export function isRegionSelectableForOperation(
   operationType: OperationType,
   region: SelectionRegion,
@@ -43,6 +47,7 @@ export function isRegionSelectableForOperation(
   switch (operationType) {
     case 'outline':
     case 'adaptive-outline':
+      return false;
     case 'pocket':
       return isPhysicallyTopFace(region, bounds);
     case 'contour':
@@ -73,7 +78,7 @@ export function getSelectionHint(
   switch (operationType) {
     case 'outline':
     case 'adaptive-outline':
-      return 'Select a top-facing surface for the outline loop';
+      return 'Click vertical wall faces along a closed edge loop — add/remove like holes';
     case 'drill':
     case 'helix':
       return 'Click holes to add or remove — includes holes in pockets and on bosses';

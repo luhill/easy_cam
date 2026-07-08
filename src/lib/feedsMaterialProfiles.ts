@@ -7,14 +7,18 @@ export interface StoredMaterialProfile {
   stepoverPercentage: number;
   rampAngle: number;
   plungeRatio: number;
-  adaptiveDocMinRatio: number;
   adaptiveDocMaxRatio: number;
-  pocketDocMinRatio: number;
   pocketDocMaxRatio: number;
   finishAllowancePercent: number;
   recommendedMilling: RecommendedMilling;
   millingNote: string;
 }
+
+/** @deprecated Legacy stored profiles may still include min DOC ratios. */
+type LegacyStoredMaterialProfile = StoredMaterialProfile & {
+  adaptiveDocMinRatio?: number;
+  pocketDocMinRatio?: number;
+};
 
 export interface FeedsMaterialRow {
   id: string;
@@ -30,9 +34,7 @@ export function materialProfileToStored(profile: MaterialProfile): StoredMateria
     stepoverPercentage: profile.stepoverPercentage,
     rampAngle: profile.rampAngle,
     plungeRatio: profile.plungeRatio,
-    adaptiveDocMinRatio: profile.adaptiveDocMinRatio,
     adaptiveDocMaxRatio: profile.adaptiveDocMaxRatio,
-    pocketDocMinRatio: profile.pocketDocMinRatio,
     pocketDocMaxRatio: profile.pocketDocMaxRatio,
     finishAllowancePercent: profile.finishAllowancePercent,
     recommendedMilling: profile.recommendedMilling,
@@ -53,8 +55,18 @@ function clampNum(value: unknown, min: number, max: number, fallback: number): n
   return Math.min(max, Math.max(min, value as number));
 }
 
+function resolveMaxDocRatio(
+  maxValue: unknown,
+  minValue: unknown,
+  fallback: number
+): number {
+  const candidates = [maxValue, minValue].filter((v) => Number.isFinite(v)) as number[];
+  const preferred = candidates.length > 0 ? Math.max(...candidates) : fallback;
+  return clampNum(preferred, 0.05, 10, fallback);
+}
+
 export function normalizeStoredMaterialProfile(
-  value: Partial<StoredMaterialProfile> | undefined,
+  value: Partial<LegacyStoredMaterialProfile> | undefined,
   fallback: StoredMaterialProfile
 ): StoredMaterialProfile {
   if (!value) return fallback;
@@ -63,19 +75,15 @@ export function normalizeStoredMaterialProfile(
     stepoverPercentage: clampNum(value.stepoverPercentage, 1, 100, fallback.stepoverPercentage),
     rampAngle: clampNum(value.rampAngle, 0.1, 45, fallback.rampAngle),
     plungeRatio: clampNum(value.plungeRatio, 0.05, 1, fallback.plungeRatio),
-    adaptiveDocMinRatio: clampNum(value.adaptiveDocMinRatio, 0.05, 10, fallback.adaptiveDocMinRatio),
-    adaptiveDocMaxRatio: clampNum(
+    adaptiveDocMaxRatio: resolveMaxDocRatio(
       value.adaptiveDocMaxRatio,
-      0.05,
-      10,
-      Math.max(fallback.adaptiveDocMaxRatio, fallback.adaptiveDocMinRatio)
+      value.adaptiveDocMinRatio,
+      fallback.adaptiveDocMaxRatio
     ),
-    pocketDocMinRatio: clampNum(value.pocketDocMinRatio, 0.05, 10, fallback.pocketDocMinRatio),
-    pocketDocMaxRatio: clampNum(
+    pocketDocMaxRatio: resolveMaxDocRatio(
       value.pocketDocMaxRatio,
-      0.05,
-      10,
-      Math.max(fallback.pocketDocMaxRatio, fallback.pocketDocMinRatio)
+      value.pocketDocMinRatio,
+      fallback.pocketDocMaxRatio
     ),
     finishAllowancePercent: clampNum(value.finishAllowancePercent, 0.5, 50, fallback.finishAllowancePercent),
     recommendedMilling:
@@ -139,7 +147,7 @@ export function normalizeFeedsMaterialRows(
     return normalized;
   }
 
-  const legacy = value as Record<string, StoredMaterialProfile>;
+  const legacy = value as Record<string, LegacyStoredMaterialProfile>;
   return defaults.map((fallback) => {
     const legacyProfile = legacy[fallback.id];
     return {
@@ -179,8 +187,6 @@ export function resolveMaterialProfile(
       ...profile,
       id: builtin.id,
       name: row.name,
-      adaptiveDocMaxRatio: Math.max(profile.adaptiveDocMinRatio, profile.adaptiveDocMaxRatio),
-      pocketDocMaxRatio: Math.max(profile.pocketDocMinRatio, profile.pocketDocMaxRatio),
     };
   }
 
@@ -191,10 +197,8 @@ export function resolveMaterialProfile(
     stepoverPercentage: profile.stepoverPercentage,
     rampAngle: profile.rampAngle,
     plungeRatio: profile.plungeRatio,
-    adaptiveDocMinRatio: profile.adaptiveDocMinRatio,
-    adaptiveDocMaxRatio: Math.max(profile.adaptiveDocMinRatio, profile.adaptiveDocMaxRatio),
-    pocketDocMinRatio: profile.pocketDocMinRatio,
-    pocketDocMaxRatio: Math.max(profile.pocketDocMinRatio, profile.pocketDocMaxRatio),
+    adaptiveDocMaxRatio: profile.adaptiveDocMaxRatio,
+    pocketDocMaxRatio: profile.pocketDocMaxRatio,
     finishAllowancePercent: profile.finishAllowancePercent,
     recommendedMilling: profile.recommendedMilling,
     millingNote: profile.millingNote,
