@@ -110,10 +110,11 @@ export function buildOutlineEntryArcGuide(
   partLoop: LoopPoint[],
   settings: OperationDefaults,
   stockAllowance: number,
-  sampleSpacing: number
+  sampleSpacing: number,
+  offsetContext: OutlineOffsetContext = DEFAULT_OUTLINE_OFFSET_CONTEXT
 ): ArcLengthGuide {
   return buildArcLengthGuide(
-    buildOutlineToolCenterline(partLoop, settings, stockAllowance),
+    buildOutlineToolCenterline(partLoop, settings, stockAllowance, 0.3, offsetContext),
     Math.max(sampleSpacing, 0.25)
   );
 }

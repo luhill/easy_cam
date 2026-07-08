@@ -42,11 +42,10 @@ function CalloutDragHandle({
   const { raycaster, camera, gl } = useThree();
   const hit = useRef(new THREE.Vector3());
   const [dragging, setDragging] = useState(false);
-  const [preview, setPreview] = useState<{ x: number; y: number } | null>(null);
+  const [labelDrag, setLabelDrag] = useState<{ x: number; y: number } | null>(null);
 
-  const display = preview ?? point;
-  const labelX = display.x + labelOffset.x;
-  const labelY = display.y + labelOffset.y;
+  const labelX = (labelDrag?.x ?? point.x) + labelOffset.x;
+  const labelY = (labelDrag?.y ?? point.y) + labelOffset.y;
 
   const pickXY = useCallback(
     (clientX: number, clientY: number) => {
@@ -75,7 +74,7 @@ function CalloutDragHandle({
       if (!dragging) return;
       e.stopPropagation();
       const xy = pickXY(e.clientX, e.clientY);
-      if (xy) setPreview(xy);
+      if (xy) setLabelDrag(xy);
     },
     [dragging, pickXY]
   );
@@ -85,11 +84,10 @@ function CalloutDragHandle({
       e.stopPropagation();
       setDragging(false);
       (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-      const xy = pickXY(e.clientX, e.clientY);
-      if (xy) onCommit(xy.x, xy.y);
-      setPreview(null);
+      if (labelDrag) onCommit(labelDrag.x, labelDrag.y);
+      setLabelDrag(null);
     },
-    [onCommit, pickXY]
+    [labelDrag, onCommit]
   );
 
   return (
@@ -97,12 +95,12 @@ function CalloutDragHandle({
       <Line
         points={[
           [labelX, labelY, z],
-          [display.x, display.y, z],
+          [point.x, point.y, z],
         ]}
         color={color}
         lineWidth={1.5}
       />
-      <mesh position={[display.x, display.y, z]}>
+      <mesh position={[point.x, point.y, z]}>
         <sphereGeometry args={[1.1, 12, 12]} />
         <meshBasicMaterial color={color} />
       </mesh>

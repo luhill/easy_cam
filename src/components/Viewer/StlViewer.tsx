@@ -978,11 +978,13 @@ function SceneContent({
     );
     if (!layout) return null;
 
+    const offsetContext = resolveOutlineOffsetContext(op.geometry, loop);
     const slotArcGuide = buildOutlineEntryArcGuide(
       loop,
       op.settings,
       stockAllowance,
-      sampleSpacing
+      sampleSpacing,
+      offsetContext
     );
 
     return {

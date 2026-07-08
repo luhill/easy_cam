@@ -75,6 +75,8 @@ export interface FourZoneParams {
     forward: boolean;
     loopLength: number;
   };
+  /** Arc length of spline lead-in before slot loop (inverts cut/lift on open tangent). */
+  splineLeadInLen?: number;
 }
 
 const CUT_PHASE_START = 0.5;
@@ -538,7 +540,10 @@ function generateTrochoidAlongGuide(
     for (let i = 0; i <= steps; i++) {
       const phase = i / steps;
       const sAlong = arcProgress + phase * segLen;
-      emitOrbit(sAlong, phase, cycle > 0 && i === 0);
+      const onSplineLeadIn =
+        params.splineLeadInLen !== undefined && sAlong < params.splineLeadInLen - 1e-5;
+      const effectivePhase = onSplineLeadIn ? 1 - phase : phase;
+      emitOrbit(sAlong, effectivePhase, cycle > 0 && i === 0);
     }
 
     arcProgress = segEnd;
@@ -634,15 +639,40 @@ export function generateContinuousEntryTrochoidPath(
   if (totalLength <= 0) return [];
 
   const forward = guideTraverseSign >= 0;
+  const blendLen = Math.min(Math.max(sampleSpacing * 3, 0.75), splineLen * 0.35, 3);
   const sampleAtGlobalS = (s: number) => {
-    if (splineArcGuide && s < splineLen - 1e-6) {
+    const loopDelta = Math.max(0, s - splineLen);
+    const loopS = forward ? trochoidStartS + loopDelta : trochoidStartS - loopDelta;
+
+    if (!splineArcGuide || splineLen <= 0) {
+      return sampleGuideAtS(trochArcGuide, loopS);
+    }
+    if (s <= splineLen - blendLen) {
       return sampleOpenGuideAtS(splineArcGuide, Math.max(0, s));
     }
-    const loopDelta = Math.max(0, s - splineLen);
-    const loopS = forward
-      ? trochoidStartS + loopDelta
-      : trochoidStartS - loopDelta;
-    return sampleGuideAtS(trochArcGuide, loopS);
+
+    const loopFrame = sampleGuideAtS(trochArcGuide, loopS);
+    if (s >= splineLen + blendLen) {
+      return loopFrame;
+    }
+
+    const splineFrame = sampleOpenGuideAtS(splineArcGuide, Math.min(Math.max(s, 0), splineLen));
+    const w =
+      s <= splineLen
+        ? (s - (splineLen - blendLen)) / (blendLen * 2)
+        : 0.5 + (s - splineLen) / (blendLen * 2);
+    const t = Math.max(0, Math.min(1, w));
+    const smooth = t * t * (3 - 2 * t);
+    return {
+      x: splineFrame.x + (loopFrame.x - splineFrame.x) * smooth,
+      y: splineFrame.y + (loopFrame.y - splineFrame.y) * smooth,
+      z: splineFrame.z + (loopFrame.z - splineFrame.z) * smooth,
+      tx: splineFrame.tx + (loopFrame.tx - splineFrame.tx) * smooth,
+      ty: splineFrame.ty + (loopFrame.ty - splineFrame.ty) * smooth,
+      nx: splineFrame.nx + (loopFrame.nx - splineFrame.nx) * smooth,
+      ny: splineFrame.ny + (loopFrame.ny - splineFrame.ny) * smooth,
+      s,
+    };
   };
 
   // Always emit spline (tool start → slot join) then the loop so bore lead-in
@@ -669,6 +699,7 @@ export function generateContinuousEntryTrochoidPath(
     guideSign: 1,
     startS: 0,
     guideLoopLength: loopTotal,
+    splineLeadInLen: splineLen,
     trochoidRAtGuide,
     spurRanges: loopSpurRanges,
     openSpurSnap:

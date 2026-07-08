@@ -44,10 +44,12 @@ import {
   generateContinuousEntryTrochoidPath,
   resolveGuideTraverseSign,
   resolveOrbitRotSign,
+  trochoidOrbitAngleAtPhase,
 } from './adaptiveFourZone';
 import {
   buildSplineEntryGuide,
   adjustBoreRadiusToSlotWidth,
+  generateBoreAlignOrbit,
   generateBoreBottomToLeadInTransition,
   generateFullRevolutionOrbit,
   generateHelixBorePoints,
@@ -627,8 +629,8 @@ function generateStandardOutlinePath(
           if (!appendPoints(points, splineTail)) break;
         }
 
-        loopAnchor = leadInRamp.loopAnchor;
-        loopStartS = leadInRamp.loopStartS;
+        loopAnchor = contourJoin;
+        loopStartS = layout.contourJoinS;
       } else {
         ramp = generateContourLinearRamp(
           traverse,
@@ -1087,28 +1089,49 @@ function appendBoreBottomWidenAndLeadIn(
   const boreBottom = lastPathPoint(target);
   if (!boreBottom) return true;
 
-  const boreStartAngle = Math.atan2(
+  let boreStartAngle = Math.atan2(
     boreBottom.y - boreCenter.y,
     boreBottom.x - boreCenter.x
   );
+  const needsWiden = bottomHelixR + 1e-3 < slotHelixR;
 
-  if (
-    !appendPoints(
-      target,
-      adjustBoreRadiusToSlotWidth(
-        boreCenter,
-        bottomHelixR,
-        slotHelixR,
-        layerZ,
-        stepoverIncrement,
-        rotDir,
-        segmentsPerRev,
-        boreStartAngle,
-        plungeFeed
+  if (needsWiden) {
+    if (
+      !appendPoints(
+        target,
+        adjustBoreRadiusToSlotWidth(
+          boreCenter,
+          bottomHelixR,
+          slotHelixR,
+          layerZ,
+          stepoverIncrement,
+          rotDir,
+          segmentsPerRev,
+          boreStartAngle,
+          plungeFeed
+        )
       )
-    )
-  ) {
-    return false;
+    ) {
+      return false;
+    }
+
+    const afterWiden = lastPathPoint(target) ?? boreBottom;
+    boreStartAngle = Math.atan2(
+      afterWiden.y - boreCenter.y,
+      afterWiden.x - boreCenter.x
+    );
+
+    const fullRev = generateFullRevolutionOrbit(
+      boreCenter,
+      slotHelixR,
+      layerZ,
+      boreStartAngle,
+      rotDir,
+      segmentsPerRev,
+      plungeFeed
+    );
+    if (!appendPoints(target, fullRev.points)) return false;
+    boreStartAngle = fullRev.endAngle;
   }
 
   const afterRadius = lastPathPoint(target) ?? boreBottom;
@@ -1120,6 +1143,82 @@ function appendBoreBottomWidenAndLeadIn(
       firstLeadIn,
       layerZ,
       stepoverIncrement,
+      rotDir,
+      segmentsPerRev,
+      plungeFeed
+    )
+  );
+}
+
+function appendBoreWidenAlignToTrochoidEntry(
+  target: ToolpathPoint[],
+  boreCenter: { x: number; y: number },
+  layerZ: number,
+  slotHelixR: number,
+  bottomHelixR: number,
+  stepoverIncrement: number,
+  rotDir: number,
+  segmentsPerRev: number,
+  plungeFeed: number,
+  orbitRotSign: number
+): boolean {
+  const boreBottom = lastPathPoint(target);
+  if (!boreBottom) return true;
+
+  let boreStartAngle = Math.atan2(
+    boreBottom.y - boreCenter.y,
+    boreBottom.x - boreCenter.x
+  );
+  const needsWiden = bottomHelixR + 1e-3 < slotHelixR;
+
+  if (needsWiden) {
+    if (
+      !appendPoints(
+        target,
+        adjustBoreRadiusToSlotWidth(
+          boreCenter,
+          bottomHelixR,
+          slotHelixR,
+          layerZ,
+          stepoverIncrement,
+          rotDir,
+          segmentsPerRev,
+          boreStartAngle,
+          plungeFeed
+        )
+      )
+    ) {
+      return false;
+    }
+
+    const afterWiden = lastPathPoint(target) ?? boreBottom;
+    boreStartAngle = Math.atan2(
+      afterWiden.y - boreCenter.y,
+      afterWiden.x - boreCenter.x
+    );
+
+    const fullRev = generateFullRevolutionOrbit(
+      boreCenter,
+      slotHelixR,
+      layerZ,
+      boreStartAngle,
+      rotDir,
+      segmentsPerRev,
+      plungeFeed
+    );
+    if (!appendPoints(target, fullRev.points)) return false;
+    boreStartAngle = fullRev.endAngle;
+  }
+
+  const targetAngle = trochoidOrbitAngleAtPhase(0, orbitRotSign);
+  return appendPoints(
+    target,
+    generateBoreAlignOrbit(
+      boreCenter,
+      slotHelixR,
+      layerZ,
+      boreStartAngle,
+      targetAngle,
       rotDir,
       segmentsPerRev,
       plungeFeed
@@ -1324,14 +1423,15 @@ function generateAdaptiveOutlinePath(
     }
 
     if (li === 0) {
+      const splineGuide = buildSplineEntryGuide(
+        toolStart,
+        entryLayout.slotJoin,
+        entryLayout.traverseTangent,
+        trochSampleSpacing,
+        layerZ
+      );
       const layerTroch = generateContinuousEntryTrochoidPath(
-        buildSplineEntryGuide(
-          toolStart,
-          entryLayout.slotJoin,
-          entryLayout.traverseTangent,
-          trochSampleSpacing,
-          layerZ
-        ),
+        splineGuide,
         trochArcGuide,
         trochoidStartS,
         entryLayout.guideTraverseSign,
@@ -1340,6 +1440,7 @@ function generateAdaptiveOutlinePath(
           z: layerZ,
           arcGuide: trochArcGuide,
           trochoidRAtGuide: spurRadiusSampler,
+          omitFirstOrbitSample: true,
         },
         outwardCCW,
         entryLayout.cornerSpurRanges
@@ -1348,7 +1449,7 @@ function generateAdaptiveOutlinePath(
       if (layerTroch.length === 0) continue;
 
       if (
-        !appendBoreBottomWidenAndLeadIn(
+        !appendBoreWidenAlignToTrochoidEntry(
           points,
           toolStart,
           layerZ,
@@ -1358,7 +1459,7 @@ function generateAdaptiveOutlinePath(
           rotDir,
           segmentsPerRev,
           plungeFeed,
-          layerTroch[0]
+          resolveOrbitRotSign(slotCenterGuide, settings.climbMilling)
         )
       ) {
         break;
@@ -1386,14 +1487,14 @@ function generateAdaptiveOutlinePath(
       true,
       trochoidStartS,
       0,
-      false,
+      true,
       offsetContext
     );
 
     if (layerTroch.length === 0) continue;
 
     if (
-      !appendBoreBottomWidenAndLeadIn(
+      !appendBoreWidenAlignToTrochoidEntry(
         points,
         slotBoreCenter,
         layerZ,
@@ -1403,7 +1504,7 @@ function generateAdaptiveOutlinePath(
         rotDir,
         segmentsPerRev,
         plungeFeed,
-        layerTroch[0]
+        resolveOrbitRotSign(slotCenterGuide, settings.climbMilling)
       )
     ) {
       break;
