@@ -83,7 +83,7 @@ const CUT_PHASE_START = 0.5;
 const RETURN_LIFT_START = 0.08;
 const RETURN_LIFT_END = 0.38;
 /** Rotate micro-loop so cut arc sits ahead of travel (climb CCW / conventional CW). */
-const CUT_PHASE_ROTATION = (95 * Math.PI) / 180;
+const CUT_PHASE_ROTATION = (105 * Math.PI) / 180;
 
 function normalizeFrame(frame: ReturnType<typeof sampleGuideAtS>) {
   let tx = frame.tx;
