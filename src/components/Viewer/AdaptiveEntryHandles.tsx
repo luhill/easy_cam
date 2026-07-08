@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { Html, Line } from '@react-three/drei';
-import { useThree, type ThreeEvent } from '@react-three/fiber';
+import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { ArcLengthGuide } from '../../lib/trochoidalPath';
 import { findClosestSOnGuide, sampleGuideAtS } from '../../lib/trochoidalPath';
@@ -63,28 +63,29 @@ function CalloutDragHandle({
     [camera, dragPlane, gl.domElement, onSnap, raycaster]
   );
 
-  const handlePointerDown = useCallback((e: ThreeEvent<PointerEvent>) => {
+  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     e.stopPropagation();
+    e.preventDefault();
     setDragging(true);
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   }, []);
 
   const handlePointerMove = useCallback(
-    (e: ThreeEvent<PointerEvent>) => {
+    (e: React.PointerEvent<HTMLDivElement>) => {
       if (!dragging) return;
       e.stopPropagation();
-      const xy = pickXY(e.nativeEvent.clientX, e.nativeEvent.clientY);
+      const xy = pickXY(e.clientX, e.clientY);
       if (xy) setPreview(xy);
     },
     [dragging, pickXY]
   );
 
   const handlePointerUp = useCallback(
-    (e: ThreeEvent<PointerEvent>) => {
+    (e: React.PointerEvent<HTMLDivElement>) => {
       e.stopPropagation();
       setDragging(false);
-      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-      const xy = pickXY(e.nativeEvent.clientX, e.nativeEvent.clientY);
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      const xy = pickXY(e.clientX, e.clientY);
       if (xy) onCommit(xy.x, xy.y);
       setPreview(null);
     },
@@ -105,36 +106,29 @@ function CalloutDragHandle({
         <sphereGeometry args={[1.1, 12, 12]} />
         <meshBasicMaterial color={color} />
       </mesh>
-      <Html
-        position={[labelX, labelY, z]}
-        center
-        style={{ pointerEvents: 'none', userSelect: 'none' }}
-      >
+      <Html position={[labelX, labelY, z]} center style={{ pointerEvents: 'none', userSelect: 'none' }}>
         <div
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
           style={{
             background: 'rgba(15, 23, 42, 0.92)',
             border: `1px solid ${color}`,
             borderRadius: 4,
             color: '#f8fafc',
+            cursor: dragging ? 'grabbing' : 'grab',
             fontSize: 11,
             fontWeight: 600,
             letterSpacing: '0.04em',
             padding: '2px 8px',
+            pointerEvents: 'auto',
+            touchAction: 'none',
             whiteSpace: 'nowrap',
           }}
         >
           {label}
         </div>
       </Html>
-      <mesh
-        position={[display.x, display.y, z]}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-      >
-        <sphereGeometry args={[2.2, 16, 16]} />
-        <meshBasicMaterial transparent opacity={0.001} depthWrite={false} />
-      </mesh>
     </group>
   );
 }
@@ -197,7 +191,7 @@ export function AdaptiveEntryHandles({
         topZ={topZ}
         color={toolStartManual ? '#f59e0b' : '#94a3b8'}
         label="Start"
-        labelOffset={{ x: 16, y: 16 }}
+        labelOffset={{ x: 4, y: 4 }}
         onCommit={handleToolStartCommit}
         dragPlane={dragPlane}
       />
@@ -207,7 +201,7 @@ export function AdaptiveEntryHandles({
           topZ={topZ}
           color={slotJoinManual ? '#38bdf8' : '#64748b'}
           label="Join"
-          labelOffset={{ x: -16, y: 16 }}
+          labelOffset={{ x: -4, y: 4 }}
           onCommit={handleSlotJoinCommit}
           onSnap={snapSlotJoin}
           dragPlane={dragPlane}

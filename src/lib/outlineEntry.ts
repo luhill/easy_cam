@@ -355,17 +355,34 @@ export function buildStandardSplineLeadIn(
   return spline.map((p) => ({ x: p.x, y: p.y, z }));
 }
 
-/** Spline from helix bore exit to contour join — same Hermite shape as adaptive entry. */
+/** Spline from bore center to contour join — same chord-aligned Hermite as adaptive entry. */
 export function buildHelixOutlineSplineLeadIn(
-  _boreCenter: { x: number; y: number },
-  boreBottom: { x: number; y: number },
+  boreCenter: { x: number; y: number },
+  _boreBottom: { x: number; y: number },
   layout: StandardEntryLayout,
   z: number,
   sampleSpacing: number,
   _rotDir: number
 ): ToolpathPoint[] {
   return buildSplineEntryGuide(
-    boreBottom,
+    boreCenter,
+    layout.contourJoin,
+    layout.traverseTangent,
+    sampleSpacing,
+    z
+  ).map((p) => ({ x: p.x, y: p.y, z }));
+}
+
+/** Layer-0 helix lead-in polyline sampled from the bore center (not bore-bottom tangent). */
+export function buildStandardHelixSplineLeadIn(
+  layout: StandardEntryLayout,
+  z: number,
+  sampleSpacing: number,
+  toolStartOverride?: { x: number; y: number }
+): ToolpathPoint[] {
+  const start = toolStartOverride ?? layout.toolStart;
+  return buildSplineEntryGuide(
+    start,
     layout.contourJoin,
     layout.traverseTangent,
     sampleSpacing,

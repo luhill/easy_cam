@@ -18,8 +18,6 @@ import {
 } from './cornerSpurs';
 import { resolveAdaptiveSlotGeometry, cornerSpurOptionsForRoughing, finishingStockAllowance } from './adaptiveOutline';
 import {
-  buildHelixOutlineSplineLeadIn,
-  buildStandardSplineLeadIn,
   generateContourLinearRamp,
   generateStandardLeadInLayerRamp,
   outlineApproachWorldZ,
@@ -32,6 +30,7 @@ import {
   standardSplineLeadInFeed,
   standardSplineTailFromPoint,
   stationOnContour,
+  buildStandardHelixSplineLeadIn,
   DEFAULT_OUTLINE_OFFSET_CONTEXT,
   resolveSignedOutlineOffset,
   type OutlineOffsetContext,
@@ -371,7 +370,20 @@ function generateStandardHelixOutlinePath(
       const needsBottomWiden =
         settings.boreTaperAngleDeg > 0 && bottomHelixR + 1e-3 < helixR;
 
+      const splineLeadIn = buildStandardHelixSplineLeadIn(
+        layout,
+        layerZ,
+        sampleSpacing,
+        toolStart
+      ).map((p) => ({ ...p, feedRate: cutFeed }));
+
       if (needsBottomWiden) {
+        const firstLeadIn = splineLeadIn[0] ?? {
+          x: toolStart.x,
+          y: toolStart.y,
+          z: layerZ,
+          feedRate: cutFeed,
+        };
         if (
           !appendBoreBottomWidenAndLeadIn(
             points,
@@ -383,37 +395,18 @@ function generateStandardHelixOutlinePath(
             rotDir,
             segmentsPerRev,
             plungeFeed,
-            { x: joinPoint.x, y: joinPoint.y, z: layerZ, feedRate: cutFeed }
+            firstLeadIn
           )
         ) {
           break;
         }
+        const tail = skipDuplicateLeadInPoint(points, splineLeadIn, sampleSpacing);
+        if (!appendPoints(points, tail)) break;
       } else if (
         Math.hypot(toolStart.x - joinPoint.x, toolStart.y - joinPoint.y) > 0.5
       ) {
-        const boreBottom = lastPathPoint(points);
-        const leadIn = boreBottom
-          ? buildHelixOutlineSplineLeadIn(
-              toolStart,
-              boreBottom,
-              layout,
-              layerZ,
-              sampleSpacing,
-              rotDir
-            ).map((p) => ({ ...p, feedRate: cutFeed }))
-          : buildStandardSplineLeadIn(layout, layerZ, sampleSpacing, toolStart).map((p) => ({
-              ...p,
-              feedRate: cutFeed,
-            }));
-
-        if (
-          boreBottom &&
-          leadIn.length > 0 &&
-          Math.hypot(leadIn[0].x - boreBottom.x, leadIn[0].y - boreBottom.y) <
-            sampleSpacing * 0.75
-        ) {
-          leadIn.shift();
-        }
+        appendRadialToBoreCenter(points, toolStart, cutFeed);
+        const leadIn = skipDuplicateLeadInPoint(points, splineLeadIn, sampleSpacing);
         if (!appendPoints(points, leadIn)) break;
       }
     } else {
@@ -434,6 +427,18 @@ function generateStandardHelixOutlinePath(
         helixOpts
       );
 
+      const layerSplineLeadIn = buildStandardHelixSplineLeadIn(
+        layout,
+        layerZ,
+        sampleSpacing,
+        layerBoreCenter
+      ).map((p) => ({ ...p, feedRate: cutFeed }));
+      const layerFirstLeadIn = layerSplineLeadIn[0] ?? {
+        x: layerBoreCenter.x,
+        y: layerBoreCenter.y,
+        z: layerZ,
+        feedRate: cutFeed,
+      };
       if (
         !appendBoreBottomWidenAndLeadIn(
           points,
@@ -445,11 +450,13 @@ function generateStandardHelixOutlinePath(
           rotDir,
           segmentsPerRev,
           plungeFeed,
-          { x: joinPoint.x, y: joinPoint.y, z: layerZ, feedRate: cutFeed }
+          layerFirstLeadIn
         )
       ) {
         break;
       }
+      const layerTail = skipDuplicateLeadInPoint(points, layerSplineLeadIn, sampleSpacing);
+      if (!appendPoints(points, layerTail)) break;
     }
 
     const loopStartS = layout.contourJoinS;
@@ -1173,6 +1180,33 @@ function lastPathPoint(points: ToolpathPoint[]): { x: number; y: number; z: numb
   if (points.length === 0) return null;
   const p = points[points.length - 1];
   return { x: p.x, y: p.y, z: p.z };
+}
+
+function appendRadialToBoreCenter(
+  points: ToolpathPoint[],
+  boreCenter: { x: number; y: number },
+  feedRate: number
+): void {
+  const last = lastPathPoint(points);
+  if (!last) return;
+  if (Math.hypot(last.x - boreCenter.x, last.y - boreCenter.y) < 0.12) return;
+  points.push({ x: boreCenter.x, y: boreCenter.y, z: last.z, feedRate });
+}
+
+function skipDuplicateLeadInPoint(
+  points: ToolpathPoint[],
+  leadIn: ToolpathPoint[],
+  sampleSpacing: number
+): ToolpathPoint[] {
+  const last = lastPathPoint(points);
+  if (
+    !last ||
+    leadIn.length === 0 ||
+    Math.hypot(last.x - leadIn[0].x, last.y - leadIn[0].y) >= sampleSpacing * 0.75
+  ) {
+    return leadIn;
+  }
+  return leadIn.slice(1);
 }
 
 function generateAdaptiveOutlinePath(
