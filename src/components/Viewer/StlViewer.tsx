@@ -60,9 +60,10 @@ import {
   computeAdaptiveOutlineDebugGuidesFromBounds,
   resolveAdaptiveEntryLayout,
   adaptiveEntryOverridesFromGeometry,
+  snapPointToSlotCenterline,
 } from '../../lib/adaptiveGuides';
 import { minkowskiSegmentLen, pathSampleSpacing, trochoidSampleSpacing } from '../../lib/toolpathConfig';
-import { resolveAdaptiveSlotGeometry, finishingStockAllowance } from '../../lib/adaptiveOutline';
+import { resolveAdaptiveSlotGeometry, finishingStockAllowance, resolveAdaptiveEntryPoint } from '../../lib/adaptiveOutline';
 import {
   buildOutlineEntryArcGuide,
   resolveOutlineOffsetContext,
@@ -1006,15 +1007,26 @@ function SceneContent({
   const handleToolStartChange = useCallback(
     (point: { x: number; y: number }) => {
       if (!adaptiveEntry?.op.geometry) return;
+      const loop = adaptiveEntry.op.geometry.loops?.[0];
+      if (!loop) return;
+      const offsetContext = resolveOutlineOffsetContext(adaptiveEntry.op.geometry, loop);
+      const constrained = resolveAdaptiveEntryPoint(
+        loop,
+        adaptiveEntry.op.settings,
+        point,
+        toolOrigin,
+        offsetContext.offsetSign,
+        offsetContext.wallSide
+      );
       updateOperation(adaptiveEntry.op.id, {
         geometry: {
           ...adaptiveEntry.op.geometry,
-          toolStartPoint: point,
+          toolStartPoint: constrained,
           entryPoint: undefined,
         },
       });
     },
-    [adaptiveEntry, updateOperation]
+    [adaptiveEntry, updateOperation, toolOrigin]
   );
 
   const handleSlotJoinChange = useCallback(
@@ -1022,8 +1034,12 @@ function SceneContent({
       if (!adaptiveEntry?.op.geometry) return;
       const loop = adaptiveEntry.op.geometry.loops?.[0];
       let next = point;
-      if (loop && isStandardOutlineEntryEditable(adaptiveEntry.op) && adaptiveEntry.slotArcGuide) {
-        next = snapPointToOutlineCenterline(adaptiveEntry.slotArcGuide, point);
+      if (loop && adaptiveEntry.slotArcGuide) {
+        if (isStandardOutlineEntryEditable(adaptiveEntry.op)) {
+          next = snapPointToOutlineCenterline(adaptiveEntry.slotArcGuide, point);
+        } else {
+          next = snapPointToSlotCenterline(adaptiveEntry.slotArcGuide, point);
+        }
       }
       updateOperation(adaptiveEntry.op.id, {
         geometry: {

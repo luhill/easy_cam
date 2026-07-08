@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { Line } from '@react-three/drei';
+import { Html, Line } from '@react-three/drei';
 import { useThree, type ThreeEvent } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { ArcLengthGuide } from '../../lib/trochoidalPath';
@@ -19,40 +19,34 @@ interface AdaptiveEntryHandlesProps {
   onSlotJoinChange?: (point: { x: number; y: number }) => void;
 }
 
-function crossSegments(x: number, y: number, z: number, size: number) {
-  return [
-    [
-      [x - size, y, z] as [number, number, number],
-      [x + size, y, z] as [number, number, number],
-    ],
-    [
-      [x, y - size, z] as [number, number, number],
-      [x, y + size, z] as [number, number, number],
-    ],
-  ];
-}
-
-function DragHandle({
+function CalloutDragHandle({
   point,
   topZ,
   color,
+  label,
+  labelOffset,
   onCommit,
+  onSnap,
   dragPlane,
 }: {
   point: { x: number; y: number };
   topZ: number;
   color: string;
+  label: string;
+  labelOffset: { x: number; y: number };
   onCommit: (x: number, y: number) => void;
+  onSnap?: (x: number, y: number) => { x: number; y: number };
   dragPlane: THREE.Plane;
 }) {
   const z = topZ + 0.12;
-  const size = 2.4;
   const { raycaster, camera, gl } = useThree();
   const hit = useRef(new THREE.Vector3());
   const [dragging, setDragging] = useState(false);
   const [preview, setPreview] = useState<{ x: number; y: number } | null>(null);
 
   const display = preview ?? point;
+  const labelX = display.x + labelOffset.x;
+  const labelY = display.y + labelOffset.y;
 
   const pickXY = useCallback(
     (clientX: number, clientY: number) => {
@@ -63,9 +57,10 @@ function DragHandle({
       );
       raycaster.setFromCamera(ndc, camera);
       if (!raycaster.ray.intersectPlane(dragPlane, hit.current)) return null;
-      return { x: hit.current.x, y: hit.current.y };
+      const raw = { x: hit.current.x, y: hit.current.y };
+      return onSnap ? onSnap(raw.x, raw.y) : raw;
     },
-    [camera, dragPlane, gl.domElement, raycaster]
+    [camera, dragPlane, gl.domElement, onSnap, raycaster]
   );
 
   const handlePointerDown = useCallback((e: ThreeEvent<PointerEvent>) => {
@@ -96,19 +91,48 @@ function DragHandle({
     [onCommit, pickXY]
   );
 
-  const crosses = crossSegments(display.x, display.y, z, size);
-
   return (
     <group>
-      <Line points={crosses[0]} color={color} lineWidth={2.5} />
-      <Line points={crosses[1]} color={color} lineWidth={2.5} />
+      <Line
+        points={[
+          [labelX, labelY, z],
+          [display.x, display.y, z],
+        ]}
+        color={color}
+        lineWidth={1.5}
+      />
+      <mesh position={[display.x, display.y, z]}>
+        <sphereGeometry args={[1.1, 12, 12]} />
+        <meshBasicMaterial color={color} />
+      </mesh>
+      <Html
+        position={[labelX, labelY, z]}
+        center
+        style={{ pointerEvents: 'none', userSelect: 'none' }}
+      >
+        <div
+          style={{
+            background: 'rgba(15, 23, 42, 0.92)',
+            border: `1px solid ${color}`,
+            borderRadius: 4,
+            color: '#f8fafc',
+            fontSize: 11,
+            fontWeight: 600,
+            letterSpacing: '0.04em',
+            padding: '2px 8px',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {label}
+        </div>
+      </Html>
       <mesh
         position={[display.x, display.y, z]}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
       >
-        <sphereGeometry args={[1.8, 16, 16]} />
+        <sphereGeometry args={[2.2, 16, 16]} />
         <meshBasicMaterial transparent opacity={0.001} depthWrite={false} />
       </mesh>
     </group>
@@ -158,21 +182,34 @@ export function AdaptiveEntryHandles({
     [onSlotJoinChange, slotArcGuide]
   );
 
+  const snapSlotJoin = useCallback(
+    (x: number, y: number) => {
+      if (!slotArcGuide) return { x, y };
+      return snapPointToSlotCenterline(slotArcGuide, { x, y });
+    },
+    [slotArcGuide]
+  );
+
   return (
     <group>
-      <DragHandle
+      <CalloutDragHandle
         point={toolStart}
         topZ={topZ}
         color={toolStartManual ? '#f59e0b' : '#94a3b8'}
+        label="Start"
+        labelOffset={{ x: 16, y: 16 }}
         onCommit={handleToolStartCommit}
         dragPlane={dragPlane}
       />
       {showSlotJoin && slotJoin && (
-        <DragHandle
+        <CalloutDragHandle
           point={slotJoin}
           topZ={topZ}
           color={slotJoinManual ? '#38bdf8' : '#64748b'}
+          label="Join"
+          labelOffset={{ x: -16, y: 16 }}
           onCommit={handleSlotJoinCommit}
+          onSnap={snapSlotJoin}
           dragPlane={dragPlane}
         />
       )}

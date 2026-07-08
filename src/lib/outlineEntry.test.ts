@@ -13,7 +13,7 @@ import {
 } from './outlineEntry';
 import { closestPointOnLoop2D, distanceToLoop2D } from './geometryProcessing';
 import { defaultSettingsForOperation, type LoopPoint } from '../types/operations';
-import { helixRadiusAtZ, resolveHelixRadius } from './entryPath';
+import { helixRadiusAtZ, resolveHelixRadius, ensureEntryOutsidePart } from './entryPath';
 
 function assert(cond: boolean, msg: string): void {
   if (!cond) throw new Error(msg);
@@ -133,6 +133,28 @@ assert(
       0
     ),
   'standard helix minimum bore distance should include finish stock allowance'
+);
+
+const interiorDeep = ensureEntryOutsidePart(
+  interiorPocket,
+  { x: 20, y: 20 },
+  2.5,
+  'interior'
+);
+assert(
+  Math.hypot(interiorDeep.x - 20, interiorDeep.y - 20) < 0.01,
+  'interior void placement should accept a point deep inside the pocket'
+);
+
+const interiorRejected = ensureEntryOutsidePart(
+  interiorPocket,
+  { x: 5, y: 20 },
+  2.5,
+  'interior'
+);
+assert(
+  Math.hypot(interiorRejected.x - 10, interiorRejected.y - 20) >= 2.4,
+  'interior placement outside void should push back to minimum standoff'
 );
 
 console.log('outlineEntry tests passed');

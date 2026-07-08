@@ -19,6 +19,7 @@ import {
 import {
   ensureEntryOutsidePart,
   resolveHelixRadius,
+  buildSplineEntryGuide,
 } from './entryPath';
 import { resolveGuideTraverseSign } from './adaptiveFourZone';
 
@@ -354,61 +355,22 @@ export function buildStandardSplineLeadIn(
   return spline.map((p) => ({ x: p.x, y: p.y, z }));
 }
 
-/** Spline from helix bore-bottom to contour join — tight departure, tangent arrival. */
+/** Spline from helix bore exit to contour join — same Hermite shape as adaptive entry. */
 export function buildHelixOutlineSplineLeadIn(
-  boreCenter: { x: number; y: number },
+  _boreCenter: { x: number; y: number },
   boreBottom: { x: number; y: number },
   layout: StandardEntryLayout,
   z: number,
   sampleSpacing: number,
-  rotDir: number
+  _rotDir: number
 ): ToolpathPoint[] {
-  const dx = layout.contourJoin.x - boreBottom.x;
-  const dy = layout.contourJoin.y - boreBottom.y;
-  const chord = Math.hypot(dx, dy);
-  if (chord <= 1e-6) {
-    return [{ x: layout.contourJoin.x, y: layout.contourJoin.y, z }];
-  }
-
-  const startTan = helixBoreExitTangent(boreCenter, boreBottom, rotDir);
-  const startHandle = Math.min(Math.max(chord * 0.12, sampleSpacing * 0.4), chord * 0.22);
-  const endHandle = Math.max(chord * 0.72, sampleSpacing * 2.5);
-  const sLen = Math.hypot(startTan.x, startTan.y) || 1;
-  const t0 = {
-    x: (startTan.x / sLen) * startHandle,
-    y: (startTan.y / sLen) * startHandle,
-  };
-  const tLen = Math.hypot(layout.traverseTangent.x, layout.traverseTangent.y) || 1;
-  const t1 = {
-    x: (layout.traverseTangent.x / tLen) * endHandle,
-    y: (layout.traverseTangent.y / tLen) * endHandle,
-  };
-
-  const steps = Math.max(6, Math.ceil(chord / sampleSpacing));
-  const points: ToolpathPoint[] = [];
-  for (let i = 0; i <= steps; i++) {
-    const u = i / steps;
-    const u2 = u * u;
-    const u3 = u2 * u;
-    const h00 = 2 * u3 - 3 * u2 + 1;
-    const h10 = u3 - 2 * u2 + u;
-    const h01 = -2 * u3 + 3 * u2;
-    const h11 = u3 - u2;
-    points.push({
-      x:
-        h00 * boreBottom.x +
-        h10 * t0.x +
-        h01 * layout.contourJoin.x +
-        h11 * t1.x,
-      y:
-        h00 * boreBottom.y +
-        h10 * t0.y +
-        h01 * layout.contourJoin.y +
-        h11 * t1.y,
-      z,
-    });
-  }
-  return points;
+  return buildSplineEntryGuide(
+    boreBottom,
+    layout.contourJoin,
+    layout.traverseTangent,
+    sampleSpacing,
+    z
+  ).map((p) => ({ x: p.x, y: p.y, z }));
 }
 
 export function standardSplineLeadInFeed(
@@ -508,6 +470,7 @@ export function resolveStandardHelixEntryLayout(
 ): StandardHelixEntryLayout | null {
   if (partLoop.length < 2) return null;
 
+  const offsetContext = resolveOutlineOffsetContext(geometry, partLoop);
   const layout = resolveStandardEntryLayout(
     partLoop,
     settings,
@@ -532,7 +495,12 @@ export function resolveStandardHelixEntryLayout(
       x: joinPoint.x + outward.outX * helixR,
       y: joinPoint.y + outward.outY * helixR,
     };
-    toolStart = ensureEntryOutsidePart(partLoop, candidate, minDist * 0.98);
+    toolStart = ensureEntryOutsidePart(
+      partLoop,
+      candidate,
+      minDist * 0.98,
+      offsetContext.wallSide
+    );
   }
 
   return {
@@ -549,8 +517,9 @@ export function resolveStandardHelixLayerBoreCenter(
   joinPoint: { x: number; y: number },
   settings: OperationDefaults,
   stockAllowance = 0,
-  _geometry?: SelectedGeometry | null
+  geometry?: SelectedGeometry | null
 ): { x: number; y: number } {
+  const offsetContext = resolveOutlineOffsetContext(geometry ?? null, partLoop);
   const helixR = resolveHelixRadius(settings);
   const outward = closestPointOnLoop2D(joinPoint.x, joinPoint.y, partLoop);
   const candidate = {
@@ -558,7 +527,12 @@ export function resolveStandardHelixLayerBoreCenter(
     y: joinPoint.y + outward.outY * helixR,
   };
   const minDist = minimumStandardHelixEntryCenterDist(settings, stockAllowance);
-  return ensureEntryOutsidePart(partLoop, candidate, minDist * 0.98);
+  return ensureEntryOutsidePart(
+    partLoop,
+    candidate,
+    minDist * 0.98,
+    offsetContext.wallSide
+  );
 }
 
 export interface ContourRampResult {

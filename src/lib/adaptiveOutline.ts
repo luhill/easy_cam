@@ -176,7 +176,8 @@ export function computeDefaultEntryPoint(
       x: bestGuide.x + outward.outX * outwardOffset,
       y: bestGuide.y + outward.outY * outwardOffset,
     },
-    centerDist * 0.98
+    centerDist * 0.98,
+    wallSide
   );
 }
 
@@ -190,7 +191,7 @@ export function resolveAdaptiveEntryPoint(
 ): { x: number; y: number } {
   const minDist = minimumEntryCenterDist(settings);
   if (entry) {
-    return ensureEntryOutsidePart(partLoop, entry, minDist);
+    return ensureEntryOutsidePart(partLoop, entry, minDist, wallSide);
   }
   return computeDefaultEntryPoint(partLoop, settings, toolOrigin, offsetSign, wallSide);
 }
