@@ -8,7 +8,7 @@ import type {
   ToolpathSegment,
 } from '../types/operations';
 import type { PartBounds } from '../lib/geometryProcessing';
-import { partBoundsEqual, rotateSelectedGeometry, snapRotationDegrees } from '../lib/geometryProcessing';
+import { partBoundsEqual, normalizeRotationDegrees, rotateSelectedGeometry } from '../lib/geometryProcessing';
 import { getPartTransformBridge } from '../lib/partTransformBridge';
 import {
   defaultSettingsForOperation,
@@ -40,7 +40,7 @@ interface AppState {
   selectionMode: boolean;
   selectionSubMode: SelectionSubMode;
   partBounds: PartBounds | null;
-  /** Part rotation around Z (degrees), snapped to 30° steps. */
+  /** Part rotation around Z (degrees). */
   partRotationZ: number;
   toolpaths: ToolpathSegment[];
   toolpathWarnings: string[];
@@ -303,25 +303,25 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setPartRotationZ: (degrees) => {
-    const snapped = snapRotationDegrees(degrees);
+    const next = normalizeRotationDegrees(degrees);
     const prev = get().partRotationZ;
-    let delta = snapped - prev;
+    let delta = next - prev;
     if (delta > 180) delta -= 360;
     if (delta < -180) delta += 360;
 
-    if (Math.abs(delta) < 1e-6 && snapped === prev) return;
+    if (Math.abs(delta) < 1e-6 && next === prev) return;
 
     const bridge = getPartTransformBridge();
     if (!bridge) return;
 
     set((state) => ({
-      partRotationZ: snapped,
+      partRotationZ: next,
       operations: state.operations.map((op) =>
         op.geometry ? { ...op, geometry: rotateSelectedGeometry(op.geometry, delta) } : op
       ),
     }));
 
-    bridge.applyRotationZ(snapped);
+    bridge.applyRotationZ(next);
     get().regenerateToolpaths();
   },
 

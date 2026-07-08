@@ -131,9 +131,15 @@ export function orientFaceToBottom(
   return geo;
 }
 
-/** Snap rotation to fixed degree intervals (default 30°). */
-export function snapRotationDegrees(deg: number, step = 30): number {
+/** Wrap degrees to [0, 360). */
+export function normalizeRotationDegrees(deg: number): number {
   const wrapped = ((deg % 360) + 360) % 360;
+  return wrapped >= 360 - 1e-9 ? 0 : wrapped;
+}
+
+/** Snap rotation to fixed degree intervals (default 15°). */
+export function snapRotationDegrees(deg: number, step = 15): number {
+  const wrapped = normalizeRotationDegrees(deg);
   const snapped = Math.round(wrapped / step) * step;
   return snapped >= 360 ? 0 : snapped;
 }
