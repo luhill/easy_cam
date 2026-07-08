@@ -136,8 +136,12 @@ export function pickPreviewToolDiameter(
 
 export function flattenVisibleToolpathPoints(segments: ToolpathSegment[]): ToolpathPoint[] {
   const points: ToolpathPoint[] = [];
+  const CHUNK = 8192;
   for (const segment of segments) {
-    points.push(...segment.points);
+    const pts = segment.points;
+    for (let i = 0; i < pts.length; i += CHUNK) {
+      points.push(...pts.slice(i, Math.min(i + CHUNK, pts.length)));
+    }
   }
   return points;
 }

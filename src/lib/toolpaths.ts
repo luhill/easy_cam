@@ -107,6 +107,20 @@ export interface ToolpathGenerationResult {
 
 let activePointBudget: { discarded: number } | null = null;
 
+/** Spread-append chunk size — avoids call-stack overflow on large toolpaths. */
+const APPEND_POINTS_CHUNK = 8192;
+
+function appendPointsChunked(
+  target: ToolpathPoint[],
+  points: ToolpathPoint[],
+  count: number
+): void {
+  for (let i = 0; i < count; i += APPEND_POINTS_CHUNK) {
+    const end = Math.min(i + APPEND_POINTS_CHUNK, count);
+    target.push(...points.slice(i, end));
+  }
+}
+
 function toolRadius(settings: Operation['settings']): number {
   return Math.max(settings.toolDiameter, 0.1) / 2;
 }
@@ -202,10 +216,10 @@ function appendPoints(target: ToolpathPoint[], points: ToolpathPoint[]): boolean
     return false;
   }
   if (points.length <= room) {
-    target.push(...points);
+    appendPointsChunked(target, points, points.length);
     return true;
   }
-  target.push(...points.slice(0, room));
+  appendPointsChunked(target, points, room);
   if (activePointBudget) activePointBudget.discarded += points.length - room;
   return false;
 }
