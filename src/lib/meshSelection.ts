@@ -283,6 +283,36 @@ function classifyLoops(loops: LoopPoint[][]): {
   return { outerLoop: sorted[0], innerLoops: sorted.slice(1) };
 }
 
+/** Pick the next boundary edge with the tightest left turn (CCW outer walk). */
+function pickLeftmostBoundaryTurn(
+  prevPoint: THREE.Vector3,
+  currentPoint: THREE.Vector3,
+  candidates: Array<{ key: string; point: THREE.Vector3 }>
+): { key: string; point: THREE.Vector3 } | null {
+  if (candidates.length === 0) return null;
+
+  let best = candidates[0];
+  let bestAngle = Infinity;
+
+  const inX = currentPoint.x - prevPoint.x;
+  const inY = currentPoint.y - prevPoint.y;
+
+  for (const candidate of candidates) {
+    const outX = candidate.point.x - currentPoint.x;
+    const outY = candidate.point.y - currentPoint.y;
+    const cross = inX * outY - inY * outX;
+    const dot = inX * outX + inY * outY;
+    let angle = Math.atan2(cross, dot);
+    if (angle <= 1e-9) angle += 2 * Math.PI;
+    if (angle < bestAngle) {
+      bestAngle = angle;
+      best = candidate;
+    }
+  }
+
+  return best;
+}
+
 function traceLoops(edges: Array<[THREE.Vector3, THREE.Vector3]>, epsilon: number): LoopPoint[][] {
   if (edges.length === 0) return [];
 
@@ -306,6 +336,7 @@ function traceLoops(edges: Array<[THREE.Vector3, THREE.Vector3]>, epsilon: numbe
 
     const loop: THREE.Vector3[] = [startA.clone()];
     let prevKey = vertexKey(startA, epsilon);
+    let prevPoint = startA.clone();
     let currentKey = vertexKey(startB, epsilon);
     let currentPoint = startB.clone();
     loop.push(currentPoint.clone());
@@ -316,10 +347,12 @@ function traceLoops(edges: Array<[THREE.Vector3, THREE.Vector3]>, epsilon: numbe
       if (currentKey === startLoopKey && loop.length > 2) break;
 
       const neighbors = adjacency.get(currentKey) ?? [];
-      const next = neighbors.find((n) => n.key !== prevKey);
+      const candidates = neighbors.filter((n) => n.key !== prevKey);
+      const next = pickLeftmostBoundaryTurn(prevPoint, currentPoint, candidates);
       if (!next) break;
 
       prevKey = currentKey;
+      prevPoint = currentPoint.clone();
       currentKey = next.key;
       currentPoint = next.point.clone();
 

@@ -14,9 +14,11 @@ import {
   defaultSettingsForOperation,
   getOperationLabel,
 } from '../types/operations';
+import { operationSettingsFromFeedsCalculator } from '../lib/feedsSpeedsCalculator';
 import { clampOperationSettings } from '../lib/settingLimits';
 import { generateToolpaths } from '../lib/toolpaths';
-import type { ToolpathColorMode } from '../lib/toolpathColors';
+import type { ToolpathColorMode, ToolpathTypeVisibility } from '../lib/toolpathColors';
+import { DEFAULT_TOOLPATH_TYPE_VISIBILITY } from '../lib/toolpathColors';
 import { DEFAULT_DEV_STL_NAME, getDefaultDevStlUrl } from '../lib/defaultStl';
 import { clearStlGeometryCache } from '../lib/stlLoader';
 import { useSettingsStore } from './useSettingsStore';
@@ -50,6 +52,7 @@ interface AppState {
   simulationWindowEnd: number;
   simulationShowTool: boolean;
   toolpathColorMode: ToolpathColorMode;
+  toolpathTypeVisibility: ToolpathTypeVisibility;
 
   setStlFile: (file: File) => void;
   loadDefaultStl: () => void;
@@ -78,6 +81,8 @@ interface AppState {
   setSimulationWindow: (start: number, end: number) => void;
   setSimulationShowTool: (show: boolean) => void;
   setToolpathColorMode: (mode: ToolpathColorMode) => void;
+  setToolpathTypeVisible: (kind: keyof ToolpathTypeVisibility, visible: boolean) => void;
+  toggleToolpathTypeVisible: (kind: keyof ToolpathTypeVisibility) => void;
   resetSimulation: () => void;
 }
 
@@ -100,6 +105,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   simulationWindowEnd: 1,
   simulationShowTool: true,
   toolpathColorMode: 'type',
+  toolpathTypeVisibility: { ...DEFAULT_TOOLPATH_TYPE_VISIBILITY },
 
   setStlFile: (file) => {
     const prev = get().stlUrl;
@@ -163,6 +169,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   addOperation: (type) => {
+    const feedsCalculator = useSettingsStore.getState().feedsCalculator;
+    const feedsMaterialRows = useSettingsStore.getState().feedsMaterialRows;
     const op: Operation = {
       id: uuidv4(),
       type,
@@ -170,7 +178,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       enabled: true,
       visible: true,
       collapsed: false,
-      settings: clampOperationSettings(defaultSettingsForOperation(type)),
+      settings: clampOperationSettings({
+        ...defaultSettingsForOperation(type),
+        ...operationSettingsFromFeedsCalculator(type, feedsCalculator, feedsMaterialRows),
+      }),
       geometry: null,
       ...(type === 'custom-gcode'
         ? { customGcode: '; Custom G-code\n; Insert Marlin commands below\n' }
@@ -316,11 +327,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   regenerateToolpaths: () => {
     const { operations, partBounds } = get();
-    const { safeHeight, toolpathResolution, travelFeedRate } = useSettingsStore.getState();
+    const { safeHeight, toolpathResolution, travelFeedRate, toolOrigin } = useSettingsStore.getState();
     const { segments, warnings } = generateToolpaths(operations, partBounds, {
       safeHeight,
       resolution: toolpathResolution,
       travelFeedRate,
+      toolOrigin,
     });
     set({ toolpaths: segments, toolpathWarnings: warnings, simulationDistance: 0, simulationPlaying: false, simulationWindowStart: 0, simulationWindowEnd: 1 });
   },
@@ -342,6 +354,19 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSimulationShowTool: (show) => set({ simulationShowTool: show }),
 
   setToolpathColorMode: (mode) => set({ toolpathColorMode: mode }),
+
+  setToolpathTypeVisible: (kind, visible) =>
+    set((state) => ({
+      toolpathTypeVisibility: { ...state.toolpathTypeVisibility, [kind]: visible },
+    })),
+
+  toggleToolpathTypeVisible: (kind) =>
+    set((state) => ({
+      toolpathTypeVisibility: {
+        ...state.toolpathTypeVisibility,
+        [kind]: !state.toolpathTypeVisibility[kind],
+      },
+    })),
 
   resetSimulation: () =>
     set({

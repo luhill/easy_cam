@@ -4,7 +4,7 @@ import { PREVIEW_RAPID_FEED } from './toolpathSimulation';
 
 export type ToolpathColorMode = 'type' | 'speed';
 
-export type ToolpathMoveKind = 'rapid' | 'cut' | 'plunge' | 'travel' | 'spur';
+export type ToolpathMoveKind = 'rapid' | 'cut' | 'plunge' | 'travel' | 'spur' | 'reference';
 
 export const TOOLPATH_MOVE_COLORS: Record<ToolpathMoveKind, string> = {
   rapid: '#f59e0b',
@@ -12,6 +12,7 @@ export const TOOLPATH_MOVE_COLORS: Record<ToolpathMoveKind, string> = {
   plunge: '#3b82f6',
   travel: '#a855f7',
   spur: '#22c55e',
+  reference: '#eab308',
 };
 
 export const TOOLPATH_MOVE_LABELS: Record<ToolpathMoveKind, string> = {
@@ -20,9 +21,56 @@ export const TOOLPATH_MOVE_LABELS: Record<ToolpathMoveKind, string> = {
   plunge: 'Plunge',
   travel: 'Travel',
   spur: 'Spur',
+  reference: 'Reference',
 };
 
-const TRAVEL_FEED_TOLERANCE = 0.02;
+export const TOOLPATH_MOVE_KINDS: ToolpathMoveKind[] = [
+  'cut',
+  'plunge',
+  'travel',
+  'rapid',
+  'spur',
+  'reference',
+];
+
+export type ToolpathTypeVisibility = Record<ToolpathMoveKind, boolean>;
+
+export const DEFAULT_TOOLPATH_TYPE_VISIBILITY: ToolpathTypeVisibility = {
+  cut: true,
+  plunge: true,
+  travel: true,
+  rapid: true,
+  spur: true,
+  reference: true,
+};
+
+const FEED_MATCH_TOLERANCE = 0.02;
+
+function isTravelFeed(
+  a: ToolpathPoint,
+  b: ToolpathPoint,
+  travelFeedRate: number
+): boolean {
+  const feed = b.feedRate ?? a.feedRate;
+  return (
+    feed !== undefined &&
+    Math.abs(feed - travelFeedRate) / Math.max(travelFeedRate, 1) <= FEED_MATCH_TOLERANCE
+  );
+}
+
+function isPlungeFeed(
+  a: ToolpathPoint,
+  b: ToolpathPoint,
+  op: Operation | undefined
+): boolean {
+  if (!op) return false;
+  const plungeRate = op.settings.plungeRate;
+  const feed = b.feedRate ?? a.feedRate;
+  return (
+    feed !== undefined &&
+    Math.abs(feed - plungeRate) / Math.max(plungeRate, 1) <= FEED_MATCH_TOLERANCE
+  );
+}
 
 function isPlungeMove(a: ToolpathPoint, b: ToolpathPoint): boolean {
   const dx = b.x - a.x;
@@ -39,6 +87,8 @@ function edgeFeedRate(
   travelFeedRate: number
 ): number {
   if (a.rapid || b.rapid) return PREVIEW_RAPID_FEED;
+  if (isTravelFeed(a, b, travelFeedRate)) return travelFeedRate;
+  if (isPlungeFeed(a, b, op)) return op!.settings.plungeRate;
   if (isPlungeMove(a, b)) return op?.settings.plungeRate ?? travelFeedRate;
   return b.feedRate ?? a.feedRate ?? op?.settings.feedRate ?? travelFeedRate;
 }
@@ -46,20 +96,13 @@ function edgeFeedRate(
 export function classifyToolpathMove(
   a: ToolpathPoint,
   b: ToolpathPoint,
-  _op: Operation | undefined,
+  op: Operation | undefined,
   travelFeedRate: number
 ): ToolpathMoveKind {
   if (a.onSpur || b.onSpur) return 'spur';
   if (a.rapid || b.rapid) return 'rapid';
-  if (isPlungeMove(a, b)) return 'plunge';
-
-  const feed = b.feedRate ?? a.feedRate;
-  if (
-    feed !== undefined &&
-    Math.abs(feed - travelFeedRate) / Math.max(travelFeedRate, 1) <= TRAVEL_FEED_TOLERANCE
-  ) {
-    return 'travel';
-  }
+  if (isTravelFeed(a, b, travelFeedRate)) return 'travel';
+  if (isPlungeFeed(a, b, op) || isPlungeMove(a, b)) return 'plunge';
 
   return 'cut';
 }
@@ -114,6 +157,7 @@ export interface ToolpathEdgeColorInput {
   colorMode: ToolpathColorMode;
   operations: Operation[];
   travelFeedRate: number;
+  typeVisibility?: ToolpathTypeVisibility;
 }
 
 export function colorForToolpathEdge(

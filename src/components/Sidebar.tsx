@@ -4,6 +4,7 @@ import { PartSetup } from './PartSetup';
 import { OperationList } from './Operations/OperationList';
 import { ToolOriginSettings } from './ToolOriginSettings';
 import { GlobalCamSettings } from './GlobalCamSettings';
+import { AppearanceSettings } from './AppearanceSettings';
 import { ViewportSettings } from './ViewportSettings';
 import { GcodeSettings } from './GcodeSettings';
 import { OperationsTabFooter } from './OperationsTabFooter';
@@ -53,6 +54,7 @@ export function Sidebar() {
 
           {activeTab === 'settings' && (
             <div className="sidebar-tab-content sidebar-tab-content--settings">
+              <AppearanceSettings />
               <ToolOriginSettings />
               <GlobalCamSettings />
               <ViewportSettings />

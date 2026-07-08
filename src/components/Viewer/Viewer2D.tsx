@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react';
 import type { PartBounds } from '../../lib/geometryProcessing';
 import type { ToolpathSegment } from '../../types/operations';
+import { viewerThemeColors } from '../../lib/uiTheme';
+import { useSettingsStore } from '../../store/useSettingsStore';
 import { SPUR_TOOLPATH_COLOR } from './ToolpathLines';
 
 interface Viewer2DProps {
@@ -43,14 +45,15 @@ function drawScene(
   height: number,
   bounds: PartBounds | null,
   toolpaths: ToolpathSegment[],
-  view: ViewTransform
+  view: ViewTransform,
+  colors: ReturnType<typeof viewerThemeColors>
 ): void {
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = '#0f1115';
+  ctx.fillStyle = colors.viewer2dBackground;
   ctx.fillRect(0, 0, width, height);
 
   const gridStep = 5;
-  ctx.strokeStyle = '#222831';
+  ctx.strokeStyle = colors.viewer2dGrid;
   ctx.lineWidth = 1;
   const gridWorld = gridStep;
   const [originX, originY] = worldToScreen(0, 0, view);
@@ -65,7 +68,7 @@ function drawScene(
   }
   ctx.stroke();
 
-  ctx.strokeStyle = '#3d4555';
+  ctx.strokeStyle = colors.viewer2dAxis;
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   ctx.moveTo(0, originY);
@@ -114,7 +117,7 @@ function drawScene(
     ctx.globalAlpha = 1;
   }
 
-  ctx.fillStyle = '#94a3b8';
+  ctx.fillStyle = colors.viewer2dLabel;
   ctx.font = '12px system-ui, sans-serif';
   ctx.fillText('2D top view (XY) · WebGL 3D unavailable in this browser', 12, height - 12);
 }
@@ -122,6 +125,8 @@ function drawScene(
 export function Viewer2D({ bounds, toolpaths }: Viewer2DProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewRef = useRef<ViewTransform>({ scale: 1, offsetX: 0, offsetY: 0 });
+  const uiTheme = useSettingsStore((s) => s.uiTheme);
+  const colors = viewerThemeColors(uiTheme);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -138,14 +143,14 @@ export function Viewer2D({ bounds, toolpaths }: Viewer2DProps) {
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       viewRef.current = fitTransform(bounds, rect.width, rect.height);
-      drawScene(ctx, rect.width, rect.height, bounds, toolpaths, viewRef.current);
+      drawScene(ctx, rect.width, rect.height, bounds, toolpaths, viewRef.current, colors);
     };
 
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, [bounds, toolpaths]);
+  }, [bounds, toolpaths, colors]);
 
   return <canvas ref={canvasRef} className="viewer-2d-canvas" aria-label="2D top-down part view" />;
 }

@@ -4,12 +4,16 @@ export const BASE_HELIX_SEGMENTS_PER_REV = 24;
 export const BASE_MINKOWSKI_SEGMENT = 0.3;
 export const BASE_CONTOUR_STEPS = 20;
 
+import type { ToolOrigin } from './geometryProcessing';
+
 export interface ToolpathGlobalOptions {
   safeHeight: number;
   /** 1 = finest, 2 = default (2× coarser), higher = fewer points */
   resolution: number;
   /** Feed rate for non-cutting repositioning (returns, retracts). */
   travelFeedRate: number;
+  /** WCS tool origin offset — used for default outline entry placement. */
+  toolOrigin?: ToolOrigin;
 }
 
 export const DEFAULT_TOOLPATH_RESOLUTION = 2;

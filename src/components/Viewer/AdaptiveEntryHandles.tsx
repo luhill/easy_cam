@@ -3,17 +3,20 @@ import { Line } from '@react-three/drei';
 import { useThree, type ThreeEvent } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { ArcLengthGuide } from '../../lib/trochoidalPath';
+import { findClosestSOnGuide, sampleGuideAtS } from '../../lib/trochoidalPath';
 import { snapPointToSlotCenterline } from '../../lib/adaptiveEntryLayout';
 
 interface AdaptiveEntryHandlesProps {
   toolStart: { x: number; y: number };
-  slotJoin: { x: number; y: number };
-  slotArcGuide: ArcLengthGuide;
+  slotJoin?: { x: number; y: number };
+  slotArcGuide?: ArcLengthGuide;
+  toolStartArcGuide?: ArcLengthGuide;
   topZ: number;
   toolStartManual: boolean;
-  slotJoinManual: boolean;
+  slotJoinManual?: boolean;
+  showSlotJoin?: boolean;
   onToolStartChange: (point: { x: number; y: number }) => void;
-  onSlotJoinChange: (point: { x: number; y: number }) => void;
+  onSlotJoinChange?: (point: { x: number; y: number }) => void;
 }
 
 function crossSegments(x: number, y: number, z: number, size: number) {
@@ -116,9 +119,11 @@ export function AdaptiveEntryHandles({
   toolStart,
   slotJoin,
   slotArcGuide,
+  toolStartArcGuide,
   topZ,
   toolStartManual,
-  slotJoinManual,
+  slotJoinManual = false,
+  showSlotJoin = true,
   onToolStartChange,
   onSlotJoinChange,
 }: AdaptiveEntryHandlesProps) {
@@ -127,10 +132,28 @@ export function AdaptiveEntryHandles({
     [topZ]
   );
 
+  const handleToolStartCommit = useCallback(
+    (x: number, y: number) => {
+      if (toolStartArcGuide) {
+        const hit = findClosestSOnGuide(toolStartArcGuide, { x, y });
+        const frame = sampleGuideAtS(toolStartArcGuide, hit.s);
+        onToolStartChange({ x: frame.x, y: frame.y });
+        return;
+      }
+      onToolStartChange({ x, y });
+    },
+    [onToolStartChange, toolStartArcGuide]
+  );
+
   const handleSlotJoinCommit = useCallback(
     (x: number, y: number) => {
-      const snapped = snapPointToSlotCenterline(slotArcGuide, { x, y });
-      onSlotJoinChange({ x: snapped.x, y: snapped.y });
+      if (!onSlotJoinChange) return;
+      if (slotArcGuide) {
+        const snapped = snapPointToSlotCenterline(slotArcGuide, { x, y });
+        onSlotJoinChange({ x: snapped.x, y: snapped.y });
+      } else {
+        onSlotJoinChange({ x, y });
+      }
     },
     [onSlotJoinChange, slotArcGuide]
   );
@@ -141,16 +164,18 @@ export function AdaptiveEntryHandles({
         point={toolStart}
         topZ={topZ}
         color={toolStartManual ? '#f59e0b' : '#94a3b8'}
-        onCommit={(x, y) => onToolStartChange({ x, y })}
+        onCommit={handleToolStartCommit}
         dragPlane={dragPlane}
       />
-      <DragHandle
-        point={slotJoin}
-        topZ={topZ}
-        color={slotJoinManual ? '#38bdf8' : '#64748b'}
-        onCommit={handleSlotJoinCommit}
-        dragPlane={dragPlane}
-      />
+      {showSlotJoin && slotJoin && (
+        <DragHandle
+          point={slotJoin}
+          topZ={topZ}
+          color={slotJoinManual ? '#38bdf8' : '#64748b'}
+          onCommit={handleSlotJoinCommit}
+          dragPlane={dragPlane}
+        />
+      )}
     </group>
   );
 }

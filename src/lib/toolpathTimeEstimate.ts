@@ -6,6 +6,20 @@ export interface TimeEstimateResult {
   enabledOperationCount: number;
 }
 
+const FEED_MATCH_TOLERANCE = 0.02;
+
+function matchesPlungeFeed(
+  prev: ToolpathPoint,
+  curr: ToolpathPoint,
+  plungeRate: number
+): boolean {
+  const feed = curr.feedRate ?? prev.feedRate;
+  return (
+    feed !== undefined &&
+    Math.abs(feed - plungeRate) / Math.max(plungeRate, 1) <= FEED_MATCH_TOLERANCE
+  );
+}
+
 function segmentFeedRate(
   prev: ToolpathPoint,
   curr: ToolpathPoint,
@@ -17,10 +31,11 @@ function segmentFeedRate(
   const dy = curr.y - prev.y;
   const dz = curr.z - prev.z;
   const xy = Math.hypot(dx, dy);
-  const isPlunge = Math.abs(dz) > 0.01 && Math.abs(dz) >= xy * 0.5;
-  if (isPlunge) return op.settings.plungeRate;
+  if (matchesPlungeFeed(prev, curr, op.settings.plungeRate) || (Math.abs(dz) > 0.01 && Math.abs(dz) >= xy * 0.5)) {
+    return op.settings.plungeRate;
+  }
 
-  return curr.feedRate ?? op.settings.feedRate;
+  return curr.feedRate ?? prev.feedRate ?? op.settings.feedRate;
 }
 
 export function estimateToolpathTime(

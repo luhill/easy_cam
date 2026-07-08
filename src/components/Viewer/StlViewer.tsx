@@ -5,7 +5,14 @@ import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import * as THREE from 'three';
 import { useAppStore } from '../../store/useAppStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
-import { OPERATION_COLORS, getSelectedHoles } from '../../types/operations';
+import {
+  OPERATION_COLORS,
+  getSelectedHoles,
+  isAdaptiveOutlineOperation,
+  isOutlineHelixEntryOperation,
+  isOutlineOperation,
+  isStandardOutlineEntryEditable,
+} from '../../types/operations';
 import type { LoopPoint, OperationType, ToolpathSegment, Operation } from '../../types/operations';
 import {
   createFaceColorAttribute,
@@ -52,8 +59,14 @@ import {
   resolveAdaptiveEntryLayout,
   adaptiveEntryOverridesFromGeometry,
 } from '../../lib/adaptiveGuides';
-import { minkowskiSegmentLen, trochoidSampleSpacing } from '../../lib/toolpathConfig';
-import { resolveAdaptiveSlotGeometry } from '../../lib/adaptiveOutline';
+import { minkowskiSegmentLen, pathSampleSpacing, trochoidSampleSpacing } from '../../lib/toolpathConfig';
+import { resolveAdaptiveSlotGeometry, finishingStockAllowance } from '../../lib/adaptiveOutline';
+import {
+  buildOutlineEntryArcGuide,
+  resolveStandardEntryLayout,
+  snapPointToOutlineCenterline,
+} from '../../lib/outlineEntry';
+import { viewerThemeColors } from '../../lib/uiTheme';
 import { createViewerRenderer, detectWebGLSupport } from '../../lib/webglSupport';
 import { registerViewerCameraBridge, goHomeWithCamera, goToViewerHome } from '../../lib/viewerCamera';
 import {
@@ -63,7 +76,7 @@ import {
   replaceWithOrthographicCamera,
   replaceWithPerspectiveCamera,
 } from '../../lib/viewportCamera';
-import type { ToolpathColorMode } from '../../lib/toolpathColors';
+import type { ToolpathColorMode, ToolpathTypeVisibility } from '../../lib/toolpathColors';
 import { WebGLFallback } from './WebGLFallback';
 import { Viewer2D } from './Viewer2D';
 import { useProcessedStl } from '../../hooks/useProcessedStl';
@@ -576,7 +589,7 @@ function StlMesh({
 
       const faceIndices = [...new Set([...(existing?.faceIndices ?? []), ...group.faceIndices])];
       const loops =
-        operationType === 'outline' || operationType === 'adaptive-outline'
+        op && isOutlineOperation(op)
           ? mergeLoops(existing?.loops, group.loops)
           : existing?.loops;
       const vertexIndices = collectVertexIndices(meshIndexRef.current, faceIndices);
@@ -670,12 +683,14 @@ function ToolpathWindowLive({
   colorMode,
   operations,
   travelFeedRate,
+  typeVisibility,
 }: {
   visiblePaths: ToolpathSegment[];
   totalDistance: number;
   colorMode: ToolpathColorMode;
   operations: Operation[];
   travelFeedRate: number;
+  typeVisibility: ToolpathTypeVisibility;
 }) {
   const [windowFrac, setWindowFrac] = useState(getEffectiveSimulationWindow);
   const lastKeyRef = useRef('');
@@ -703,6 +718,7 @@ function ToolpathWindowLive({
       colorMode={colorMode}
       operations={operations}
       travelFeedRate={travelFeedRate}
+      typeVisibility={typeVisibility}
     />
   );
 }
@@ -760,6 +776,9 @@ function SceneContent({
   const toolpathResolution = useSettingsStore((s) => s.toolpathResolution);
   const travelFeedRate = useSettingsStore((s) => s.travelFeedRate);
   const toolpathColorMode = useAppStore((s) => s.toolpathColorMode);
+  const toolpathTypeVisibility = useAppStore((s) => s.toolpathTypeVisibility);
+  const uiTheme = useSettingsStore((s) => s.uiTheme);
+  const viewerColors = viewerThemeColors(uiTheme);
   const controlsRef = useRef<OrbitControlsImpl>(null);
 
   const visiblePaths = useMemo(
@@ -786,9 +805,14 @@ function SceneContent({
 
   const adaptiveDebugGuides = useMemo(() => {
     if (!partBounds) return null;
-    const globals = { safeHeight, resolution: toolpathResolution, travelFeedRate };
+    const globals = {
+      safeHeight,
+      resolution: toolpathResolution,
+      travelFeedRate,
+      toolOrigin,
+    };
     const adaptiveOps = operations.filter(
-      (op) => op.visible && op.enabled && op.type === 'adaptive-outline' && op.geometry?.loops?.[0]
+      (op) => op.visible && op.enabled && isAdaptiveOutlineOperation(op) && op.geometry?.loops?.[0]
     );
     if (adaptiveOps.length === 0) return null;
 
@@ -802,6 +826,7 @@ function SceneContent({
     safeHeight,
     toolpathResolution,
     travelFeedRate,
+    toolOrigin,
   ]);
 
   const adaptiveEntry = useMemo(() => {
@@ -809,39 +834,77 @@ function SceneContent({
     const op = operations.find(
       (o) =>
         o.id === activeOperationId &&
-        o.type === 'adaptive-outline' &&
+        (isOutlineHelixEntryOperation(o) || isStandardOutlineEntryEditable(o)) &&
         o.geometry?.loops?.[0]
     );
     if (!op?.geometry?.loops?.[0]) return null;
 
     const loop = op.geometry.loops[0];
+    const isAdaptive = isAdaptiveOutlineOperation(op);
+
+    if (isAdaptive) {
+      const segLen = minkowskiSegmentLen(toolpathResolution);
+      const roughSlot = resolveAdaptiveSlotGeometry(op.settings, { roughing: true });
+      const trochSampleSpacing = trochoidSampleSpacing(
+        roughSlot.forwardIncrement,
+        roughSlot.trochoidRadius,
+        toolpathResolution
+      );
+      const layout = resolveAdaptiveEntryLayout(
+        loop,
+        op.settings,
+        adaptiveEntryOverridesFromGeometry(op.geometry),
+        segLen,
+        trochSampleSpacing,
+        toolpathResolution,
+        toolOrigin
+      );
+      if (!layout) return null;
+
+      const slotArcGuide = buildSlotCenterlineArcGuide(loop, op.settings, {
+        safeHeight,
+        resolution: toolpathResolution,
+        travelFeedRate,
+      });
+
+      return {
+        op,
+        layout,
+        slotArcGuide,
+        toolStartArcGuide: undefined,
+        showSlotJoin: true,
+        toolStartManual: !!(op.geometry.toolStartPoint ?? op.geometry.entryPoint),
+        slotJoinManual: !!op.geometry.slotJoinPoint,
+      };
+    }
+
+    const stockAllowance = finishingStockAllowance(op.settings);
+    const sampleSpacing = pathSampleSpacing(toolpathResolution);
     const segLen = minkowskiSegmentLen(toolpathResolution);
-    const roughSlot = resolveAdaptiveSlotGeometry(op.settings, { roughing: true });
-    const trochSampleSpacing = trochoidSampleSpacing(
-      roughSlot.forwardIncrement,
-      roughSlot.trochoidRadius,
-      toolpathResolution
-    );
-    const layout = resolveAdaptiveEntryLayout(
+    const layout = resolveStandardEntryLayout(
       loop,
       op.settings,
-      adaptiveEntryOverridesFromGeometry(op.geometry),
+      stockAllowance,
+      op.geometry,
+      sampleSpacing,
       segLen,
-      trochSampleSpacing,
-      toolpathResolution
+      toolOrigin
     );
     if (!layout) return null;
 
-    const slotArcGuide = buildSlotCenterlineArcGuide(loop, op.settings, {
-      safeHeight,
-      resolution: toolpathResolution,
-      travelFeedRate,
-    });
+    const slotArcGuide = buildOutlineEntryArcGuide(
+      loop,
+      op.settings,
+      stockAllowance,
+      sampleSpacing
+    );
 
     return {
       op,
-      layout,
+      layout: { toolStart: layout.toolStart, slotJoin: layout.contourJoin },
       slotArcGuide,
+      toolStartArcGuide: undefined,
+      showSlotJoin: true,
       toolStartManual: !!(op.geometry.toolStartPoint ?? op.geometry.entryPoint),
       slotJoinManual: !!op.geometry.slotJoinPoint,
     };
@@ -852,6 +915,7 @@ function SceneContent({
     safeHeight,
     toolpathResolution,
     travelFeedRate,
+    toolOrigin,
   ]);
 
   const handleToolStartChange = useCallback(
@@ -871,10 +935,15 @@ function SceneContent({
   const handleSlotJoinChange = useCallback(
     (point: { x: number; y: number }) => {
       if (!adaptiveEntry?.op.geometry) return;
+      const loop = adaptiveEntry.op.geometry.loops?.[0];
+      let next = point;
+      if (loop && isStandardOutlineEntryEditable(adaptiveEntry.op) && adaptiveEntry.slotArcGuide) {
+        next = snapPointToOutlineCenterline(adaptiveEntry.slotArcGuide, point);
+      }
       updateOperation(adaptiveEntry.op.id, {
         geometry: {
           ...adaptiveEntry.op.geometry,
-          slotJoinPoint: point,
+          slotJoinPoint: { x: next.x, y: next.y },
         },
       });
     },
@@ -890,17 +959,17 @@ function SceneContent({
 
   return (
     <>
-      <ambientLight intensity={0.5} />
-      <directionalLight position={[50, 50, 80]} intensity={1.2} />
-      <directionalLight position={[-30, -40, 40]} intensity={0.4} />
+      <ambientLight intensity={viewerColors.ambientLight} />
+      <directionalLight position={[50, 50, 80]} intensity={viewerColors.keyLight} />
+      <directionalLight position={[-30, -40, 40]} intensity={viewerColors.fillLight} />
       <Grid
         args={[200, 200]}
         cellSize={5}
         cellThickness={0.5}
-        cellColor="#2a2f38"
+        cellColor={viewerColors.gridCell}
         sectionSize={25}
         sectionThickness={1}
-        sectionColor="#3d4555"
+        sectionColor={viewerColors.gridSection}
         fadeDistance={300}
         rotation={[Math.PI / 2, 0, 0]}
         position={[0, 0, 0]}
@@ -918,8 +987,9 @@ function SceneContent({
         colorMode={toolpathColorMode}
         operations={operations}
         travelFeedRate={travelFeedRate}
+        typeVisibility={toolpathTypeVisibility}
       />
-      {adaptiveDebugGuides && (
+      {adaptiveDebugGuides && toolpathTypeVisibility.reference && (
         <DebugGuideLines
           slotCenterline={adaptiveDebugGuides.slotCenterline}
           leadInGuide={adaptiveDebugGuides.leadInGuide}
@@ -930,9 +1000,11 @@ function SceneContent({
           toolStart={adaptiveEntry.layout.toolStart}
           slotJoin={adaptiveEntry.layout.slotJoin}
           slotArcGuide={adaptiveEntry.slotArcGuide}
+          toolStartArcGuide={adaptiveEntry.toolStartArcGuide}
           topZ={partBounds.maxZ}
           toolStartManual={adaptiveEntry.toolStartManual}
           slotJoinManual={adaptiveEntry.slotJoinManual}
+          showSlotJoin={adaptiveEntry.showSlotJoin}
           onToolStartChange={handleToolStartChange}
           onSlotJoinChange={handleSlotJoinChange}
         />
@@ -987,6 +1059,8 @@ export function StlViewer() {
 
   const toolOrigin = useSettingsStore((s) => s.toolOrigin);
   const safeHeight = useSettingsStore((s) => s.safeHeight);
+  const uiTheme = useSettingsStore((s) => s.uiTheme);
+  const viewerColors = viewerThemeColors(uiTheme);
 
   const { processedMesh, meshKey, loading, loadError, updateMesh, commitOrientationSource } =
     useProcessedStl(stlUrl);
@@ -1008,12 +1082,34 @@ export function StlViewer() {
   });
   const [webglReady, setWebglReady] = useState<boolean | null>(null);
   const [webglError, setWebglError] = useState<string | null>(null);
+  const stlUrlRef = useRef(stlUrl);
+
+  useEffect(() => {
+    stlUrlRef.current = stlUrl;
+  }, [stlUrl]);
 
   useEffect(() => {
     const result = detectWebGLSupport();
     setWebglReady(result.supported);
     setWebglError(result.supported ? null : (result.message ?? 'WebGL is not available.'));
   }, []);
+
+  useEffect(() => {
+    if (!stlUrl) {
+      setIndexStatus({ ready: false });
+      return;
+    }
+
+    setIndexStatus({ ready: false });
+    const result = detectWebGLSupport();
+    if (result.supported) {
+      setWebglReady(true);
+      setWebglError(null);
+    } else {
+      setWebglReady(false);
+      setWebglError(result.message ?? 'WebGL is not available.');
+    }
+  }, [stlUrl]);
 
   useEffect(() => {
     if (webglReady === false && processedMesh) {
@@ -1029,6 +1125,7 @@ export function StlViewer() {
     const canvas = gl.domElement;
     const onLost = (event: Event) => {
       event.preventDefault();
+      if (!stlUrlRef.current) return;
       setWebglReady(false);
       setWebglError(
         'WebGL context was lost. Reload the page or close other 3D tabs, then try again.'
@@ -1073,7 +1170,7 @@ export function StlViewer() {
           <p>Analyzing mesh geometry…</p>
         </div>
       )}
-      {webglReady === false && (
+      {stlUrl && webglReady === false && (
         <div className="viewer-fallback-layout">
           <WebGLFallback
             message={webglError ?? 'WebGL is not available.'}
@@ -1090,7 +1187,10 @@ export function StlViewer() {
           gl={createViewerRenderer as GLProps}
           dpr={[1, 1.5]}
           camera={{ fov: 45, near: 0.1, far: 1000, position: [60, -60, 60], up: [0, 0, 1] }}
-          style={{ background: '#0f1115', cursor: selectionMode ? 'crosshair' : 'default' }}
+          style={{
+            background: viewerColors.background,
+            cursor: selectionMode ? 'crosshair' : 'default',
+          }}
           onCreated={handleWebglCreated}
         >
           <SceneContent

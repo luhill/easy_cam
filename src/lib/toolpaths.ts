@@ -6,18 +6,33 @@ import { DEFAULT_SETTINGS } from '../types/operations';
 import type { PartBounds } from './geometryProcessing';
 import {
   closestPointOnLoop2D,
-  offsetLoop2D,
   offsetLoop2DMinkowski,
   signedLoopArea2D,
 } from './geometryProcessing';
-import { OPERATION_COLORS, getSelectedHoles } from '../types/operations';
+import { OPERATION_COLORS, getSelectedHoles, normalizeOperation } from '../types/operations';
 import { clampOperationSettings } from './settingLimits';
 import {
   buildSlotCenterGuideWithCornerSpurs,
   mapSpurRangesToArcGuide,
   buildGuideRadiusSampler,
 } from './cornerSpurs';
-import { resolveAdaptiveSlotGeometry, cornerSpurOptionsForRoughing } from './adaptiveOutline';
+import { resolveAdaptiveSlotGeometry, cornerSpurOptionsForRoughing, finishingStockAllowance } from './adaptiveOutline';
+import {
+  buildHelixOutlineSplineLeadIn,
+  buildStandardSplineLeadIn,
+  generateContourLinearRamp,
+  generateStandardLeadInLayerRamp,
+  outlineApproachWorldZ,
+  outlineRampLengthMm,
+  resolveStandardEntryLayout,
+  resolveStandardHelixEntryLayout,
+  resolveStandardHelixLayerBoreCenter,
+  sampleContourLoopFromArcS,
+  standardEntryNeedsLeadIn,
+  standardSplineLeadInFeed,
+  standardSplineTailFromPoint,
+  stationOnContour,
+} from './outlineEntry';
 import {
   adaptiveEntryOverridesFromGeometry,
   resolveAdaptiveEntryLayout,
@@ -27,12 +42,10 @@ import {
   generateContinuousEntryTrochoidPath,
   resolveGuideTraverseSign,
   resolveOrbitRotSign,
-  wrapPathFromIndex,
 } from './adaptiveFourZone';
 import {
   buildSplineEntryGuide,
   adjustBoreRadiusToSlotWidth,
-  closestPointIndexOnPath,
   generateBoreBottomToLeadInTransition,
   generateFullRevolutionOrbit,
   generateHelixBorePoints,
@@ -40,6 +53,7 @@ import {
   helixRadiusTaperedFromStart,
   interiorHelixRadiusAtZ,
   isGuideOutwardCCW,
+  resolveHelixRadius,
   resolveHelixRotationDir,
   resolveInteriorHelixRadius,
   resolveInteriorHelixRotationDir,
@@ -47,7 +61,10 @@ import {
 } from './entryPath';
 import {
   adaptiveForwardIncrement,
+  buildArcLengthGuide,
+  findClosestSOnGuide,
   sampleGuideAtS,
+  type ArcLengthGuide,
 } from './trochoidalPath';
 import {
   createCutZContext,
@@ -64,6 +81,7 @@ import {
   contourSteps,
   helixSegmentsPerRev,
   minkowskiSegmentLen,
+  pathSampleSpacing,
   safeHeightWorldZ,
   trochoidSampleSpacing,
   type ToolpathGlobalOptions,
@@ -83,10 +101,6 @@ let activePointBudget: { discarded: number } | null = null;
 
 function toolRadius(settings: Operation['settings']): number {
   return Math.max(settings.toolDiameter, 0.1) / 2;
-}
-
-function toolCenterlineOffset(settings: Operation['settings']): number {
-  return toolRadius(settings) + (settings.radialOffset ?? 0);
 }
 
 function getBounds(geometry: Operation['geometry']): {
@@ -125,7 +139,19 @@ function getBounds(geometry: Operation['geometry']): {
     return { minX, maxX, minY, maxY };
   }
 
+  if (geometry?.faceIndices && geometry.faceIndices.length > 0) {
+    return { minX: -25, maxX: 25, minY: -25, maxY: 25 };
+  }
+
   return { minX: -25, maxX: 25, minY: -25, maxY: 25 };
+}
+
+function hasOutlineLoopGeometry(geometry: Operation['geometry'] | null | undefined): boolean {
+  return !!(geometry?.loops?.[0] && geometry.loops[0].length >= 2);
+}
+
+function hasRegionGeometry(geometry: Operation['geometry'] | null | undefined): boolean {
+  return (geometry?.faceIndices?.length ?? 0) > 0;
 }
 
 function appendPoints(target: ToolpathPoint[], points: ToolpathPoint[]): boolean {
@@ -143,36 +169,415 @@ function appendPoints(target: ToolpathPoint[], points: ToolpathPoint[]): boolean
   return false;
 }
 
-function loopToToolpathPoints(
+function contourTraverse(
+  loop: LoopPoint[],
+  settings: Operation['settings'],
+  extraRadialStock = 0,
+  resolution = DEFAULT_TOOLPATH_RESOLUTION
+): LoopPoint[] {
+  const offset = toolRadius(settings) + (settings.radialOffset ?? 0) + extraRadialStock;
+  const toolLoop = offsetLoop2DMinkowski(loop, offset, minkowskiSegmentLen(resolution));
+  const ccw = signedLoopArea2D(loop) >= 0;
+  const reverse = settings.climbMilling ? ccw : !ccw;
+  return reverse ? [...toolLoop].reverse() : toolLoop;
+}
+
+function appendContourLoopFromArcS(
+  points: ToolpathPoint[],
+  traverse: LoopPoint[],
+  layerZ: number,
+  feedRate: number,
+  startS: number,
+  sampleSpacing: number,
+  forward = true,
+  skipNear?: { x: number; y: number; z: number },
+  arcLengthToCut?: number,
+  cachedGuide?: ArcLengthGuide,
+  loopAnchor?: { x: number; y: number }
+): boolean {
+  const skip = skipNear ?? lastPathPoint(points) ?? undefined;
+  const loopPts = sampleContourLoopFromArcS(
+    traverse,
+    layerZ,
+    feedRate,
+    startS,
+    sampleSpacing,
+    forward,
+    skip,
+    arcLengthToCut,
+    cachedGuide,
+    loopAnchor
+  );
+  return appendPoints(points, loopPts);
+}
+
+function appendOutlineApproachToStart(
+  points: ToolpathPoint[],
+  entryStart: { x: number; y: number },
+  safeZ: number,
+  approachZ: number,
+  plungeRate: number
+): void {
+  points.push({ x: entryStart.x, y: entryStart.y, z: safeZ, rapid: true });
+  if (approachZ < safeZ - 1e-4) {
+    points.push({
+      x: entryStart.x,
+      y: entryStart.y,
+      z: approachZ,
+      feedRate: plungeRate,
+    });
+  }
+}
+
+function appendStraightOutlineEntry(
+  points: ToolpathPoint[],
+  entryStart: { x: number; y: number },
+  fromZ: number,
+  layerZ: number,
+  plungeRate: number,
+  atEntryStart: boolean
+): boolean {
+  if (!atEntryStart) {
+    return true;
+  }
+  if (Math.abs(fromZ - layerZ) < 1e-5) {
+    return appendPoints(points, [{ x: entryStart.x, y: entryStart.y, z: layerZ, feedRate: plungeRate }]);
+  }
+  const last = lastPathPoint(points);
+  if (
+    !last ||
+    Math.hypot(last.x - entryStart.x, last.y - entryStart.y) > 0.05 ||
+    Math.abs(last.z - fromZ) > 1e-4
+  ) {
+    if (
+      !appendPoints(points, [{ x: entryStart.x, y: entryStart.y, z: fromZ, feedRate: plungeRate }])
+    ) {
+      return false;
+    }
+  }
+  return appendPoints(points, [
+    { x: entryStart.x, y: entryStart.y, z: layerZ, feedRate: plungeRate },
+  ]);
+}
+
+function generateStandardHelixOutlinePath(
   loop: LoopPoint[],
   settings: Operation['settings'],
   ctx: CutZContext,
-  globals: ToolpathGlobalOptions
+  globals: ToolpathGlobalOptions,
+  geometry: Operation['geometry'] | null
 ): ToolpathPoint[] {
   const topZ = stockTopWorldZ(ctx);
   const safeZ = safeHeightWorldZ(ctx, globals.safeHeight);
   const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
   const points: ToolpathPoint[] = [];
 
-  if (loop.length === 0) return points;
+  if (loop.length === 0 || layers.length === 0) return points;
 
-  const toolLoop = offsetLoop2D(loop, toolCenterlineOffset(settings));
-  const ccw = signedLoopArea2D(loop) >= 0;
-  const reverse = settings.climbMilling ? ccw : !ccw;
-  const traverse = reverse ? [...toolLoop].reverse() : toolLoop;
-
-  const start = traverse[0];
-  points.push({ x: start.x, y: start.y, z: safeZ, rapid: true });
-  points.push({ x: start.x, y: start.y, z: topZ });
-
-  for (const layerZ of layers) {
-    for (const p of traverse) {
-      points.push({ x: p.x, y: p.y, z: layerZ });
-    }
-    points.push({ x: traverse[0].x, y: traverse[0].y, z: layerZ });
+  const stockAllowance = finishingStockAllowance(settings);
+  const entryLayout = resolveStandardHelixEntryLayout(
+    loop,
+    settings,
+    stockAllowance,
+    geometry,
+    globals.toolOrigin
+  );
+  if (!entryLayout) {
+    return generateStandardOutlinePath(loop, settings, ctx, globals, geometry, 'straight');
   }
 
-  points.push({ x: start.x, y: start.y, z: safeZ, rapid: true });
+  const { toolStart, joinPoint, layout } = entryLayout;
+  const { traverse, arcGuide } = layout;
+  if (traverse.length === 0) return points;
+  const approachZ = outlineApproachWorldZ(topZ, globals.safeHeight, settings.zStartOffset);
+  const helixR = resolveHelixRadius(settings);
+  const helixOpts = { stockTopZ: topZ, globals };
+  const plungeFeed = settings.plungeRate;
+  const cutFeed = settings.feedRate;
+  const rotDir = resolveHelixRotationDir(settings.climbMilling);
+  const segmentsPerRev = helixSegmentsPerRev(globals.resolution);
+  const stepoverIncrement = adaptiveForwardIncrement(settings.toolDiameter, settings.stepover);
+  const sampleSpacing = pathSampleSpacing(globals.resolution);
+
+  appendOutlineApproachToStart(points, toolStart, safeZ, approachZ, plungeFeed);
+
+  let boreHelixAngle = 0;
+  const boreStartZ = approachZ;
+
+  for (let li = 0; li < layers.length; li++) {
+    const layerZ = layers[li];
+    const layerPrevZ = li > 0 ? layers[li - 1] : boreStartZ;
+
+    if (li === 0) {
+      const initialBore = generateHelixBorePoints(toolStart, settings, boreStartZ, layerZ, {
+        ...helixOpts,
+        taper: true,
+        startAngle: boreHelixAngle,
+        rotDir,
+        feedRate: plungeFeed,
+      });
+      if (!appendPoints(points, initialBore.points)) break;
+      boreHelixAngle = initialBore.endAngle;
+
+      if (
+        Math.hypot(toolStart.x - joinPoint.x, toolStart.y - joinPoint.y) > 0.5
+      ) {
+        const boreBottom = lastPathPoint(points);
+        const leadIn = boreBottom
+          ? buildHelixOutlineSplineLeadIn(
+              toolStart,
+              boreBottom,
+              layout,
+              layerZ,
+              sampleSpacing,
+              rotDir
+            ).map((p) => ({ ...p, feedRate: cutFeed }))
+          : buildStandardSplineLeadIn(layout, layerZ, sampleSpacing, toolStart).map((p) => ({
+              ...p,
+              feedRate: cutFeed,
+            }));
+
+        if (
+          boreBottom &&
+          leadIn.length > 0 &&
+          Math.hypot(leadIn[0].x - boreBottom.x, leadIn[0].y - boreBottom.y) <
+            sampleSpacing * 0.75
+        ) {
+          leadIn.shift();
+        }
+        if (!appendPoints(points, leadIn)) break;
+      }
+    } else {
+      const layerBoreCenter = resolveStandardHelixLayerBoreCenter(
+        loop,
+        joinPoint,
+        settings,
+        stockAllowance
+      );
+      appendFreshSlotWidthBore(
+        points,
+        layerBoreCenter,
+        layerPrevZ,
+        layerZ,
+        helixR,
+        settings,
+        helixOpts
+      );
+
+      if (
+        !appendBoreBottomWidenAndLeadIn(
+          points,
+          layerBoreCenter,
+          layerZ,
+          helixR,
+          helixRadiusTaperedFromStart(settings, layerZ, layerPrevZ, helixR),
+          stepoverIncrement,
+          rotDir,
+          segmentsPerRev,
+          plungeFeed,
+          { x: joinPoint.x, y: joinPoint.y, z: layerZ, feedRate: cutFeed }
+        )
+      ) {
+        break;
+      }
+    }
+
+    const loopStartS = layout.contourJoinS;
+    if (
+      !appendContourLoopFromArcS(
+        points,
+        traverse,
+        layerZ,
+        cutFeed,
+        loopStartS,
+        sampleSpacing,
+        layout.guideTraverseSign >= 0,
+        lastPathPoint(points) ?? undefined,
+        arcGuide.totalLength,
+        arcGuide,
+        joinPoint
+      )
+    ) {
+      break;
+    }
+  }
+
+  if (settings.finishingPass) {
+    const finishZ = layers[layers.length - 1];
+    appendConnectedFinishingPass(points, loop, settings, finishZ, safeZ, globals);
+  } else {
+    appendStraightRetractToSafe(points, safeZ);
+  }
+
+  return points;
+}
+
+function generateStandardOutlinePath(
+  loop: LoopPoint[],
+  settings: Operation['settings'],
+  ctx: CutZContext,
+  globals: ToolpathGlobalOptions,
+  geometry: Operation['geometry'] | null = null,
+  entryTypeOverride?: Operation['settings']['outlineEntryType']
+): ToolpathPoint[] {
+  const entryType = entryTypeOverride ?? settings.outlineEntryType ?? 'linear';
+
+  if (entryType === 'helix') {
+    return generateStandardHelixOutlinePath(loop, settings, ctx, globals, geometry);
+  }
+
+  const topZ = stockTopWorldZ(ctx);
+  const safeZ = safeHeightWorldZ(ctx, globals.safeHeight);
+  const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
+  const points: ToolpathPoint[] = [];
+
+  if (loop.length === 0 || layers.length === 0) return points;
+
+  const stockAllowance = finishingStockAllowance(settings);
+  const rampSampleSpacing = pathSampleSpacing(globals.resolution);
+  const rampLength = outlineRampLengthMm(settings);
+  const segLen = minkowskiSegmentLen(globals.resolution);
+
+  const layout = resolveStandardEntryLayout(
+    loop,
+    settings,
+    stockAllowance,
+    geometry,
+    rampSampleSpacing,
+    segLen,
+    globals.toolOrigin
+  );
+  if (!layout) return points;
+
+  const { toolStart, contourJoin, traverse, arcGuide, guideTraverseSign } = layout;
+  const traverseLength = arcGuide.totalLength;
+  const needsLeadIn = standardEntryNeedsLeadIn(layout);
+  const approachZ = outlineApproachWorldZ(topZ, globals.safeHeight, settings.zStartOffset);
+  const climbForward = guideTraverseSign >= 0;
+
+  appendOutlineApproachToStart(points, toolStart, safeZ, approachZ, settings.plungeRate);
+
+  for (let li = 0; li < layers.length; li++) {
+    const layerZ = layers[li];
+    const fromZ = li === 0 ? approachZ : layers[li - 1];
+    const lastBeforeLayer = lastPathPoint(points);
+    let loopStartS = layout.contourJoinS;
+    let loopAnchor: { x: number; y: number } = contourJoin;
+    let loopSkipNear: { x: number; y: number; z: number } | undefined;
+
+    if (entryType === 'straight') {
+      const plungeAt = li === 0 ? toolStart : (lastBeforeLayer ?? toolStart);
+      if (
+        !appendStraightOutlineEntry(
+          points,
+          plungeAt,
+          fromZ,
+          layerZ,
+          settings.plungeRate,
+          true
+        )
+      ) {
+        break;
+      }
+      if (needsLeadIn && li === 0) {
+        const leadIn = standardSplineLeadInFeed(
+          layout,
+          layerZ,
+          settings.feedRate,
+          rampSampleSpacing,
+          lastPathPoint(points) ?? undefined
+        );
+        if (!appendPoints(points, leadIn)) break;
+        loopAnchor = contourJoin;
+        loopStartS = layout.contourJoinS;
+      } else {
+        const at = lastPathPoint(points) ?? plungeAt;
+        loopAnchor = { x: at.x, y: at.y };
+        loopStartS = findClosestSOnGuide(arcGuide, loopAnchor).s;
+      }
+      loopSkipNear = lastPathPoint(points) ?? undefined;
+    } else {
+      const rampStart =
+        li === 0
+          ? needsLeadIn
+            ? toolStart
+            : contourJoin
+          : lastBeforeLayer ?? contourJoin;
+
+      let ramp: ReturnType<typeof generateContourLinearRamp>;
+      if (li === 0 && needsLeadIn) {
+        const leadInRamp = generateStandardLeadInLayerRamp(
+          layout,
+          traverse,
+          fromZ,
+          layerZ,
+          rampLength,
+          settings.rampAngleDeg,
+          settings.plungeRate,
+          rampSampleSpacing,
+          climbForward
+        );
+        if (!appendPoints(points, leadInRamp.points)) break;
+
+        if (leadInRamp.needsSplineTail) {
+          const splineTail = standardSplineTailFromPoint(
+            layout,
+            layerZ,
+            settings.feedRate,
+            leadInRamp.endPoint,
+            rampSampleSpacing
+          );
+          if (!appendPoints(points, splineTail)) break;
+        }
+
+        loopAnchor = leadInRamp.loopAnchor;
+        loopStartS = leadInRamp.loopStartS;
+      } else {
+        ramp = generateContourLinearRamp(
+          traverse,
+          rampStart,
+          fromZ,
+          layerZ,
+          rampLength,
+          settings.rampAngleDeg,
+          settings.plungeRate,
+          rampSampleSpacing,
+          climbForward
+        );
+        if (!appendPoints(points, ramp.points)) break;
+        loopAnchor = ramp.endPoint;
+        loopStartS = findClosestSOnGuide(arcGuide, ramp.endPoint).s;
+      }
+
+      loopSkipNear = lastPathPoint(points) ?? undefined;
+    }
+
+    if (
+      !appendContourLoopFromArcS(
+        points,
+        traverse,
+        layerZ,
+        settings.feedRate,
+        loopStartS,
+        rampSampleSpacing,
+        climbForward,
+        loopSkipNear,
+        traverseLength,
+        arcGuide,
+        loopAnchor
+      )
+    ) {
+      break;
+    }
+  }
+
+  if (settings.finishingPass) {
+    const finishZ = layers[layers.length - 1];
+    appendConnectedFinishingPass(points, loop, settings, finishZ, safeZ, globals);
+  } else {
+    appendStraightRetractToSafe(points, safeZ);
+  }
+
   return points;
 }
 
@@ -182,20 +587,16 @@ function generateOutlinePath(
   globals: ToolpathGlobalOptions
 ): ToolpathPoint[] {
   const { settings, geometry } = op;
-  const topZ = stockTopWorldZ(ctx);
 
-  if (geometry?.loops && geometry.loops.length > 0) {
-    return loopToToolpathPoints(geometry.loops[0], settings, ctx, globals);
+  if (settings.adaptiveMode) {
+    return generateAdaptiveOutlinePath(op, ctx, globals);
   }
 
-  const { minX, maxX, minY, maxY } = getBounds(geometry);
-  const fallbackLoop: LoopPoint[] = [
-    { x: minX, y: minY, z: topZ },
-    { x: maxX, y: minY, z: topZ },
-    { x: maxX, y: maxY, z: topZ },
-    { x: minX, y: maxY, z: topZ },
-  ];
-  return loopToToolpathPoints(fallbackLoop, settings, ctx, globals);
+  if (!hasOutlineLoopGeometry(geometry)) {
+    return [];
+  }
+
+  return generateStandardOutlinePath(geometry!.loops![0], settings, ctx, globals, geometry);
 }
 
 function trochoidParams(
@@ -294,20 +695,119 @@ function appendGeneratedPath(
   return appendPoints(target, generated.slice(start));
 }
 
-function appendClosedOutlinePath(
-  target: ToolpathPoint[],
-  path: ToolpathPoint[],
-  from: { x: number; y: number }
+function appendStraightRetractToSafe(
+  points: ToolpathPoint[],
+  safeZ: number
+): void {
+  const last = lastPathPoint(points);
+  if (!last) return;
+  if (Math.abs(last.z - safeZ) > 1e-4) {
+    points.push({ x: last.x, y: last.y, z: safeZ, rapid: true });
+  }
+}
+
+function finishContourPointFromToolPosition(
+  partLoop: LoopPoint[],
+  settings: Operation['settings'],
+  toolPos: { x: number; y: number }
+): { x: number; y: number } {
+  const offset = toolRadius(settings) + (settings.radialOffset ?? 0);
+  const onPart = closestPointOnLoop2D(toolPos.x, toolPos.y, partLoop);
+  return {
+    x: onPart.x + onPart.outX * offset,
+    y: onPart.y + onPart.outY * offset,
+  };
+}
+
+function appendConnectedFinishingPass(
+  points: ToolpathPoint[],
+  partLoop: LoopPoint[],
+  settings: Operation['settings'],
+  finishZ: number,
+  safeZ: number,
+  globals: ToolpathGlobalOptions,
+  finishPath?: ToolpathPoint[]
 ): boolean {
-  if (path.length < 2) return true;
+  const sampleSpacing = pathSampleSpacing(globals.resolution);
+  const stockAllowance = finishingStockAllowance(settings);
+  const feedRate = settings.feedRate;
 
-  const joinIdx = closestPointIndexOnPath(path, from);
-  const loop = wrapPathFromIndex(path, joinIdx);
+  const finishPts =
+    finishPath ??
+    contourTraverse(partLoop, settings, 0, globals.resolution).map((p) => ({
+      x: p.x,
+      y: p.y,
+      z: finishZ,
+      feedRate,
+    }));
 
-  if (!appendGeneratedPath(target, loop)) return false;
+  if (finishPts.length === 0) return true;
 
-  const loopStart = loop[0];
-  return appendPoints(target, [{ x: loopStart.x, y: loopStart.y, z: loopStart.z }]);
+  const last = lastPathPoint(points);
+  if (last) {
+    const traverse = finishPts.map((p) => ({ x: p.x, y: p.y, z: finishZ }));
+    const finishEntry = finishContourPointFromToolPosition(partLoop, settings, last);
+
+    if (Math.hypot(last.x - finishEntry.x, last.y - finishEntry.y) > 0.05) {
+      if (
+        !appendPoints(points, [
+          { x: finishEntry.x, y: finishEntry.y, z: finishZ, feedRate },
+        ])
+      ) {
+        return false;
+      }
+    }
+
+    const loopAnchor = {
+      x: finishEntry.x,
+      y: finishEntry.y,
+    };
+    const startS = stationOnContour(traverse, finishEntry, sampleSpacing);
+    const finishTraverseLength = buildArcLengthGuide(traverse, Math.max(sampleSpacing, 0.25))
+      .totalLength;
+    if (
+      !appendContourLoopFromArcS(
+        points,
+        traverse,
+        finishZ,
+        feedRate,
+        startS,
+        sampleSpacing,
+        true,
+        lastPathPoint(points) ?? undefined,
+        finishTraverseLength,
+        undefined,
+        loopAnchor
+      )
+    ) {
+      return false;
+    }
+  } else if (!appendPoints(points, finishPts)) {
+    return false;
+  }
+
+  const endAt = lastPathPoint(points);
+  if (endAt) {
+    if (stockAllowance > 1e-4) {
+      const onPart = closestPointOnLoop2D(endAt.x, endAt.y, partLoop);
+      if (
+        !appendPoints(points, [
+          {
+            x: endAt.x + onPart.outX * stockAllowance,
+            y: endAt.y + onPart.outY * stockAllowance,
+            z: finishZ,
+            feedRate,
+          },
+        ])
+      ) {
+        return false;
+      }
+    }
+    const retractFrom = lastPathPoint(points) ?? endAt;
+    points.push({ x: retractFrom.x, y: retractFrom.y, z: safeZ, rapid: true });
+  }
+
+  return true;
 }
 
 function sampleFinishPoint(
@@ -503,7 +1003,7 @@ function helixStartWorldZ(
   safeHeight: number,
   zStartOffset: number
 ): number {
-  return topZ + Math.min(Math.max(safeHeight, 0), Math.max(zStartOffset, 0));
+  return outlineApproachWorldZ(topZ, safeHeight, zStartOffset);
 }
 
 function buildInterOperationTravel(
@@ -546,7 +1046,7 @@ function generateAdaptiveOutlinePath(
   const loop = geometry?.loops?.[0];
 
   if (!loop) {
-    return generateOutlinePath(op, ctx, globals);
+    return [];
   }
 
   const topZ = stockTopWorldZ(ctx);
@@ -568,10 +1068,11 @@ function generateAdaptiveOutlinePath(
     adaptiveEntryOverridesFromGeometry(geometry),
     segLen,
     trochSampleSpacing,
-    globals.resolution
+    globals.resolution,
+    globals.toolOrigin
   );
   if (!entryLayout) {
-    return generateOutlinePath(op, ctx, globals);
+    return generateStandardOutlinePath(loop, settings, ctx, globals, geometry);
   }
 
   const toolStart = entryLayout.toolStart;
@@ -585,13 +1086,17 @@ function generateAdaptiveOutlinePath(
   const travelFeed = globals.travelFeedRate;
   const outwardCCW = isGuideOutwardCCW(loop);
   const points: ToolpathPoint[] = [];
+  const approachZ = outlineApproachWorldZ(topZ, globals.safeHeight, settings.zStartOffset);
 
   points.push({ x: toolStart.x, y: toolStart.y, z: safeZ, rapid: true });
+  if (approachZ < safeZ - 1e-4) {
+    points.push({ x: toolStart.x, y: toolStart.y, z: approachZ, feedRate: plungeFeed });
+  }
 
   const helixTarget = layers.length > 0 ? layers[0] : finalZ;
   let boreHelixAngle = 0;
 
-  const initialBore = generateHelixBorePoints(toolStart, settings, safeZ, helixTarget, {
+  const initialBore = generateHelixBorePoints(toolStart, settings, approachZ, helixTarget, {
     ...helixOpts,
     taper: true,
     startAngle: boreHelixAngle,
@@ -722,18 +1227,22 @@ function generateAdaptiveOutlinePath(
   if (settings.finishingPass) {
     const finishZ = layers.length > 0 ? layers[layers.length - 1] : finalZ;
     const finishPath = generateFinishingOutline(loop, settings, finishZ, globals);
-    if (finishPath.length > 0) {
-      const at = lastPathPoint(points);
-      if (at) {
-        if (!appendClosedOutlinePath(points, finishPath, at)) {
-          appendRetractViaSlotCenter(points, slotJoinCenter, safeZ, travelFeed);
-          return points;
-        }
-      } else if (!appendPoints(points, finishPath)) {
-        appendRetractViaSlotCenter(points, slotJoinCenter, safeZ, travelFeed);
-        return points;
-      }
+    if (
+      finishPath.length === 0 ||
+      !appendConnectedFinishingPass(
+        points,
+        loop,
+        settings,
+        finishZ,
+        safeZ,
+        globals,
+        finishPath
+      )
+    ) {
+      appendRetractViaSlotCenter(points, slotJoinCenter, safeZ, travelFeed);
+      return points;
     }
+    return points;
   }
 
   appendRetractViaSlotCenter(points, slotJoinCenter, safeZ, travelFeed);
@@ -925,6 +1434,10 @@ function generatePocketPath(
   globals: ToolpathGlobalOptions
 ): ToolpathPoint[] {
   const { settings, geometry } = op;
+  if (!hasRegionGeometry(geometry)) {
+    return [];
+  }
+
   const { minX, maxX, minY, maxY } = getBounds(geometry);
   const stepover = settings.toolDiameter * (settings.stepover / 100);
   const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
@@ -960,6 +1473,10 @@ function generateContourPath(
   globals: ToolpathGlobalOptions
 ): ToolpathPoint[] {
   const { settings, geometry } = op;
+  if (!hasRegionGeometry(geometry)) {
+    return [];
+  }
+
   const { minX, maxX, minY, maxY } = getBounds(geometry);
   const topZ = stockTopWorldZ(ctx);
   const finalZ = finalCutWorldZ(ctx, settings.depthOffset);
@@ -991,14 +1508,14 @@ function generatePathForOperation(
   globals: ToolpathGlobalOptions,
   warnings: string[] = []
 ): ToolpathPoint[] {
-  const settings = normalizedSettings(op.settings);
-  const operation = { ...op, settings };
+  const normalizedOp = normalizeOperation(op);
+  const settings = normalizedSettings(normalizedOp.settings);
+  const operation = { ...normalizedOp, settings };
 
   switch (operation.type) {
     case 'outline':
-      return generateOutlinePath(operation, ctx, globals);
     case 'adaptive-outline':
-      return generateAdaptiveOutlinePath(operation, ctx, globals);
+      return generateOutlinePath(operation, ctx, globals);
     case 'drill':
       return generateDrillPath(operation, ctx, globals);
     case 'helix':

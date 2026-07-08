@@ -72,9 +72,8 @@ export function getSelectionHint(
   }
   switch (operationType) {
     case 'outline':
-      return 'Select a top-facing surface for the outline loop';
     case 'adaptive-outline':
-      return 'Select top-facing part outline, then set helix entry point in stock';
+      return 'Select a top-facing surface for the outline loop';
     case 'drill':
     case 'helix':
       return 'Click holes to add or remove — includes holes in pockets and on bosses';

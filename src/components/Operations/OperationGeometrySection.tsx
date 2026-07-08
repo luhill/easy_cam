@@ -4,6 +4,10 @@ import {
   getSelectionStrategy,
   getSelectedHoles,
   DEFAULT_SETTINGS,
+  isAdaptiveOutlineOperation,
+  isOutlineHelixEntryOperation,
+  isOutlineOperation,
+  isStandardOutlineEntryEditable,
 } from '../../types/operations';
 import { createCutZContext, type CutZContext } from '../../lib/cutDepth';
 import { validateHelixHole } from '../../lib/helixValidation';
@@ -12,8 +16,9 @@ import {
   adaptiveEntryOverridesFromGeometry,
   resolveAdaptiveEntryLayout,
 } from '../../lib/adaptiveGuides';
-import { minkowskiSegmentLen, trochoidSampleSpacing } from '../../lib/toolpathConfig';
-import { resolveAdaptiveSlotGeometry } from '../../lib/adaptiveOutline';
+import { minkowskiSegmentLen, pathSampleSpacing, trochoidSampleSpacing } from '../../lib/toolpathConfig';
+import { resolveStandardEntryLayout } from '../../lib/outlineEntry';
+import { finishingStockAllowance, resolveAdaptiveSlotGeometry } from '../../lib/adaptiveOutline';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { useAppStore } from '../../store/useAppStore';
 import { HintTooltip } from '../HintTooltip';
@@ -49,7 +54,34 @@ function formatGeometrySummary(operation: Operation, cutZContext: CutZContext): 
     return `${holes.length} holes`;
   }
 
-  if (operation.type === 'adaptive-outline') {
+  if (isStandardOutlineEntryEditable(operation)) {
+    const hasOutline = geo.loops && geo.loops.length > 0;
+    if (!hasOutline) return 'None selected';
+    const loop = geo.loops![0];
+    const resolution = useSettingsStore.getState().toolpathResolution;
+    const stockAllowance = finishingStockAllowance(operation.settings);
+    const toolOrigin = useSettingsStore.getState().toolOrigin;
+    const layout = resolveStandardEntryLayout(
+      loop,
+      operation.settings,
+      stockAllowance,
+      geo,
+      pathSampleSpacing(resolution),
+      minkowskiSegmentLen(resolution),
+      toolOrigin
+    );
+    if (!layout) return 'outline';
+    const entryLabel =
+      operation.settings.outlineEntryType === 'helix' ? 'entry' : 'start';
+    const parts = [
+      'outline',
+      `${entryLabel} (${layout.toolStart.x.toFixed(1)}, ${layout.toolStart.y.toFixed(1)})`,
+      `join (${layout.contourJoin.x.toFixed(1)}, ${layout.contourJoin.y.toFixed(1)})`,
+    ];
+    return parts.join(', ');
+  }
+
+  if (isAdaptiveOutlineOperation(operation)) {
     const hasOutline = geo.loops && geo.loops.length > 0;
     if (!hasOutline) return 'None selected';
     const parts: string[] = ['outline'];
@@ -62,13 +94,15 @@ function formatGeometrySummary(operation: Operation, cutZContext: CutZContext): 
       roughSlot.trochoidRadius,
       resolution
     );
+    const toolOrigin = useSettingsStore.getState().toolOrigin;
     const layout = resolveAdaptiveEntryLayout(
       loop,
       operation.settings,
       adaptiveEntryOverridesFromGeometry(geo),
       segLen,
       trochSampleSpacing,
-      resolution
+      resolution,
+      toolOrigin
     );
     if (layout) {
       parts.push(`start (${layout.toolStart.x.toFixed(1)}, ${layout.toolStart.y.toFixed(1)})`);
@@ -105,10 +139,13 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
 
   const isActive = activeOperationId === operation.id;
   const geometrySummary = formatGeometrySummary(operation, cutZContext);
-  const hasOutlineLoop =
-    operation.type === 'adaptive-outline' &&
+  const hasEditableEntry =
+    (isOutlineHelixEntryOperation(operation) || isStandardOutlineEntryEditable(operation)) &&
     !!operation.geometry?.loops &&
     operation.geometry.loops.length > 0;
+  const hasAdaptiveEntry = hasEditableEntry && isAdaptiveOutlineOperation(operation);
+  const hasStandardTwoPointEntry = hasEditableEntry && isStandardOutlineEntryEditable(operation);
+  const hasTwoPointEntry = hasAdaptiveEntry || hasStandardTwoPointEntry;
   const hasGeometry =
     !!operation.geometry &&
     (operation.geometry.faceIndices.length > 0 ||
@@ -116,34 +153,61 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
       !!operation.geometry.entryPoint ||
       !!operation.geometry.toolStartPoint ||
       !!operation.geometry.slotJoinPoint ||
-      hasOutlineLoop);
+      hasEditableEntry);
   const isEditingEntry = isActive && selectionMode && selectionSubMode === 'entry-point';
   const isSelectingGeometry = isActive && selectionMode && selectionSubMode !== 'entry-point';
 
-  const entryLayout = (() => {
-    if (!hasOutlineLoop || !operation.geometry?.loops?.[0]) return null;
-    const resolution = useSettingsStore.getState().toolpathResolution;
-    const segLen = minkowskiSegmentLen(resolution);
-    const roughSlot = resolveAdaptiveSlotGeometry(operation.settings, { roughing: true });
-    const trochSampleSpacing = trochoidSampleSpacing(
-      roughSlot.forwardIncrement,
-      roughSlot.trochoidRadius,
-      resolution
-    );
-    return resolveAdaptiveEntryLayout(
-      operation.geometry.loops[0],
-      operation.settings,
-      adaptiveEntryOverridesFromGeometry(operation.geometry),
-      segLen,
-      trochSampleSpacing,
-      resolution
-    );
-  })();
+  const toolOrigin = useSettingsStore((s) => s.toolOrigin);
 
-  const toolStartX =
-    operation.geometry?.toolStartPoint?.x ?? entryLayout?.toolStart.x ?? 0;
-  const toolStartY =
-    operation.geometry?.toolStartPoint?.y ?? entryLayout?.toolStart.y ?? 0;
+  const entryLayout = useMemo(() => {
+    if (!hasEditableEntry || !operation.geometry?.loops?.[0]) return null;
+    const loop = operation.geometry.loops[0];
+    if (isAdaptiveOutlineOperation(operation)) {
+      const resolution = useSettingsStore.getState().toolpathResolution;
+      const segLen = minkowskiSegmentLen(resolution);
+      const roughSlot = resolveAdaptiveSlotGeometry(operation.settings, { roughing: true });
+      const trochSampleSpacing = trochoidSampleSpacing(
+        roughSlot.forwardIncrement,
+        roughSlot.trochoidRadius,
+        resolution
+      );
+      return resolveAdaptiveEntryLayout(
+        loop,
+        operation.settings,
+        adaptiveEntryOverridesFromGeometry(operation.geometry),
+        segLen,
+        trochSampleSpacing,
+        resolution,
+        toolOrigin
+      );
+    }
+    const stockAllowance = finishingStockAllowance(operation.settings);
+    const resolution = useSettingsStore.getState().toolpathResolution;
+    return resolveStandardEntryLayout(
+      loop,
+      operation.settings,
+      stockAllowance,
+      operation.geometry,
+      pathSampleSpacing(resolution),
+      minkowskiSegmentLen(resolution),
+      toolOrigin
+    );
+  }, [hasEditableEntry, operation, toolOrigin]);
+
+  const resolvedToolStart = entryLayout
+    ? entryLayout.toolStart
+    : { x: 0, y: 0 };
+  const resolvedJoin =
+    entryLayout && 'slotJoin' in entryLayout
+      ? entryLayout.slotJoin
+      : entryLayout && 'contourJoin' in entryLayout
+        ? entryLayout.contourJoin
+        : { x: 0, y: 0 };
+
+  const toolStartX = operation.geometry?.toolStartPoint?.x ?? resolvedToolStart.x;
+  const toolStartY = operation.geometry?.toolStartPoint?.y ?? resolvedToolStart.y;
+  const slotJoinX = operation.geometry?.slotJoinPoint?.x ?? resolvedJoin.x;
+  const slotJoinY = operation.geometry?.slotJoinPoint?.y ?? resolvedJoin.y;
 
   const handleSelectGeometry = () => {
     setActiveOperation(operation.id);
@@ -163,7 +227,7 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
     if (!operation.geometry) return;
     const value = parseFloat(raw);
     if (!Number.isFinite(value)) return;
-    const current = operation.geometry.toolStartPoint ?? entryLayout?.toolStart ?? { x: 0, y: 0 };
+    const current = operation.geometry.toolStartPoint ?? resolvedToolStart;
     updateOperation(operation.id, {
       geometry: {
         ...operation.geometry,
@@ -173,10 +237,22 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
     });
   };
 
+  const handleSlotJoinCoordinateChange = (axis: 'x' | 'y', raw: string) => {
+    if (!operation.geometry) return;
+    const value = parseFloat(raw);
+    if (!Number.isFinite(value)) return;
+    const current = operation.geometry.slotJoinPoint ?? resolvedJoin;
+    updateOperation(operation.id, {
+      geometry: {
+        ...operation.geometry,
+        slotJoinPoint: { ...current, [axis]: value },
+      },
+    });
+  };
+
   const supportsModelSelection =
     operation.type !== 'custom-gcode' &&
-    (operation.type === 'outline' ||
-    operation.type === 'adaptive-outline' ||
+    (isOutlineOperation(operation) ||
     operation.type === 'drill' ||
     operation.type === 'helix' ||
     operation.type === 'pocket' ||
@@ -186,12 +262,20 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
 
   const geometryHint = (() => {
     if (isEditingEntry) {
-      return 'Drag amber cross = tool start, blue cross = slot join on centerline (orange guide). Right-drag to orbit the view.';
+      return hasTwoPointEntry
+        ? hasAdaptiveEntry
+          ? 'Drag amber cross = tool start, blue cross = slot join on centerline (yellow reference guide). Right-drag to orbit the view.'
+          : 'Drag amber cross = entry start, blue cross = outline join on tool path. Right-drag to orbit the view.'
+        : 'Drag amber cross = outline entry start on the tool path. Right-drag to orbit the view.';
     }
-    if (isActive && hasOutlineLoop && !isEditingEntry) {
-      return 'Use Edit Entry Points to drag tool start and slot join without rotating the view. Lead-in is a spline tangent to the outline in climb/conventional direction.';
+    if (isActive && hasEditableEntry && !isEditingEntry) {
+      return hasTwoPointEntry
+        ? hasAdaptiveEntry
+          ? 'Use Edit Entry Points to drag tool start and slot join without rotating the view. Lead-in is a spline tangent to the outline in climb/conventional direction.'
+          : 'Use Edit Entry Points to drag entry start and outline join. Lead-in uses a tangent spline when entry is offset from the join.'
+        : 'Use Edit Entry Points to set where the ramp, helix tangent, or straight plunge begins on the outline.';
     }
-    if (isSelectingGeometry && operation.type === 'adaptive-outline') {
+    if (isSelectingGeometry && isOutlineOperation(operation)) {
       return 'Select top-facing part outline';
     }
     if (isActive && selectionMode && (operation.type === 'drill' || operation.type === 'helix')) {
@@ -226,7 +310,7 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
             <button className="btn btn-small" onClick={handleSelectGeometry}>
               Select from Model
             </button>
-            {hasOutlineLoop && (
+            {hasEditableEntry && (
               <button className="btn btn-small btn-secondary" onClick={handleEditEntryPoints}>
                 Edit Entry Points
               </button>
@@ -242,11 +326,11 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
           </button>
         )}
       </div>
-      {hasOutlineLoop && (
+      {hasEditableEntry && (
         <div className="settings-grid entry-start-grid">
           <div className="setting-row">
             <label>
-              Tool start X <span className="unit">(mm)</span>
+              Entry start X <span className="unit">(mm)</span>
             </label>
             <input
               type="number"
@@ -257,7 +341,7 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
           </div>
           <div className="setting-row">
             <label>
-              Tool start Y <span className="unit">(mm)</span>
+              Entry start Y <span className="unit">(mm)</span>
             </label>
             <input
               type="number"
@@ -266,6 +350,32 @@ export function OperationGeometrySection({ operation }: OperationGeometrySection
               onChange={(e) => handleToolStartCoordinateChange('y', e.target.value)}
             />
           </div>
+          {hasTwoPointEntry && (
+            <>
+              <div className="setting-row">
+                <label>
+                  Outline join X <span className="unit">(mm)</span>
+                </label>
+                <input
+                  type="number"
+                  value={Number.isFinite(slotJoinX) ? slotJoinX : 0}
+                  step={0.1}
+                  onChange={(e) => handleSlotJoinCoordinateChange('x', e.target.value)}
+                />
+              </div>
+              <div className="setting-row">
+                <label>
+                  Outline join Y <span className="unit">(mm)</span>
+                </label>
+                <input
+                  type="number"
+                  value={Number.isFinite(slotJoinY) ? slotJoinY : 0}
+                  step={0.1}
+                  onChange={(e) => handleSlotJoinCoordinateChange('y', e.target.value)}
+                />
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

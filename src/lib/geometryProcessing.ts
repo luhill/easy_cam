@@ -309,7 +309,10 @@ function offsetMiterVertex(
 
   const dot = bx * n1x + by * n1y;
   const miter = dot > 0.05 ? offset / dot : offset;
-  const clamped = Math.sign(miter) * Math.min(Math.abs(miter), Math.abs(offset) * 6);
+  const edgeLimit = Math.min(len1, len2) * 0.48;
+  const clamped =
+    Math.sign(miter) *
+    Math.min(Math.abs(miter), Math.abs(offset) * 6, edgeLimit > 1e-6 ? edgeLimit : Math.abs(offset) * 6);
 
   return {
     x: curr.x + bx * clamped,

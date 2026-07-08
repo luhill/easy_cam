@@ -1,4 +1,5 @@
 import type { LoopPoint, Operation, OperationDefaults } from '../types/operations';
+import { isAdaptiveOutlineOperation } from '../types/operations';
 import {
   adaptiveEntryOverridesFromGeometry,
   resolveAdaptiveEntryLayout,
@@ -46,7 +47,8 @@ function resolveGuideContext(
     adaptiveEntryOverridesFromGeometry(geometry),
     segLen,
     trochSampleSpacing,
-    globals.resolution
+    globals.resolution,
+    globals.toolOrigin
   );
   const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
   const finalZ = finalCutWorldZ(ctx, settings.depthOffset);
@@ -64,14 +66,14 @@ function resolveGuideContext(
   };
 }
 
-/** Slot centerline and layer-0 spline lead-in for adaptive-outline debug display. */
+/** Slot centerline and layer-0 spline lead-in for adaptive outline debug display. */
 export function computeAdaptiveOutlineDebugGuides(
   op: Operation,
   ctx: CutZContext,
   globals: ToolpathGlobalOptions
 ): AdaptiveOutlineDebugGuides | null {
   const loop = op.geometry?.loops?.[0];
-  if (!loop || op.type !== 'adaptive-outline') return null;
+  if (!loop || !isAdaptiveOutlineOperation(op)) return null;
 
   const guideCtx = resolveGuideContext(loop, op.settings, op.geometry, ctx, globals);
   if (!guideCtx) return null;

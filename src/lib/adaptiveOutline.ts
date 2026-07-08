@@ -1,4 +1,5 @@
 import type { LoopPoint, OperationDefaults } from '../types/operations';
+import type { ToolOrigin } from './geometryProcessing';
 import type { CornerSpurOptions } from './cornerSpurs';
 import { offsetLoop2DMinkowski, distanceToLoop2D, closestPointOnLoop2D } from './geometryProcessing';
 import { adaptiveForwardIncrement } from './trochoidalPath';
@@ -23,8 +24,18 @@ export interface AdaptiveSlotGeometry {
   maxCenterDist: number;
 }
 
-/** Extra stock left on part walls during adaptive roughing when finishing pass is enabled. */
-export const FINISHING_STOCK_ALLOWANCE = 0.1;
+/** Finishing stock left on walls during roughing when finishing pass is enabled (% of tool Ø → mm). */
+export function finishingStockAllowance(settings: OperationDefaults): number {
+  if (!settings.finishingPass) return 0;
+  const toolDiameter = Math.max(settings.toolDiameter, 0.1);
+  const pct = Math.max(settings.finishingStockPercent ?? 7, 0);
+  return toolDiameter * (pct / 100);
+}
+
+/** @deprecated Use finishingStockAllowance(settings) */
+export function legacyFinishingStockAllowance(settings: OperationDefaults): number {
+  return finishingStockAllowance(settings);
+}
 
 export interface AdaptiveSlotOptions {
   /** When false, omit roughing stock allowance (used for finishing outline). */
@@ -35,16 +46,17 @@ export interface AdaptiveSlotOptions {
  * Corner spur options when roughing with finishing pass enabled.
  * Spur tips stop at the rough inner miter (stock allowance), not the finish outline.
  *
- * Finishing pass adds FINISHING_STOCK_ALLOWANCE to radialOffset only — slot width is
+ * Finishing pass adds finishingStockAllowance to radialOffset only — slot width is
  * unchanged; the whole slot (inner wall, centerline, outer wall) shifts outward from the part.
  */
 export function cornerSpurOptionsForRoughing(settings: OperationDefaults): CornerSpurOptions {
   const base: CornerSpurOptions = { maxInternalAngleDeg: 130 };
   if (!settings.finishingPass) return base;
   const finish = resolveAdaptiveSlotGeometry(settings, { roughing: false });
+  const stock = finishingStockAllowance(settings);
   return {
     ...base,
-    roughTipInnerOffset: finish.innerCenterOffset + FINISHING_STOCK_ALLOWANCE,
+    roughTipInnerOffset: finish.innerCenterOffset + stock,
   };
 }
 
@@ -55,7 +67,7 @@ export function resolveAdaptiveSlotGeometry(
   const toolDiameter = Math.max(settings.toolDiameter, 0.1);
   const toolRadius = toolDiameter / 2;
   const stockAllowance =
-    settings.finishingPass && options.roughing !== false ? FINISHING_STOCK_ALLOWANCE : 0;
+    settings.finishingPass && options.roughing !== false ? finishingStockAllowance(settings) : 0;
   const radialOffset = (settings.radialOffset ?? 0) + stockAllowance;
   const slotWidthPercent = Math.min(Math.max(settings.slotWidthPercent ?? 150, 125), 200);
   const slotWidth = toolDiameter * (slotWidthPercent / 100);
@@ -112,9 +124,10 @@ export function boreCenterOffsetFromInnerGuide(settings: OperationDefaults): num
 /** Default helix entry: bore hugging inner slot path, as close to the part as allowed. */
 export function computeDefaultEntryPoint(
   partLoop: LoopPoint[],
-  settings: OperationDefaults
+  settings: OperationDefaults,
+  toolOrigin?: Pick<ToolOrigin, 'x' | 'y'> | null
 ): { x: number; y: number } {
-  if (partLoop.length < 2) return { x: 0, y: 0 };
+  if (partLoop.length < 2) return { x: toolOrigin?.x ?? 0, y: toolOrigin?.y ?? 0 };
 
   const slot = resolveAdaptiveSlotGeometry(settings, { roughing: false });
   const guide = offsetLoop2DMinkowski(partLoop, slot.innerCenterOffset);
@@ -123,13 +136,24 @@ export function computeDefaultEntryPoint(
   const outwardOffset = boreCenterOffsetFromInnerGuide(settings);
 
   let bestGuide = guide[0];
-  let bestScore = Infinity;
-  for (const p of guide) {
-    const d = distanceToLoop2D(p.x, p.y, partLoop);
-    const score = Math.abs(d - innerDist);
-    if (score < bestScore) {
-      bestScore = score;
-      bestGuide = p;
+  if (toolOrigin) {
+    let bestDist = Infinity;
+    for (const p of guide) {
+      const d = Math.hypot(p.x - toolOrigin.x, p.y - toolOrigin.y);
+      if (d < bestDist) {
+        bestDist = d;
+        bestGuide = p;
+      }
+    }
+  } else {
+    let bestScore = Infinity;
+    for (const p of guide) {
+      const d = distanceToLoop2D(p.x, p.y, partLoop);
+      const score = Math.abs(d - innerDist);
+      if (score < bestScore) {
+        bestScore = score;
+        bestGuide = p;
+      }
     }
   }
 
@@ -147,11 +171,12 @@ export function computeDefaultEntryPoint(
 export function resolveAdaptiveEntryPoint(
   partLoop: LoopPoint[],
   settings: OperationDefaults,
-  entry?: { x: number; y: number } | null
+  entry?: { x: number; y: number } | null,
+  toolOrigin?: Pick<ToolOrigin, 'x' | 'y'> | null
 ): { x: number; y: number } {
   const minDist = minimumEntryCenterDist(settings);
   if (entry) {
     return ensureEntryOutsidePart(partLoop, entry, minDist);
   }
-  return computeDefaultEntryPoint(partLoop, settings);
+  return computeDefaultEntryPoint(partLoop, settings, toolOrigin);
 }
