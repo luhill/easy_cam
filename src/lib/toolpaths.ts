@@ -56,7 +56,6 @@ import {
   helixRadiusAtZ,
   helixRadiusTaperedFromStart,
   interiorHelixRadiusAtZ,
-  isGuideOutwardCCW,
   resolveHelixRadius,
   resolveHelixRotationDir,
   resolveInteriorHelixRadius,
@@ -749,8 +748,6 @@ function trochoidParams(
       globals.resolution
     ),
     orbitStepsPerRev: helixSegmentsPerRev(globals.resolution),
-    invertLoopCutPhase: offsetContext.wallSide === 'interior',
-    invertLeadInCutPhase: settings.climbMilling,
   };
 }
 
@@ -1371,7 +1368,6 @@ function generateAdaptiveOutlinePath(
   const cutFeed = settings.feedRate;
   const plungeFeed = settings.plungeRate;
   const travelFeed = globals.travelFeedRate;
-  const outwardCCW = isGuideOutwardCCW(loop);
   const points: ToolpathPoint[] = [];
   const approachZ = outlineApproachWorldZ(topZ, globals.safeHeight, settings.zStartOffset);
 
@@ -1444,7 +1440,7 @@ function generateAdaptiveOutlinePath(
           trochoidRAtGuide: spurRadiusSampler,
           omitFirstOrbitSample: true,
         },
-        outwardCCW,
+        slotCenterGuide,
         entryLayout.cornerSpurRanges
       );
 
