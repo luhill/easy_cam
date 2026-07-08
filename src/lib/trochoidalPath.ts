@@ -168,6 +168,74 @@ export function buildOpenArcLengthGuide(
   return { frames, totalLength: s };
 }
 
+/**
+ * Open spline guide for adaptive entry trochoids — carries the slot-loop outward
+ * normal so micro-loops match closed-guide orbit direction at the join.
+ */
+export function buildLeadInSplineArcGuide(
+  splineGuide: LoopPoint[],
+  joinFrame: GuideFrame,
+  sampleSpacing: number
+): ArcLengthGuide {
+  if (splineGuide.length < 2) {
+    return { frames: [], totalLength: 0 };
+  }
+
+  const dense: LoopPoint[] = [];
+  for (let i = 0; i < splineGuide.length - 1; i++) {
+    const p0 = splineGuide[i];
+    const p1 = splineGuide[i + 1];
+    dense.push(p0);
+    const len = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+    if (len <= sampleSpacing) continue;
+    const steps = Math.ceil(len / sampleSpacing);
+    for (let s = 1; s < steps; s++) {
+      const t = s / steps;
+      dense.push({
+        x: p0.x + (p1.x - p0.x) * t,
+        y: p0.y + (p1.y - p0.y) * t,
+        z: p0.z + (p1.z - p0.z) * t,
+      });
+    }
+  }
+  dense.push(splineGuide[splineGuide.length - 1]);
+
+  const joinNx = joinFrame.nx;
+  const joinNy = joinFrame.ny;
+  const frames: GuideFrame[] = [];
+  let s = 0;
+  const n = dense.length;
+
+  for (let i = 0; i < n; i++) {
+    const prev = dense[Math.max(i - 1, 0)];
+    const curr = dense[i];
+    const next = dense[Math.min(i + 1, n - 1)];
+
+    if (i > 0) {
+      s += Math.hypot(curr.x - prev.x, curr.y - prev.y);
+    }
+
+    let tx = next.x - prev.x;
+    let ty = next.y - prev.y;
+    const tlen = Math.hypot(tx, ty) || 1;
+    tx /= tlen;
+    ty /= tlen;
+
+    frames.push({
+      x: curr.x,
+      y: curr.y,
+      z: curr.z,
+      tx,
+      ty,
+      nx: joinNx,
+      ny: joinNy,
+      s,
+    });
+  }
+
+  return { frames, totalLength: s };
+}
+
 export function sampleOpenGuideAtS(guide: ArcLengthGuide, s: number): GuideFrame {
   const { frames, totalLength } = guide;
   if (frames.length === 0) {

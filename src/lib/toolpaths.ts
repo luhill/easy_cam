@@ -749,6 +749,8 @@ function trochoidParams(
       globals.resolution
     ),
     orbitStepsPerRev: helixSegmentsPerRev(globals.resolution),
+    invertLoopCutPhase: offsetContext.wallSide === 'interior',
+    invertLeadInCutPhase: settings.climbMilling,
   };
 }
 

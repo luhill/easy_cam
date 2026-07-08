@@ -42,12 +42,13 @@ function CalloutDragHandle({
   const { raycaster, camera, gl } = useThree();
   const hit = useRef(new THREE.Vector3());
   const [dragging, setDragging] = useState(false);
-  const [labelDrag, setLabelDrag] = useState<{ x: number; y: number } | null>(null);
+  const [labelDelta, setLabelDelta] = useState({ x: 0, y: 0 });
+  const dragOrigin = useRef<{ x: number; y: number } | null>(null);
 
-  const labelX = (labelDrag?.x ?? point.x) + labelOffset.x;
-  const labelY = (labelDrag?.y ?? point.y) + labelOffset.y;
+  const labelX = point.x + labelOffset.x + labelDelta.x;
+  const labelY = point.y + labelOffset.y + labelDelta.y;
 
-  const pickXY = useCallback(
+  const pickRawXY = useCallback(
     (clientX: number, clientY: number) => {
       const rect = gl.domElement.getBoundingClientRect();
       const ndc = new THREE.Vector2(
@@ -56,27 +57,46 @@ function CalloutDragHandle({
       );
       raycaster.setFromCamera(ndc, camera);
       if (!raycaster.ray.intersectPlane(dragPlane, hit.current)) return null;
-      const raw = { x: hit.current.x, y: hit.current.y };
-      return onSnap ? onSnap(raw.x, raw.y) : raw;
+      return { x: hit.current.x, y: hit.current.y };
     },
-    [camera, dragPlane, gl.domElement, onSnap, raycaster]
+    [camera, dragPlane, gl.domElement, raycaster]
   );
 
-  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    e.stopPropagation();
-    e.preventDefault();
-    setDragging(true);
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-  }, []);
+  const pickCommitXY = useCallback(
+    (clientX: number, clientY: number) => {
+      const raw = pickRawXY(clientX, clientY);
+      if (!raw) return null;
+      return onSnap ? onSnap(raw.x, raw.y) : raw;
+    },
+    [onSnap, pickRawXY]
+  );
+
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const origin = pickRawXY(e.clientX, e.clientY);
+      if (!origin) return;
+      dragOrigin.current = origin;
+      setLabelDelta({ x: 0, y: 0 });
+      setDragging(true);
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    },
+    [pickRawXY]
+  );
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
-      if (!dragging) return;
+      if (!dragging || !dragOrigin.current) return;
       e.stopPropagation();
-      const xy = pickXY(e.clientX, e.clientY);
-      if (xy) setLabelDrag(xy);
+      const xy = pickRawXY(e.clientX, e.clientY);
+      if (!xy) return;
+      setLabelDelta({
+        x: xy.x - dragOrigin.current.x,
+        y: xy.y - dragOrigin.current.y,
+      });
     },
-    [dragging, pickXY]
+    [dragging, pickRawXY]
   );
 
   const handlePointerUp = useCallback(
@@ -84,10 +104,15 @@ function CalloutDragHandle({
       e.stopPropagation();
       setDragging(false);
       (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-      if (labelDrag) onCommit(labelDrag.x, labelDrag.y);
-      setLabelDrag(null);
+      const moved = Math.hypot(labelDelta.x, labelDelta.y) > 0.35;
+      if (moved) {
+        const xy = pickCommitXY(e.clientX, e.clientY);
+        if (xy) onCommit(xy.x, xy.y);
+      }
+      dragOrigin.current = null;
+      setLabelDelta({ x: 0, y: 0 });
     },
-    [labelDrag, onCommit]
+    [labelDelta.x, labelDelta.y, onCommit, pickCommitXY]
   );
 
   return (

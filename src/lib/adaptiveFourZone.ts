@@ -6,6 +6,7 @@ import type { LoopPoint, ToolpathPoint } from '../types/operations';
 import {
   buildArcLengthGuide,
   buildOpenArcLengthGuide,
+  buildLeadInSplineArcGuide,
   sampleGuideAtS,
   sampleOpenGuideAtS,
   type ArcLengthGuide,
@@ -75,13 +76,32 @@ export interface FourZoneParams {
     forward: boolean;
     loopLength: number;
   };
-  /** Arc length of spline lead-in before slot loop (inverts cut/lift on open tangent). */
+  /** Arc length of spline lead-in before slot loop. */
   splineLeadInLen?: number;
+  /** Invert cut/lift phase on interior slot-loop trochoids. */
+  invertLoopCutPhase?: boolean;
+  /** Invert cut/lift phase on climb-milling spline lead-in trochoids. */
+  invertLeadInCutPhase?: boolean;
 }
 
 const CUT_PHASE_START = 0.5;
 const RETURN_LIFT_START = 0.08;
 const RETURN_LIFT_END = 0.38;
+
+function resolveTrochoidPhase(
+  phase: number,
+  sAlong: number,
+  params: FourZoneParams
+): number {
+  const splineLen = params.splineLeadInLen;
+  const onSpline =
+    splineLen !== undefined && sAlong < splineLen - 1e-5;
+  const onLoop = splineLen === undefined || !onSpline;
+  const invert =
+    (params.invertLeadInCutPhase && onSpline) ||
+    (params.invertLoopCutPhase && onLoop);
+  return invert ? 1 - phase : phase;
+}
 
 function normalizeFrame(frame: ReturnType<typeof sampleGuideAtS>) {
   let tx = frame.tx;
@@ -504,7 +524,7 @@ function generateTrochoidAlongGuide(
         const skipDup =
           (cycle > 0 && i === 0) ||
           (cycle === 0 && i === 0 && params.omitFirstOrbitSample === true);
-        emitOrbit(sAlong, phase, skipDup);
+        emitOrbit(sAlong, resolveTrochoidPhase(phase, sAlong, params), skipDup);
       }
 
       arcProgress = segEnd;
@@ -540,10 +560,11 @@ function generateTrochoidAlongGuide(
     for (let i = 0; i <= steps; i++) {
       const phase = i / steps;
       const sAlong = arcProgress + phase * segLen;
-      const onSplineLeadIn =
-        params.splineLeadInLen !== undefined && sAlong < params.splineLeadInLen - 1e-5;
-      const effectivePhase = onSplineLeadIn ? 1 - phase : phase;
-      emitOrbit(sAlong, effectivePhase, cycle > 0 && i === 0);
+      emitOrbit(
+        sAlong,
+        resolveTrochoidPhase(phase, sAlong, params),
+        cycle > 0 && i === 0
+      );
     }
 
     arcProgress = segEnd;
@@ -621,7 +642,7 @@ export function generateContinuousEntryTrochoidPath(
   trochoidStartS: number,
   guideTraverseSign: number,
   params: FourZoneParams,
-  outwardCCW: boolean,
+  _outwardCCW: boolean,
   loopSpurRanges: CornerSpurRange[] = []
 ): ToolpathPoint[] {
   if (trochArcGuide.totalLength <= 0) return [];
@@ -630,16 +651,16 @@ export function generateContinuousEntryTrochoidPath(
     params.sampleSpacing ??
     Math.min(params.forwardIncrement / 4, params.slotClearance / 4, 0.5);
 
+  const joinFrame = sampleGuideAtS(trochArcGuide, trochoidStartS);
   const splineArcGuide =
     splineGuide.length >= 2
-      ? buildOpenArcLengthGuide(splineGuide, sampleSpacing, outwardCCW)
+      ? buildLeadInSplineArcGuide(splineGuide, joinFrame, sampleSpacing)
       : null;
   const splineLen = splineArcGuide?.totalLength ?? 0;
   const totalLength = splineLen + trochArcGuide.totalLength;
   if (totalLength <= 0) return [];
 
   const forward = guideTraverseSign >= 0;
-  const blendLen = Math.min(Math.max(sampleSpacing * 3, 0.75), splineLen * 0.35, 3);
   const sampleAtGlobalS = (s: number) => {
     const loopDelta = Math.max(0, s - splineLen);
     const loopS = forward ? trochoidStartS + loopDelta : trochoidStartS - loopDelta;
@@ -647,32 +668,10 @@ export function generateContinuousEntryTrochoidPath(
     if (!splineArcGuide || splineLen <= 0) {
       return sampleGuideAtS(trochArcGuide, loopS);
     }
-    if (s <= splineLen - blendLen) {
+    if (s <= splineLen - 1e-6) {
       return sampleOpenGuideAtS(splineArcGuide, Math.max(0, s));
     }
-
-    const loopFrame = sampleGuideAtS(trochArcGuide, loopS);
-    if (s >= splineLen + blendLen) {
-      return loopFrame;
-    }
-
-    const splineFrame = sampleOpenGuideAtS(splineArcGuide, Math.min(Math.max(s, 0), splineLen));
-    const w =
-      s <= splineLen
-        ? (s - (splineLen - blendLen)) / (blendLen * 2)
-        : 0.5 + (s - splineLen) / (blendLen * 2);
-    const t = Math.max(0, Math.min(1, w));
-    const smooth = t * t * (3 - 2 * t);
-    return {
-      x: splineFrame.x + (loopFrame.x - splineFrame.x) * smooth,
-      y: splineFrame.y + (loopFrame.y - splineFrame.y) * smooth,
-      z: splineFrame.z + (loopFrame.z - splineFrame.z) * smooth,
-      tx: splineFrame.tx + (loopFrame.tx - splineFrame.tx) * smooth,
-      ty: splineFrame.ty + (loopFrame.ty - splineFrame.ty) * smooth,
-      nx: splineFrame.nx + (loopFrame.nx - splineFrame.nx) * smooth,
-      ny: splineFrame.ny + (loopFrame.ny - splineFrame.ny) * smooth,
-      s,
-    };
+    return sampleGuideAtS(trochArcGuide, loopS);
   };
 
   // Always emit spline (tool start → slot join) then the loop so bore lead-in
