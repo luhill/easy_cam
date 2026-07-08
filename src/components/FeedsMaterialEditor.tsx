@@ -31,10 +31,8 @@ const COLUMNS: {
   { key: 'stepoverPercentage', label: 'Stepover', unit: '%', step: 1, min: 1, max: 100, type: 'number' },
   { key: 'rampAngle', label: 'Ramp angle', unit: '°', step: 0.1, min: 0.1, type: 'number' },
   { key: 'plungeRatio', label: 'Plunge ratio', unit: '× cut', step: 0.05, min: 0.05, max: 1, type: 'number' },
-  { key: 'adaptiveDocMinRatio', label: 'Adaptive DOC min', unit: '× Ø', step: 0.05, type: 'number' },
-  { key: 'adaptiveDocMaxRatio', label: 'Adaptive DOC max', unit: '× Ø', step: 0.05, type: 'number' },
-  { key: 'pocketDocMinRatio', label: 'Pocket DOC min', unit: '× Ø', step: 0.05, type: 'number' },
-  { key: 'pocketDocMaxRatio', label: 'Pocket DOC max', unit: '× Ø', step: 0.05, type: 'number' },
+  { key: 'adaptiveDocMaxRatio', label: 'Adaptive max DOC', unit: '× Ø', step: 0.05, type: 'number' },
+  { key: 'pocketDocMaxRatio', label: 'Pocket max DOC', unit: '× Ø', step: 0.05, type: 'number' },
   {
     key: 'finishAllowancePercent',
     label: 'Finish allowance',

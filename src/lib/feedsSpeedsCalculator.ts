@@ -66,9 +66,7 @@ export const MATERIAL_DEFAULTS: Record<MaterialId, MaterialDefaults> = {
 
 export interface MaterialProfile extends MaterialDefaults {
   id: string;
-  adaptiveDocMinRatio: number;
   adaptiveDocMaxRatio: number;
-  pocketDocMinRatio: number;
   pocketDocMaxRatio: number;
   finishAllowancePercent: number;
   recommendedMilling: RecommendedMilling;
@@ -79,9 +77,7 @@ const MATERIAL_DOC_AND_MILLING: Record<
   MaterialId,
   Pick<
     MaterialProfile,
-    | 'adaptiveDocMinRatio'
     | 'adaptiveDocMaxRatio'
-    | 'pocketDocMinRatio'
     | 'pocketDocMaxRatio'
     | 'finishAllowancePercent'
     | 'recommendedMilling'
@@ -89,54 +85,42 @@ const MATERIAL_DOC_AND_MILLING: Record<
   >
 > = {
   'mild-steel': {
-    adaptiveDocMinRatio: 0.5,
     adaptiveDocMaxRatio: 1.0,
-    pocketDocMinRatio: 0.25,
     pocketDocMaxRatio: 0.5,
     finishAllowancePercent: 3.7,
     recommendedMilling: 'climb',
     millingNote: 'Keeps constant engagement in adaptive/trochoidal paths.',
   },
   'solid-aluminium': {
-    adaptiveDocMinRatio: 0.75,
     adaptiveDocMaxRatio: 1.5,
-    pocketDocMinRatio: 0.4,
     pocketDocMaxRatio: 0.8,
     finishAllowancePercent: 6.2,
     recommendedMilling: 'climb',
     millingNote: 'Improves chip evacuation and reduces rubbing/work hardening.',
   },
   'aluminium-composite': {
-    adaptiveDocMinRatio: 0.4,
     adaptiveDocMaxRatio: 0.9,
-    pocketDocMinRatio: 0.25,
     pocketDocMaxRatio: 0.55,
     finishAllowancePercent: 10.0,
     recommendedMilling: 'climb',
     millingNote: 'Cleaner skin finish; use sharp tooling and support sheet well.',
   },
   hardwood: {
-    adaptiveDocMinRatio: 1.0,
     adaptiveDocMaxRatio: 2.0,
-    pocketDocMinRatio: 0.5,
     pocketDocMaxRatio: 1.0,
     finishAllowancePercent: 10.0,
     recommendedMilling: 'climb',
     millingNote: 'Standard CNC router practice for most contour and adaptive cuts.',
   },
   'softwood-plywood': {
-    adaptiveDocMinRatio: 1.5,
     adaptiveDocMaxRatio: 2.5,
-    pocketDocMinRatio: 0.75,
     pocketDocMaxRatio: 1.5,
     finishAllowancePercent: 12.5,
     recommendedMilling: 'climb',
     millingNote: 'Try conventional on thin plywood if climb lifts veneer at exit.',
   },
   'plastics-acrylic': {
-    adaptiveDocMinRatio: 0.75,
     adaptiveDocMaxRatio: 1.5,
-    pocketDocMinRatio: 0.4,
     pocketDocMaxRatio: 0.8,
     finishAllowancePercent: 12.5,
     recommendedMilling: 'climb',
@@ -251,8 +235,8 @@ export function calculateFeedsSpeeds(
     adjustedFeedMmMin,
     stepoverRangeLabel: `${profile.stepoverPercentage}% of tool Ø`,
     stepoverMm,
-    adaptiveDocLabel: `${(profile.adaptiveDocMinRatio * toolD).toFixed(2)}–${(profile.adaptiveDocMaxRatio * toolD).toFixed(2)} mm`,
-    pocketDocLabel: `${(profile.pocketDocMinRatio * toolD).toFixed(2)}–${(profile.pocketDocMaxRatio * toolD).toFixed(2)} mm`,
+    adaptiveDocLabel: `${(profile.adaptiveDocMaxRatio * toolD).toFixed(2)} mm`,
+    pocketDocLabel: `${(profile.pocketDocMaxRatio * toolD).toFixed(2)} mm`,
     helixRampLabel: `${profile.rampAngle.toFixed(1)}°`,
     rampAngleDeg: profile.rampAngle,
     plungeFeedLabel: `${Math.round(plungeFeedMmMin)} mm/min (${Math.round(profile.plungeRatio * 100)}% of cut feed)`,
@@ -299,9 +283,9 @@ export function operationSettingsFromFeedsCalculator(
   };
 
   if (type === 'pocket') {
-    partial.stepDown = profile.pocketDocMinRatio * toolD;
+    partial.stepDown = profile.pocketDocMaxRatio * toolD;
   } else if (type !== 'custom-gcode') {
-    partial.stepDown = profile.adaptiveDocMinRatio * toolD;
+    partial.stepDown = profile.adaptiveDocMaxRatio * toolD;
   }
 
   if (type === 'outline' || type === 'adaptive-outline') {
