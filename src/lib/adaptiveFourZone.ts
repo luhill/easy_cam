@@ -82,6 +82,8 @@ export interface FourZoneParams {
 const CUT_PHASE_START = 0.5;
 const RETURN_LIFT_START = 0.08;
 const RETURN_LIFT_END = 0.38;
+/** Rotate micro-loop so cut arc sits ahead of travel (climb CCW / conventional CW). */
+const CUT_PHASE_ROTATION = (95 * Math.PI) / 180;
 
 function normalizeFrame(frame: ReturnType<typeof sampleGuideAtS>) {
   let tx = frame.tx;
@@ -144,12 +146,15 @@ function orbitZProfile(
 
 /** Trochoid orbit angle: cut (phase ≥ 0.5) sweeps the front (+tangent) semicircle. */
 export function trochoidOrbitAngleAtPhase(phase: number, rotSign: number): number {
+  let theta: number;
   if (phase >= CUT_PHASE_START) {
     const u = (phase - CUT_PHASE_START) / (1 - CUT_PHASE_START);
-    return rotSign * (Math.PI * (1 - u));
+    theta = rotSign * (Math.PI * (1 - u));
+  } else {
+    const u = phase / CUT_PHASE_START;
+    theta = -rotSign * (Math.PI * u);
   }
-  const u = phase / CUT_PHASE_START;
-  return -rotSign * (Math.PI * u);
+  return theta + rotSign * CUT_PHASE_ROTATION;
 }
 
 export type AdaptiveOutlineSide = 'exterior' | 'interior';
