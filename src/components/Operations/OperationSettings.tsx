@@ -151,7 +151,7 @@ function fieldHint(operation: Operation, key: NumericSettingKey): string | undef
       if (key === 'depthOffset') {
         return 'Depth offset from the hole floor (+ stops short of the floor). Hole depth comes from the selected feature when available.';
       }
-      return 'Maximum peck depth per plunge before chip clearing.';
+      return 'Maximum depth per peck before retracting to clear chips. Defaults to ~1× tool diameter.';
     }
   }
   if (key === 'chipClearHeight') {

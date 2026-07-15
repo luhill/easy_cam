@@ -230,6 +230,14 @@ export function defaultSettingsForOperation(type: OperationType): OperationDefau
   if (type === 'helix') {
     return { ...DEFAULT_SETTINGS, ...HELIX_DEFAULT_OVERRIDES };
   }
+  if (type === 'drill') {
+    return {
+      ...DEFAULT_SETTINGS,
+      // Conservative peck: 1× tool diameter (DEFAULT tool is 4 mm).
+      stepDown: DEFAULT_SETTINGS.toolDiameter,
+      chipClearHeight: 2,
+    };
+  }
   if (type === 'adaptive-outline') {
     return {
       ...DEFAULT_SETTINGS,

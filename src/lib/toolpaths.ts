@@ -80,6 +80,7 @@ import {
   finalCutWorldZ,
   finalCutWorldZForExtent,
   outlineCutExtentFromLoopZ,
+  peckLayersWorldZForExtent,
   stockTopWorldZ,
   type CutZContext,
   type OutlineCutExtent,
@@ -1703,33 +1704,42 @@ function generateDrillPathForHole(
   holeBottomZ?: number
 ): ToolpathPoint[] {
   const stockTop = stockTopWorldZ(ctx);
+  const stockBottom = ctx.worldBottomZ;
   const topZ =
     holeTopZ !== undefined && Number.isFinite(holeTopZ) ? holeTopZ : stockTop;
-  const cutExtent =
-    holeBottomZ !== undefined && Number.isFinite(holeBottomZ)
-      ? outlineCutExtentFromLoopZ(topZ, holeBottomZ)
-      : {
-          ...defaultOutlineCutExtent(ctx),
-          cutTopZ: topZ,
-          cutHeight: Math.max(topZ - defaultOutlineCutExtent(ctx).cutBottomZ, 0),
-        };
+  // Prefer measured hole floor; never drill below stock bottom.
+  let bottomZ =
+    holeBottomZ !== undefined && Number.isFinite(holeBottomZ) ? holeBottomZ : stockBottom;
+  if (bottomZ > topZ - 1e-4) {
+    bottomZ = stockBottom;
+  }
+  bottomZ = Math.max(bottomZ, stockBottom);
 
-  const layers = cutLayersWorldZForExtent(cutExtent, settings.depthOffset, settings.stepDown);
+  const cutExtent = outlineCutExtentFromLoopZ(topZ, bottomZ);
+  // True peck increments (≤ peck depth each), not equalized milling layers.
+  const layers = peckLayersWorldZForExtent(cutExtent, settings.depthOffset, settings.stepDown);
   const plungeFeed = Math.max(1, settings.plungeRate);
   const chipClearH = Math.max(0, settings.chipClearHeight ?? 2);
   const chipClearZ = topZ + chipClearH;
   const fullEvery = Math.max(0, Math.round(settings.peckFullRetractEvery ?? 0));
   const points: ToolpathPoint[] = [];
 
-  // Rapid to hole XY at safe Z, then plunge-feed approach to chip-clear / stock top.
+  if (layers.length === 0) return points;
+
+  // Rapid to hole XY at safe Z, then plunge-feed approach to chip-clear / hole top.
   points.push({ x: cx, y: cy, z: safeZ, rapid: true });
   const approachZ = Math.min(safeZ, Math.max(chipClearZ, topZ));
   if (approachZ < safeZ - 1e-4) {
     points.push({ x: cx, y: cy, z: approachZ, feedRate: plungeFeed });
   }
+  // Feed to hole opening before the first peck so the first cut starts at the surface.
+  if (Math.abs(approachZ - topZ) > 1e-4) {
+    points.push({ x: cx, y: cy, z: topZ, feedRate: plungeFeed });
+  }
 
   for (let i = 0; i < layers.length; i++) {
     const layerZ = layers[i];
+    // Each peck: plunge at most one peck-depth increment from the previous plane.
     points.push({ x: cx, y: cy, z: layerZ, feedRate: plungeFeed });
 
     const isLast = i === layers.length - 1;
@@ -1737,9 +1747,8 @@ function generateDrillPathForHole(
     if (isLast || forceFull || chipClearH <= 1e-6) {
       points.push({ x: cx, y: cy, z: safeZ, rapid: true });
     } else {
-      const retractZ = Math.min(safeZ, Math.max(chipClearZ, layerZ + 0.1));
+      const retractZ = Math.min(safeZ, Math.max(chipClearZ, topZ));
       points.push({ x: cx, y: cy, z: retractZ, rapid: true });
-      // Next peck approaches from chip-clear height at plunge feed (not rapid).
     }
   }
 

@@ -293,6 +293,9 @@ export function operationSettingsFromFeedsCalculator(
   if (type === 'pocket') {
     partial.stepDown = profile.pocketDocMaxRatio * toolD;
     partial.adaptiveMode = false;
+  } else if (type === 'drill') {
+    // Peck depth ≈ 1× tool Ø — not adaptive milling DOC (that over-plunges).
+    partial.stepDown = toolD;
   } else if (type !== 'custom-gcode') {
     partial.stepDown = profile.adaptiveDocMaxRatio * toolD;
   }

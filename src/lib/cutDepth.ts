@@ -169,6 +169,34 @@ export function cutLayersWorldZForExtent(
   return layers;
 }
 
+/**
+ * Classic peck depths (world Z): each peck advances by at most `peckDepth` from the
+ * previous cut plane, starting at `cutTopZ` down to `finalZ = cutBottomZ + depthOffset`.
+ * Unlike milling layers, pecks are not equalized — the last peck may be shorter.
+ */
+export function peckLayersWorldZForExtent(
+  extent: OutlineCutExtent,
+  depthOffset: number,
+  peckDepth: number
+): number[] {
+  const finalZ = extent.cutBottomZ + depthOffset;
+  const totalDepth = extent.cutTopZ - finalZ;
+  if (totalDepth <= 1e-6) return [];
+
+  const step = safeStepDown(peckDepth);
+  const layers: number[] = [];
+  let depth = 0;
+  while (depth + 1e-6 < totalDepth) {
+    depth = Math.min(depth + step, totalDepth);
+    layers.push(extent.cutTopZ - depth);
+    if (layers.length >= MAX_Z_LAYERS) break;
+  }
+  if (layers.length > 0) {
+    layers[layers.length - 1] = finalZ;
+  }
+  return layers;
+}
+
 export function finalCutWorldZForExtent(extent: OutlineCutExtent, depthOffset: number): number {
   return extent.cutBottomZ + depthOffset;
 }

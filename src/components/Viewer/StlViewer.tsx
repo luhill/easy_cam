@@ -559,12 +559,17 @@ function StlMesh({
         }
         if (!center || !radius) return;
 
+        const loopTopZ =
+          loop && loop.length > 0
+            ? loop.reduce((s, p) => s + p.z, 0) / loop.length
+            : undefined;
+
         const candidate = {
           center,
           radius,
           loop,
           holeId: hole?.id,
-          topZ: hole?.topZ,
+          topZ: hole?.topZ ?? loopTopZ,
           bottomZ: hole?.bottomZ,
         };
         const existingHoles = getSelectedHoles(existing);
