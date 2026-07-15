@@ -44,8 +44,16 @@ export interface OperationDefaults {
   finishingPass: boolean;
   /** Finishing stock left on walls as % of tool diameter */
   finishingStockPercent: number;
+  /** Number of finish passes (1 = single final; >1 steps stock down with optional chip clear) */
+  finishPassCount: number;
+  /** Retract to safe height between the last spring pass and the final wall pass */
+  chipClearBeforeFinal: boolean;
   /** External cuts: climb (clockwise) vs conventional (counter-clockwise) */
   climbMilling: boolean;
+  /** Drill: retract height above hole top between pecks (mm); 0 = retract to safe Z each peck */
+  chipClearHeight: number;
+  /** Drill: full safe-Z retract every N pecks (0 = never; always use chip-clear height) */
+  peckFullRetractEvery: number;
 }
 
 export interface LoopPoint {
@@ -59,6 +67,10 @@ export interface HoleSelection {
   radius: number;
   loop?: LoopPoint[];
   holeId?: number;
+  /** Opening Z (world) — used for drill chip-clear retract */
+  topZ?: number;
+  /** Hole floor Z (world) — used for drill depth; falls back to stock bottom */
+  bottomZ?: number;
 }
 
 /** Closed vertical wall loop for outline — top rim defines offset path and Z extent. */
@@ -155,13 +167,13 @@ export const OPERATION_TEMPLATES: OperationTemplate[] = [
   {
     type: 'pocket',
     label: 'Pocket',
-    description: '2D pocket clearing',
+    description: '2D pocket clearing with optional adaptive concentric passes',
     icon: '▣',
   },
   {
     type: 'contour',
     label: 'Contour',
-    description: '3D contour following surface',
+    description: 'Waterline contour along selected side walls',
     icon: '〜',
   },
   {
@@ -193,7 +205,11 @@ export const DEFAULT_SETTINGS: OperationDefaults = {
   helixFeedRate: 350,
   finishingPass: false,
   finishingStockPercent: 7,
+  finishPassCount: 1,
+  chipClearBeforeFinal: true,
   climbMilling: true,
+  chipClearHeight: 2,
+  peckFullRetractEvery: 0,
 };
 
 const HELIX_DEFAULT_OVERRIDES: Partial<OperationDefaults> = {

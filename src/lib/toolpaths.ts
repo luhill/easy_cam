@@ -7,6 +7,7 @@ import type { PartBounds } from './geometryProcessing';
 import {
   closestPointOnLoop2D,
   offsetLoop2DMinkowski,
+  pointInPolygon2D,
   signedLoopArea2D,
 } from './geometryProcessing';
 import { OPERATION_COLORS, getSelectedEdgeLoops, getSelectedHoles, normalizeOperation } from '../types/operations';
@@ -86,7 +87,6 @@ import {
   validateHelixHole,
 } from './helixValidation';
 import {
-  contourSteps,
   helixSegmentsPerRev,
   minkowskiSegmentLen,
   pathSampleSpacing,
@@ -97,7 +97,11 @@ import {
   DEFAULT_TOOLPATH_RESOLUTION,
   DEFAULT_TRAVEL_FEED_RATE,
 } from './toolpathConfig';
-
+import {
+  adjustedCuttingFeedMmMin,
+  stepoverMmFromPercent,
+} from './feedsSpeedsCalculator';
+import { offsetClosedLoop2D } from './polygonOffset';
 export const MAX_TOOLPATH_POINTS = 500_000;
 
 export interface ToolpathGenerationResult {
@@ -123,6 +127,34 @@ function appendPointsChunked(
 
 function toolRadius(settings: Operation['settings']): number {
   return Math.max(settings.toolDiameter, 0.1) / 2;
+}
+
+/** Full-engagement contour feed (standard outline loops). */
+function baseCutFeed(settings: Operation['settings']): number {
+  return Math.max(1, settings.feedRate);
+}
+
+/** Chip-thinned feed for adaptive trochoidal clearing. */
+function adaptiveCutFeed(settings: Operation['settings']): number {
+  const stepoverMm = stepoverMmFromPercent(settings.toolDiameter, settings.stepover);
+  return Math.round(
+    adjustedCuttingFeedMmMin(baseCutFeed(settings), settings.toolDiameter, stepoverMm)
+  );
+}
+
+/** Chip-thinned feed for finish / light radial engagement. */
+function finishCutFeed(settings: Operation['settings']): number {
+  const pct = Math.max(settings.finishingStockPercent ?? 7, 0.5);
+  const engagementMm = Math.max(settings.toolDiameter * (pct / 100), 0.05);
+  return Math.round(
+    adjustedCuttingFeedMmMin(baseCutFeed(settings), settings.toolDiameter, engagementMm)
+  );
+}
+
+/** Reduced feed used while easing into the finish contour. */
+function finishEaseFeed(settings: Operation['settings']): number {
+  const finish = finishCutFeed(settings);
+  return Math.max(1, Math.min(settings.plungeRate, Math.round(finish * 0.4)));
 }
 
 function getBounds(geometry: Operation['geometry']): {
@@ -754,7 +786,7 @@ function trochoidParams(
     minCenterDist: slot.minCenterDist,
     rotSign: resolveOrbitRotSign(slotCenterGuide, settings.climbMilling),
     guideSign,
-    feedRate: cutFeedRate ?? settings.feedRate,
+    feedRate: cutFeedRate ?? adaptiveCutFeed(settings),
     travelFeedRate: globals.travelFeedRate,
     sampleSpacing: trochoidSampleSpacing(
       slot.forwardIncrement,
@@ -878,85 +910,158 @@ function appendConnectedFinishingPass(
 ): boolean {
   const sampleSpacing = pathSampleSpacing(globals.resolution);
   const stockAllowance = finishingStockAllowance(settings);
-  const feedRate = settings.feedRate;
+  const passCount = Math.max(1, Math.round(settings.finishPassCount ?? 1));
+  const cutFeed = finishCutFeed(settings);
+  const easeFeed = finishEaseFeed(settings);
+  const easeLength = Math.max(settings.toolDiameter * 1.25, 2);
+  const chipClear = settings.chipClearBeforeFinal !== false;
 
-  const finishPts =
-    finishPath ??
-    contourTraverse(partLoop, settings, 0, globals.resolution, offsetContext).map((p) => ({
-      x: p.x,
-      y: p.y,
-      z: finishZ,
-      feedRate,
-    }));
+  for (let pass = 0; pass < passCount; pass++) {
+    const isFinal = pass === passCount - 1;
+    const extraStock =
+      passCount === 1 ? 0 : stockAllowance * ((passCount - 1 - pass) / passCount);
 
-  if (finishPts.length === 0) return true;
-
-  const last = lastPathPoint(points);
-  if (last) {
-    const traverse = finishPts.map((p) => ({ x: p.x, y: p.y, z: finishZ }));
-    const finishEntry = finishContourPointFromToolPosition(
-      partLoop,
-      settings,
-      last
-    );
-
-    if (Math.hypot(last.x - finishEntry.x, last.y - finishEntry.y) > 0.05) {
-      if (
-        !appendPoints(points, [
-          { x: finishEntry.x, y: finishEntry.y, z: finishZ, feedRate },
-        ])
-      ) {
-        return false;
+    if (chipClear && isFinal && passCount >= 1) {
+      appendStraightRetractToSafe(points, safeZ);
+      const last = lastPathPoint(points);
+      if (last && Math.abs(last.z - finishZ) > 1e-4) {
+        points.push({ x: last.x, y: last.y, z: finishZ, feedRate: settings.plungeRate });
       }
     }
 
-    const loopAnchor = {
-      x: finishEntry.x,
-      y: finishEntry.y,
-    };
-    const startS = stationOnContour(traverse, finishEntry, sampleSpacing);
-    const finishTraverseLength = buildArcLengthGuide(traverse, Math.max(sampleSpacing, 0.25))
-      .totalLength;
-    if (
-      !appendContourLoopFromArcS(
-        points,
-        traverse,
-        finishZ,
-        feedRate,
-        startS,
-        sampleSpacing,
-        true,
-        lastPathPoint(points) ?? undefined,
-        finishTraverseLength,
-        undefined,
-        loopAnchor
-      )
-    ) {
+    const finishPts =
+      isFinal && finishPath && finishPath.length > 0
+        ? finishPath.map((p) => ({ ...p, z: finishZ, feedRate: cutFeed }))
+        : contourTraverse(partLoop, settings, extraStock, globals.resolution, offsetContext).map(
+            (p) => ({
+              x: p.x,
+              y: p.y,
+              z: finishZ,
+              feedRate: cutFeed,
+            })
+          );
+
+    if (finishPts.length === 0) continue;
+
+    const last = lastPathPoint(points);
+    if (last) {
+      const traverse = finishPts.map((p) => ({ x: p.x, y: p.y, z: finishZ }));
+      const finishEntry = finishContourPointFromToolPosition(partLoop, settings, last);
+
+      // Ease into the wall: approach from outside stock, then radial feed at ease rate.
+      const onPart = closestPointOnLoop2D(finishEntry.x, finishEntry.y, partLoop);
+      const easeOut = Math.max(stockAllowance * 0.65, settings.toolDiameter * 0.15, 0.3);
+      const easeStart = {
+        x: finishEntry.x + onPart.outX * easeOut,
+        y: finishEntry.y + onPart.outY * easeOut,
+      };
+
+      if (Math.hypot(last.x - easeStart.x, last.y - easeStart.y) > 0.05) {
+        if (
+          !appendPoints(points, [
+            { x: easeStart.x, y: easeStart.y, z: finishZ, feedRate: easeFeed },
+          ])
+        ) {
+          return false;
+        }
+      }
+      if (Math.hypot(easeStart.x - finishEntry.x, easeStart.y - finishEntry.y) > 0.05) {
+        if (
+          !appendPoints(points, [
+            { x: finishEntry.x, y: finishEntry.y, z: finishZ, feedRate: easeFeed },
+          ])
+        ) {
+          return false;
+        }
+      }
+
+      const loopAnchor = { x: finishEntry.x, y: finishEntry.y };
+      const startS = stationOnContour(traverse, finishEntry, sampleSpacing);
+      const finishTraverseLength = buildArcLengthGuide(traverse, Math.max(sampleSpacing, 0.25))
+        .totalLength;
+
+      // First easeLength mm at ease feed, then full finish feed for the remainder.
+      const easeArc = Math.min(easeLength, finishTraverseLength * 0.35);
+      if (easeArc > sampleSpacing) {
+        if (
+          !appendContourLoopFromArcS(
+            points,
+            traverse,
+            finishZ,
+            easeFeed,
+            startS,
+            sampleSpacing,
+            true,
+            lastPathPoint(points) ?? undefined,
+            easeArc,
+            undefined,
+            loopAnchor
+          )
+        ) {
+          return false;
+        }
+        const afterEase = lastPathPoint(points);
+        const resumeS = afterEase
+          ? stationOnContour(traverse, afterEase, sampleSpacing)
+          : startS + easeArc;
+        if (
+          !appendContourLoopFromArcS(
+            points,
+            traverse,
+            finishZ,
+            cutFeed,
+            resumeS,
+            sampleSpacing,
+            true,
+            lastPathPoint(points) ?? undefined,
+            Math.max(finishTraverseLength - easeArc, sampleSpacing),
+            undefined,
+            loopAnchor
+          )
+        ) {
+          return false;
+        }
+      } else if (
+        !appendContourLoopFromArcS(
+          points,
+          traverse,
+          finishZ,
+          cutFeed,
+          startS,
+          sampleSpacing,
+          true,
+          lastPathPoint(points) ?? undefined,
+          finishTraverseLength,
+          undefined,
+          loopAnchor
+        )
+      ) {
+        return false;
+      }
+    } else if (!appendPoints(points, finishPts)) {
       return false;
     }
-  } else if (!appendPoints(points, finishPts)) {
-    return false;
-  }
 
-  const endAt = lastPathPoint(points);
-  if (endAt) {
-    if (stockAllowance > 1e-4) {
-      const onPart = closestPointOnLoop2D(endAt.x, endAt.y, partLoop);
-      if (
-        !appendPoints(points, [
-          {
-            x: endAt.x + onPart.outX * stockAllowance,
-            y: endAt.y + onPart.outY * stockAllowance,
-            z: finishZ,
-            feedRate,
-          },
-        ])
-      ) {
-        return false;
+    const endAt = lastPathPoint(points);
+    if (endAt && isFinal) {
+      if (stockAllowance > 1e-4) {
+        const onPart = closestPointOnLoop2D(endAt.x, endAt.y, partLoop);
+        if (
+          !appendPoints(points, [
+            {
+              x: endAt.x + onPart.outX * stockAllowance,
+              y: endAt.y + onPart.outY * stockAllowance,
+              z: finishZ,
+              feedRate: cutFeed,
+            },
+          ])
+        ) {
+          return false;
+        }
       }
+      const retractFrom = lastPathPoint(points) ?? endAt;
+      points.push({ x: retractFrom.x, y: retractFrom.y, z: safeZ, rapid: true });
     }
-    const retractFrom = lastPathPoint(points) ?? endAt;
-    points.push({ x: retractFrom.x, y: retractFrom.y, z: safeZ, rapid: true });
   }
 
   return true;
@@ -1379,7 +1484,7 @@ function generateAdaptiveOutlinePath(
   const trochArcGuide = entryLayout.trochArcGuide;
   const slotHelixR = resolveSlotHelixRadius(roughSlot.slotClearance);
   const helixOpts = { stockTopZ: topZ, globals };
-  const cutFeed = settings.feedRate;
+  const cutFeed = adaptiveCutFeed(settings);
   const plungeFeed = settings.plungeRate;
   const travelFeed = globals.travelFeedRate;
   const points: ToolpathPoint[] = [];
@@ -1556,22 +1661,44 @@ function generateDrillPathForHole(
   settings: Operation['settings'],
   ctx: CutZContext,
   safeZ: number,
-  isFirst: boolean
+  holeTopZ?: number,
+  holeBottomZ?: number
 ): ToolpathPoint[] {
-  const topZ = stockTopWorldZ(ctx);
-  const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
+  const stockTop = stockTopWorldZ(ctx);
+  const topZ =
+    holeTopZ !== undefined && Number.isFinite(holeTopZ) ? holeTopZ : stockTop;
+  const extent =
+    holeBottomZ !== undefined && Number.isFinite(holeBottomZ)
+      ? outlineCutExtentFromLoopZ(topZ, holeBottomZ)
+      : defaultOutlineCutExtent(ctx);
+  // When using stock extent, still start pecks from hole opening if known.
+  const cutExtent =
+    holeBottomZ !== undefined && Number.isFinite(holeBottomZ)
+      ? extent
+      : { ...defaultOutlineCutExtent(ctx), cutTopZ: topZ, cutHeight: topZ - defaultOutlineCutExtent(ctx).cutBottomZ };
+
+  const layers = cutLayersWorldZForExtent(cutExtent, settings.depthOffset, settings.stepDown);
+  const plungeFeed = Math.max(1, settings.plungeRate);
+  const chipClearH = Math.max(0, settings.chipClearHeight ?? 2);
+  const chipClearZ = topZ + chipClearH;
+  const fullEvery = Math.max(0, Math.round(settings.peckFullRetractEvery ?? 0));
   const points: ToolpathPoint[] = [];
 
-  if (isFirst) {
-    points.push({ x: cx, y: cy, z: safeZ, rapid: true });
-  } else {
-    points.push({ x: cx, y: cy, z: safeZ, rapid: true });
-  }
-  points.push({ x: cx, y: cy, z: topZ });
+  points.push({ x: cx, y: cy, z: safeZ, rapid: true });
+  points.push({ x: cx, y: cy, z: Math.min(safeZ, Math.max(chipClearZ, topZ)), feedRate: plungeFeed });
 
-  for (const layerZ of layers) {
-    points.push({ x: cx, y: cy, z: layerZ });
-    points.push({ x: cx, y: cy, z: safeZ, rapid: true });
+  for (let i = 0; i < layers.length; i++) {
+    const layerZ = layers[i];
+    points.push({ x: cx, y: cy, z: layerZ, feedRate: plungeFeed });
+
+    const isLast = i === layers.length - 1;
+    const forceFull = fullEvery > 0 && (i + 1) % fullEvery === 0;
+    if (isLast || forceFull || chipClearH <= 1e-6) {
+      points.push({ x: cx, y: cy, z: safeZ, rapid: true });
+    } else {
+      const retractZ = Math.min(safeZ, Math.max(chipClearZ, layerZ + 0.1));
+      points.push({ x: cx, y: cy, z: retractZ, rapid: true });
+    }
   }
 
   return points;
@@ -1589,7 +1716,7 @@ function generateDrillPath(
   const safeZ = safeHeightWorldZ(ctx, globals.safeHeight);
   const points: ToolpathPoint[] = [];
 
-  holes.forEach((hole, index) => {
+  holes.forEach((hole) => {
     appendPoints(
       points,
       generateDrillPathForHole(
@@ -1598,7 +1725,8 @@ function generateDrillPath(
         settings,
         ctx,
         safeZ,
-        index === 0
+        hole.topZ,
+        hole.bottomZ
       )
     );
   });
@@ -1729,6 +1857,124 @@ function generateHelixPath(
   return points;
 }
 
+function largestLoop(loops: LoopPoint[][]): LoopPoint[] | null {
+  let best: LoopPoint[] | null = null;
+  let bestArea = -1;
+  for (const loop of loops) {
+    if (loop.length < 3) continue;
+    const area = Math.abs(signedLoopArea2D(loop));
+    if (area > bestArea) {
+      bestArea = area;
+      best = loop;
+    }
+  }
+  return best;
+}
+
+function loopCentroid2D(loop: LoopPoint[]): { x: number; y: number } {
+  let x = 0;
+  let y = 0;
+  for (const p of loop) {
+    x += p.x;
+    y += p.y;
+  }
+  const n = Math.max(loop.length, 1);
+  return { x: x / n, y: y / n };
+}
+
+function orientLoopCcw(loop: LoopPoint[]): LoopPoint[] {
+  return signedLoopArea2D(loop) >= 0 ? loop.map((p) => ({ ...p })) : [...loop].reverse().map((p) => ({ ...p }));
+}
+
+/** Zigzag hatch lines clipped to a pocket polygon (point-in-polygon sampling). */
+function zigzagFillLoop(
+  boundary: LoopPoint[],
+  stepover: number,
+  z: number,
+  feedRate: number
+): ToolpathPoint[] {
+  if (boundary.length < 3 || stepover <= 1e-4) return [];
+
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const p of boundary) {
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y);
+  }
+
+  const points: ToolpathPoint[] = [];
+  let y = minY;
+  let direction = 1;
+  const sampleDx = Math.max(stepover * 0.25, 0.25);
+
+  while (y <= maxY + 1e-6) {
+    const xs: number[] = [];
+    for (let x = minX; x <= maxX + 1e-6; x += sampleDx) {
+      if (pointInPolygon2D(x, y, boundary)) xs.push(x);
+    }
+    if (xs.length >= 2) {
+      const xStart = direction === 1 ? xs[0] : xs[xs.length - 1];
+      const xEnd = direction === 1 ? xs[xs.length - 1] : xs[0];
+      points.push({ x: xStart, y, z, feedRate });
+      points.push({ x: xEnd, y, z, feedRate });
+      direction *= -1;
+    }
+    y += stepover;
+  }
+
+  return points;
+}
+
+/** Concentric offset loops for adaptive pocket clearing (outside → inside). */
+function concentricPocketLoops(
+  outer: LoopPoint[],
+  toolR: number,
+  stepover: number,
+  radialExtra: number,
+  maxLoops = 80
+): LoopPoint[][] {
+  const loops: LoopPoint[][] = [];
+  // Inset first by tool radius (+ finish stock) so tool stays inside the pocket.
+  let current = offsetClosedLoop2D(orientLoopCcw(outer), -(toolR + radialExtra), {
+    maxSegmentLen: Math.max(toolR * 0.4, 0.5),
+  });
+  if (current.length < 3) return loops;
+
+  for (let i = 0; i < maxLoops; i++) {
+    if (current.length < 3) break;
+    const area = Math.abs(signedLoopArea2D(current));
+    if (area < toolR * toolR * 0.5) break;
+    loops.push(current);
+    const next = offsetClosedLoop2D(current, -stepover, {
+      maxSegmentLen: Math.max(stepover * 0.5, 0.5),
+    });
+    if (next.length < 3) break;
+    if (Math.abs(signedLoopArea2D(next)) >= area * 0.98) break;
+    current = next;
+  }
+  return loops;
+}
+
+function appendClosedLoopCut(
+  points: ToolpathPoint[],
+  loop: LoopPoint[],
+  z: number,
+  feedRate: number,
+  climb: boolean
+): boolean {
+  if (loop.length < 3) return true;
+  const ccw = signedLoopArea2D(loop) >= 0;
+  const traverse = climb === ccw ? [...loop].reverse() : loop;
+  const pts: ToolpathPoint[] = traverse.map((p) => ({ x: p.x, y: p.y, z, feedRate }));
+  const first = pts[0];
+  pts.push({ x: first.x, y: first.y, z, feedRate });
+  return appendPoints(points, pts);
+}
+
 function generatePocketPath(
   op: Operation,
   ctx: CutZContext,
@@ -1739,32 +1985,91 @@ function generatePocketPath(
     return [];
   }
 
-  const { minX, maxX, minY, maxY } = getBounds(geometry);
-  const stepover = settings.toolDiameter * (settings.stepover / 100);
-  const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
-  const cutZ = layers.length > 0 ? layers[layers.length - 1] : finalCutWorldZ(ctx, settings.depthOffset);
-  const safeZ = safeHeightWorldZ(ctx, globals.safeHeight);
-  const points: ToolpathPoint[] = [];
-
-  points.push({ x: minX, y: minY, z: safeZ, rapid: true });
-  points.push({ x: minX, y: minY, z: cutZ });
-
-  let y = minY;
-  let direction = 1;
-  while (y <= maxY) {
-    if (direction === 1) {
-      points.push({ x: maxX, y, z: cutZ });
-    } else {
-      points.push({ x: minX, y, z: cutZ });
+  const loops = geometry?.loops?.filter((l) => l.length >= 3) ?? [];
+  const outer = largestLoop(loops);
+  if (!outer) {
+    // Fallback: AABB zigzag when loops are missing.
+    const { minX, maxX, minY, maxY } = getBounds(geometry);
+    const stepover = settings.toolDiameter * (settings.stepover / 100);
+    const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
+    const safeZ = safeHeightWorldZ(ctx, globals.safeHeight);
+    const cutFeed = baseCutFeed(settings);
+    const points: ToolpathPoint[] = [];
+    points.push({ x: minX, y: minY, z: safeZ, rapid: true });
+    for (const layerZ of layers) {
+      points.push({ x: minX, y: minY, z: layerZ, feedRate: settings.plungeRate });
+      let y = minY;
+      let direction = 1;
+      while (y <= maxY) {
+        points.push({ x: direction === 1 ? maxX : minX, y, z: layerZ, feedRate: cutFeed });
+        y += stepover;
+        if (y <= maxY) {
+          points.push({ x: direction === 1 ? maxX : minX, y, z: layerZ, feedRate: cutFeed });
+        }
+        direction *= -1;
+      }
     }
-    y += stepover;
-    if (y <= maxY) {
-      points.push({ x: direction === 1 ? maxX : minX, y, z: cutZ });
-    }
-    direction *= -1;
+    points.push({ x: minX, y: minY, z: safeZ, rapid: true });
+    return points;
   }
 
-  points.push({ x: minX, y: minY, z: safeZ, rapid: true });
+  const toolR = toolRadius(settings);
+  const stepover = Math.max(settings.toolDiameter * (settings.stepover / 100), 0.1);
+  const stock = finishingStockAllowance(settings);
+  const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
+  const safeZ = safeHeightWorldZ(ctx, globals.safeHeight);
+  const cutFeed = settings.adaptiveMode ? adaptiveCutFeed(settings) : baseCutFeed(settings);
+  const finishFeed = finishCutFeed(settings);
+  const points: ToolpathPoint[] = [];
+  const entry = loopCentroid2D(outer);
+
+  points.push({ x: entry.x, y: entry.y, z: safeZ, rapid: true });
+
+  for (const layerZ of layers) {
+    points.push({ x: entry.x, y: entry.y, z: layerZ, feedRate: settings.plungeRate });
+
+    if (settings.adaptiveMode) {
+      const concentric = concentricPocketLoops(outer, toolR, stepover, stock);
+      for (const loop of concentric) {
+        const start = loop[0];
+        points.push({ x: start.x, y: start.y, z: layerZ, feedRate: cutFeed });
+        if (!appendClosedLoopCut(points, loop, layerZ, cutFeed, settings.climbMilling)) {
+          return points;
+        }
+      }
+    } else {
+      const inset = offsetClosedLoop2D(orientLoopCcw(outer), -(toolR + stock), {
+        maxSegmentLen: Math.max(stepover * 0.5, 0.5),
+      });
+      if (inset.length >= 3) {
+        const hatch = zigzagFillLoop(inset, stepover, layerZ, cutFeed);
+        if (hatch.length > 0) {
+          if (!appendPoints(points, hatch)) return points;
+        }
+      }
+    }
+  }
+
+  if (settings.finishingPass && layers.length > 0) {
+    const finishZ = layers[layers.length - 1];
+    if (settings.chipClearBeforeFinal !== false) {
+      appendStraightRetractToSafe(points, safeZ);
+      points.push({ x: entry.x, y: entry.y, z: finishZ, feedRate: settings.plungeRate });
+    }
+    const wall = offsetClosedLoop2D(orientLoopCcw(outer), -toolR, {
+      maxSegmentLen: Math.max(toolR * 0.35, 0.4),
+    });
+    if (wall.length >= 3) {
+      const start = wall[0];
+      points.push({ x: start.x, y: start.y, z: finishZ, feedRate: finishEaseFeed(settings) });
+      appendClosedLoopCut(points, wall, finishZ, finishFeed, settings.climbMilling);
+    }
+  }
+
+  const last = lastPathPoint(points);
+  if (last) {
+    points.push({ x: last.x, y: last.y, z: safeZ, rapid: true });
+  }
   return points;
 }
 
@@ -1778,24 +2083,59 @@ function generateContourPath(
     return [];
   }
 
-  const { minX, maxX, minY, maxY } = getBounds(geometry);
-  const topZ = stockTopWorldZ(ctx);
-  const finalZ = finalCutWorldZ(ctx, settings.depthOffset);
+  const loops = geometry?.loops?.filter((l) => l.length >= 3) ?? [];
+  const wallLoop = largestLoop(loops);
   const safeZ = safeHeightWorldZ(ctx, globals.safeHeight);
+  const cutFeed = baseCutFeed(settings);
   const points: ToolpathPoint[] = [];
-  const steps = contourSteps(globals.resolution);
 
-  points.push({ x: minX, y: minY, z: safeZ, rapid: true });
-
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps;
-    const x = minX + (maxX - minX) * t;
-    const wave = Math.sin(t * Math.PI * 4) * 2;
-    const currentZ = topZ + (finalZ - topZ) * t + wave;
-    points.push({ x, y: minY + (maxY - minY) * t, z: currentZ });
+  if (!wallLoop) {
+    // Fallback waterline along AABB diagonal (legacy stub replaced with layered lines).
+    const { minX, maxX, minY, maxY } = getBounds(geometry);
+    const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
+    points.push({ x: minX, y: minY, z: safeZ, rapid: true });
+    for (const layerZ of layers) {
+      points.push({ x: minX, y: minY, z: layerZ, feedRate: settings.plungeRate });
+      points.push({ x: maxX, y: maxY, z: layerZ, feedRate: cutFeed });
+    }
+    points.push({ x: maxX, y: maxY, z: safeZ, rapid: true });
+    return points;
   }
 
-  points.push({ x: maxX, y: maxY, z: safeZ, rapid: true });
+  // Project wall boundary to XY and offset by tool radius for waterline contouring.
+  const xyLoop = wallLoop.map((p) => ({ x: p.x, y: p.y, z: p.z }));
+  const toolR = toolRadius(settings) + (settings.radialOffset ?? 0);
+  const area = signedLoopArea2D(xyLoop);
+  // Expand away from material: CCW walls expand outward (+), CW expand with −delta via offsetSign.
+  const delta = area >= 0 ? toolR : -toolR;
+  const toolCenter = offsetClosedLoop2D(xyLoop, delta, {
+    maxSegmentLen: minkowskiSegmentLen(globals.resolution),
+  });
+  if (toolCenter.length < 3) return [];
+
+  const layers = cutLayersWorldZ(ctx, settings.depthOffset, settings.stepDown);
+  const start = toolCenter[0];
+  points.push({ x: start.x, y: start.y, z: safeZ, rapid: true });
+
+  for (let i = 0; i < layers.length; i++) {
+    const layerZ = layers[i];
+    if (i === 0) {
+      points.push({ x: start.x, y: start.y, z: layerZ, feedRate: settings.plungeRate });
+    } else {
+      const last = lastPathPoint(points);
+      if (last) {
+        points.push({ x: last.x, y: last.y, z: layerZ, feedRate: settings.plungeRate });
+      }
+    }
+    if (!appendClosedLoopCut(points, toolCenter, layerZ, cutFeed, settings.climbMilling)) {
+      break;
+    }
+  }
+
+  const end = lastPathPoint(points);
+  if (end) {
+    points.push({ x: end.x, y: end.y, z: safeZ, rapid: true });
+  }
   return points;
 }
 

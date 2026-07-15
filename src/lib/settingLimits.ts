@@ -8,7 +8,11 @@ export interface NumericLimit {
 
 type ClampedSettingKey = Exclude<
   keyof OperationDefaults,
-  'finishingPass' | 'climbMilling' | 'adaptiveMode' | 'outlineEntryType'
+  | 'finishingPass'
+  | 'climbMilling'
+  | 'adaptiveMode'
+  | 'outlineEntryType'
+  | 'chipClearBeforeFinal'
 >;
 
 export const SETTING_LIMITS: Record<ClampedSettingKey, NumericLimit> = {
@@ -29,6 +33,9 @@ export const SETTING_LIMITS: Record<ClampedSettingKey, NumericLimit> = {
   boreTaperAngleDeg: { min: 0, max: 15 },
   helixFeedRate: { min: 1, max: 5000 },
   finishingStockPercent: { min: 0.5, max: 50 },
+  finishPassCount: { min: 1, max: 5 },
+  chipClearHeight: { min: 0, max: 50 },
+  peckFullRetractEvery: { min: 0, max: 20 },
 };
 
 export function clampSettingValue(key: ClampedSettingKey, value: number): number {
@@ -67,6 +74,7 @@ export function clampOperationSettings(
   }
   merged.adaptiveMode = !!merged.adaptiveMode;
   merged.finishingPass = !!merged.finishingPass;
+  merged.chipClearBeforeFinal = merged.chipClearBeforeFinal !== false;
   merged.climbMilling = merged.climbMilling !== false;
   const entryType = merged.outlineEntryType;
   merged.outlineEntryType =

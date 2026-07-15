@@ -59,6 +59,8 @@ export interface HoleFeature {
   wallFaceIndices: number[];
   /** Mean Z of the hole opening (boss/pocket floor). */
   topZ: number;
+  /** Lowest Z of surrounding walls / floor — used for drill depth. */
+  bottomZ?: number;
 }
 
 export interface SelectionRegion {
@@ -746,6 +748,7 @@ export class MeshIndex {
     const clusters = this.findRadialWallClusters(hole.center, hole.topZ);
     if (clusters.length === 0) {
       hole.wallFaceIndices = this.findWallFacesForCylinder(hole.center, hole.radius);
+      this.applyHoleBottomZ(hole);
       return;
     }
 
@@ -754,12 +757,25 @@ export class MeshIndex {
       hole.radius = innerCluster.radius;
       hole.wallFaceIndices = innerCluster.faceIndices;
       hole.loop = generateCircleLoop(hole.center.x, hole.center.y, innerCluster.radius, hole.topZ);
+      this.applyHoleBottomZ(hole);
       return;
     }
 
     hole.wallFaceIndices = innerCluster.faceIndices.length
       ? innerCluster.faceIndices
       : this.findWallFacesForCylinder(hole.center, hole.radius);
+    this.applyHoleBottomZ(hole);
+  }
+
+  private applyHoleBottomZ(hole: HoleFeature): void {
+    if (hole.wallFaceIndices.length > 0) {
+      const { bottomZ } = this.zExtentForFaces(hole.wallFaceIndices);
+      if (Number.isFinite(bottomZ)) {
+        hole.bottomZ = bottomZ;
+        return;
+      }
+    }
+    hole.bottomZ = this.bounds.minZ;
   }
 
   /**

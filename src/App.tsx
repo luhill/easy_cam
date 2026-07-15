@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAppStore } from './store/useAppStore';
 import { useSettingsStore } from './store/useSettingsStore';
 import { StlViewer } from './components/Viewer/StlViewer';
@@ -10,7 +10,9 @@ import './App.css';
 
 export default function App() {
   const [feedsCalculatorOpen, setFeedsCalculatorOpen] = useState(false);
+  const [viewerDragOver, setViewerDragOver] = useState(false);
   const uiTheme = useSettingsStore((s) => s.uiTheme);
+  const setStlFile = useAppStore((s) => s.setStlFile);
 
   useEffect(() => {
     useAppStore.getState().regenerateToolpaths();
@@ -21,6 +23,29 @@ export default function App() {
     const themeColor = uiTheme === 'light' ? '#ffffff' : '#1a1d23';
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', themeColor);
   }, [uiTheme]);
+
+  const onViewerDragOver = useCallback((e: React.DragEvent) => {
+    if (![...e.dataTransfer.types].includes('Files')) return;
+    e.preventDefault();
+    setViewerDragOver(true);
+  }, []);
+
+  const onViewerDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setViewerDragOver(false);
+  }, []);
+
+  const onViewerDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setViewerDragOver(false);
+      const file = e.dataTransfer.files?.[0];
+      if (file && file.name.toLowerCase().endsWith('.stl')) {
+        setStlFile(file);
+      }
+    },
+    [setStlFile]
+  );
 
   return (
     <div className="app">
@@ -42,9 +67,16 @@ export default function App() {
             onToggle={() => setFeedsCalculatorOpen((v) => !v)}
           />
         </div>
-        <section className="viewer-panel">
+        <section
+          className={`viewer-panel${viewerDragOver ? ' viewer-panel-dragover' : ''}`}
+          onDragOver={onViewerDragOver}
+          onDragEnter={onViewerDragOver}
+          onDragLeave={onViewerDragLeave}
+          onDrop={onViewerDrop}
+        >
           <ToolpathStatus />
           <StlViewer />
+          {viewerDragOver ? <div className="viewer-drop-overlay">Drop STL to load</div> : null}
         </section>
       </main>
     </div>

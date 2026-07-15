@@ -111,6 +111,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const prev = get().stlUrl;
     revokeStlUrl(prev);
     const url = URL.createObjectURL(file);
+    useSettingsStore.getState().resetToolOrigin();
     set({
       stlFile: file,
       stlUrl: url,
@@ -132,6 +133,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     revokeStlUrl(prev);
     clearStlGeometryCache();
     const nextUrl = getDefaultDevStlUrl(Date.now());
+    useSettingsStore.getState().resetToolOrigin();
     set({
       stlFile: null,
       stlUrl: nextUrl,
@@ -151,6 +153,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   clearStl: () => {
     const prev = get().stlUrl;
     revokeStlUrl(prev);
+    useSettingsStore.getState().resetToolOrigin();
     set({
       stlFile: null,
       stlUrl: null,

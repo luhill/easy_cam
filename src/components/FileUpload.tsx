@@ -1,20 +1,56 @@
-import { useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { OPERATION_TEMPLATES } from '../types/operations';
 
+function isStlFile(file: File | undefined | null): file is File {
+  return !!file && file.name.toLowerCase().endsWith('.stl');
+}
+
 export function FileUpload() {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [dragOver, setDragOver] = useState(false);
   const { stlFileName, stlUrl, setStlFile, loadDefaultStl, clearStl } = useAppStore();
 
+  const acceptStl = useCallback(
+    (file: File | undefined | null) => {
+      if (isStlFile(file)) setStlFile(file);
+    },
+    [setStlFile]
+  );
+
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file && file.name.toLowerCase().endsWith('.stl')) {
-      setStlFile(file);
-    }
+    acceptStl(e.target.files?.[0]);
+    e.target.value = '';
+  };
+
+  const onDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(true);
+  };
+
+  const onDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+  };
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    acceptStl(file);
   };
 
   return (
-    <div className="file-upload">
+    <div
+      className={`file-upload${dragOver ? ' file-upload-dragover' : ''}`}
+      onDragOver={onDragOver}
+      onDragEnter={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
       <input
         ref={inputRef}
         type="file"
@@ -30,6 +66,13 @@ export function FileUpload() {
           <button className="btn-icon" onClick={clearStl} title="Remove file">
             ✕
           </button>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => inputRef.current?.click()}
+            title="Replace with another STL"
+          >
+            Replace
+          </button>
         </div>
       ) : (
         <div className="file-upload-actions">
@@ -39,6 +82,7 @@ export function FileUpload() {
           <button className="btn btn-secondary" onClick={loadDefaultStl} title="Load bundled sample part">
             Load sample
           </button>
+          <span className="file-drop-hint">or drop .stl here</span>
         </div>
       )}
     </div>

@@ -564,6 +564,8 @@ function StlMesh({
           radius,
           loop,
           holeId: hole?.id,
+          topZ: hole?.topZ,
+          bottomZ: hole?.bottomZ,
         };
         const existingHoles = getSelectedHoles(existing);
 
