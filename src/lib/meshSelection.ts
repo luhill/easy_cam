@@ -748,7 +748,7 @@ export class MeshIndex {
     const clusters = this.findRadialWallClusters(hole.center, hole.topZ);
     if (clusters.length === 0) {
       hole.wallFaceIndices = this.findWallFacesForCylinder(hole.center, hole.radius);
-      this.applyHoleBottomZ(hole);
+      this.applyHoleZExtentFromWalls(hole);
       return;
     }
 
@@ -756,24 +756,37 @@ export class MeshIndex {
     if (innerCluster.radius < hole.radius * 0.95) {
       hole.radius = innerCluster.radius;
       hole.wallFaceIndices = innerCluster.faceIndices;
+      this.applyHoleZExtentFromWalls(hole);
       hole.loop = generateCircleLoop(hole.center.x, hole.center.y, innerCluster.radius, hole.topZ);
-      this.applyHoleBottomZ(hole);
       return;
     }
 
     hole.wallFaceIndices = innerCluster.faceIndices.length
       ? innerCluster.faceIndices
       : this.findWallFacesForCylinder(hole.center, hole.radius);
-    this.applyHoleBottomZ(hole);
+    this.applyHoleZExtentFromWalls(hole);
   }
 
-  private applyHoleBottomZ(hole: HoleFeature): void {
+  /**
+   * Set hole top/bottom from bore wall extent.
+   * Pocket-floor inner loops can detect a through-boss hole at mid-height; the real
+   * opening is the highest rim of the cylindrical walls (boss / stock top).
+   */
+  private applyHoleZExtentFromWalls(hole: HoleFeature): void {
     if (hole.wallFaceIndices.length > 0) {
-      const { bottomZ } = this.zExtentForFaces(hole.wallFaceIndices);
+      const { topZ, bottomZ } = this.zExtentForFaces(hole.wallFaceIndices);
       if (Number.isFinite(bottomZ)) {
         hole.bottomZ = bottomZ;
-        return;
+      } else {
+        hole.bottomZ = this.bounds.minZ;
       }
+      if (Number.isFinite(topZ) && topZ > hole.topZ + this.epsilon) {
+        hole.topZ = topZ;
+        if (hole.loop.length > 0) {
+          hole.loop = hole.loop.map((p) => ({ ...p, z: topZ }));
+        }
+      }
+      return;
     }
     hole.bottomZ = this.bounds.minZ;
   }
@@ -783,8 +796,9 @@ export class MeshIndex {
    */
   private findRadialWallClusters(center: LoopPoint, topZ: number): RadialWallCluster[] {
     const bucketFaces = new Map<number, number[]>();
+    // Include full stock height — pocket-floor detections still need boss walls above topZ.
     const zMin = this.bounds.minZ - this.epsilon;
-    const zMax = topZ + (this.bounds.maxZ - topZ) * 0.5 + this.epsilon;
+    const zMax = Math.max(topZ, this.bounds.maxZ) + this.epsilon;
 
     for (let faceIndex = 0; faceIndex < this.faceCount; faceIndex++) {
       const normal = this.faceNormals[faceIndex];
