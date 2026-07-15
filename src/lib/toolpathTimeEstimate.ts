@@ -25,7 +25,7 @@ function segmentFeedRate(
   curr: ToolpathPoint,
   op: Operation
 ): number {
-  if (curr.rapid || prev.rapid) return PREVIEW_RAPID_FEED;
+  if (curr.rapid) return PREVIEW_RAPID_FEED;
 
   const dx = curr.x - prev.x;
   const dy = curr.y - prev.y;

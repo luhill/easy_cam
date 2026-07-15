@@ -77,7 +77,7 @@ export function sampleSimulationTimeline(
     x: a.x + (b.x - a.x) * t,
     y: a.y + (b.y - a.y) * t,
     z: a.z + (b.z - a.z) * t,
-    rapid: a.rapid || b.rapid,
+    rapid: b.rapid,
     distance,
   };
 }
@@ -151,7 +151,7 @@ function lerpPoint(a: ToolpathPoint, b: ToolpathPoint, t: number): ToolpathPoint
     x: a.x + (b.x - a.x) * t,
     y: a.y + (b.y - a.y) * t,
     z: a.z + (b.z - a.z) * t,
-    rapid: a.rapid || b.rapid,
+    rapid: b.rapid,
     feedRate: b.feedRate ?? a.feedRate,
   };
 }

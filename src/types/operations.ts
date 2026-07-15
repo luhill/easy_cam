@@ -11,7 +11,10 @@ export type OperationType =
 
 export interface OperationDefaults {
   toolDiameter: number;
+  /** Full-engagement cutting feed (standard outline / pocket contour). */
   feedRate: number;
+  /** Chip-thinned feed for adaptive clearing, chip-clear, and final outline passes. */
+  adjustedFeedRate: number;
   plungeRate: number;
   stepDown: number;
   stepover: number;
@@ -44,9 +47,9 @@ export interface OperationDefaults {
   finishingPass: boolean;
   /** Finishing stock left on walls as % of tool diameter */
   finishingStockPercent: number;
-  /** Number of finish passes (1 = single final; >1 steps stock down with optional chip clear) */
+  /** Number of final-outline passes at the same wall offset (spring passes). */
   finishPassCount: number;
-  /** Retract to safe height between the last spring pass and the final wall pass */
+  /** Extra full perimeter at roughing offset (bottom Z) at adjusted feed before the final outline. */
   chipClearBeforeFinal: boolean;
   /** External cuts: climb (clockwise) vs conventional (counter-clockwise) */
   climbMilling: boolean;
@@ -94,6 +97,11 @@ export interface SelectedGeometry {
   edgeLoops?: EdgeLoopSelection[];
   /** Drill/helix — one or more holes */
   holes?: HoleSelection[];
+  /**
+   * Contour — sparse surface samples (x,y,z) from selected upward faces for Z-following.
+   * Kept coarse so toolpath regen stays cheap.
+   */
+  surfaceSamples?: LoopPoint[];
   /** @deprecated use holes[] */
   holeCenter?: LoopPoint;
   /** @deprecated use holes[] */
@@ -173,7 +181,7 @@ export const OPERATION_TEMPLATES: OperationTemplate[] = [
   {
     type: 'contour',
     label: 'Contour',
-    description: 'Waterline contour along selected side walls',
+    description: '3D contour on upward faces — XY path with Z following surface texture/slopes',
     icon: '〜',
   },
   {
@@ -187,6 +195,7 @@ export const OPERATION_TEMPLATES: OperationTemplate[] = [
 export const DEFAULT_SETTINGS: OperationDefaults = {
   toolDiameter: 4,
   feedRate: 700,
+  adjustedFeedRate: 1000,
   plungeRate: 300,
   stepDown: 2,
   stepover: 7,
@@ -226,6 +235,7 @@ export function defaultSettingsForOperation(type: OperationType): OperationDefau
       ...DEFAULT_SETTINGS,
       adaptiveMode: true,
       feedRate: 500,
+      adjustedFeedRate: 750,
       stepDown: 6,
       stepover: 5,
       plungeRate: 120,

@@ -287,10 +287,9 @@ export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSideba
               </div>
             ) : null}
             <p className="feeds-calculator-footnote">
-              New operations store the base cutting feed. Outline adaptive clearing and finish
-              passes apply chip thinning automatically for {stepoverPct.toFixed(0)}% radial
-              engagement ({results.stepoverMm.toFixed(2)} mm). Full-engagement contour uses the
-              base feed.
+              New operations get both base cutting feed and adjusted (chip-thinned) feed. Outline
+              ops expose both as editable fields — adjusted feed is used for adaptive clearing,
+              chip-clear, and final outline passes.
             </p>
           </section>
         </div>

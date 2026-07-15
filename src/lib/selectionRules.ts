@@ -51,7 +51,8 @@ export function isRegionSelectableForOperation(
     case 'pocket':
       return isPhysicallyTopFace(region, bounds);
     case 'contour':
-      return region.kind === 'side' || Math.abs(region.normal.z) <= 0.35;
+      // Upward faces (flat or gently sloped) with texture — not vertical side walls.
+      return region.normal.z >= 0.35;
     default:
       return false;
   }
@@ -85,7 +86,7 @@ export function getSelectionHint(
     case 'pocket':
       return 'Select a top-facing surface to pocket';
     case 'contour':
-      return 'Select a vertical side surface';
+      return 'Select an upward-facing surface — path follows Z over texture and slopes';
     default:
       return 'Select geometry from the model';
   }

@@ -277,12 +277,12 @@ export function operationSettingsFromFeedsCalculator(
   const toolD = Math.max(inputs.toolDiameterMm, 0.01);
   const { profile } = results;
 
-  // Store base (full-engagement) cutting feed. Adaptive / finish passes apply
-  // chip-thinning boost in toolpath generation — not on every contour segment.
+  // Store both base and chip-thinned feeds — outline UI exposes both.
   const partial: Partial<OperationDefaults> = {
     toolDiameter: toolD,
     spindleSpeed: Math.max(100, Math.round(inputs.rpm)),
     feedRate: Math.max(1, Math.round(results.cuttingFeedMmMin)),
+    adjustedFeedRate: Math.max(1, Math.round(results.adjustedFeedMmMin)),
     stepover: inputs.stepoverPct,
     rampAngleDeg: results.rampAngleDeg,
     plungeRate: Math.max(1, Math.round(results.plungeFeedMmMin)),

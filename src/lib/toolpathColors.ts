@@ -86,7 +86,7 @@ function edgeFeedRate(
   op: Operation | undefined,
   travelFeedRate: number
 ): number {
-  if (a.rapid || b.rapid) return PREVIEW_RAPID_FEED;
+  if (b.rapid) return PREVIEW_RAPID_FEED;
   if (isTravelFeed(a, b, travelFeedRate)) return travelFeedRate;
   if (isPlungeFeed(a, b, op)) return op!.settings.plungeRate;
   if (isPlungeMove(a, b)) return op?.settings.plungeRate ?? travelFeedRate;
@@ -100,7 +100,8 @@ export function classifyToolpathMove(
   travelFeedRate: number
 ): ToolpathMoveKind {
   if (a.onSpur || b.onSpur) return 'spur';
-  if (a.rapid || b.rapid) return 'rapid';
+  // Rapid is a property of the move *to* the destination point only.
+  if (b.rapid) return 'rapid';
   if (isTravelFeed(a, b, travelFeedRate)) return 'travel';
   if (isPlungeFeed(a, b, op) || isPlungeMove(a, b)) return 'plunge';
 

@@ -39,6 +39,20 @@ const BASE_FIELDS: FieldDef[] = [
   { key: 'depthOffset', label: 'Depth Offset', unit: 'mm', step: 0.1 },
 ];
 
+const OUTLINE_FEED_FIELDS: FieldDef[] = [
+  { key: 'feedRate', label: 'Feed Rate', unit: 'mm/min', step: 50 },
+  { key: 'adjustedFeedRate', label: 'Adjusted Feed', unit: 'mm/min', step: 50 },
+];
+
+const OUTLINE_BASE_FIELDS: FieldDef[] = [
+  { key: 'toolDiameter', label: 'Tool Diameter', unit: 'mm', step: 0.1 },
+  { key: 'plungeRate', label: 'Plunge Rate', unit: 'mm/min', step: 25 },
+  { key: 'stepDown', label: 'Step Down', unit: 'mm', step: 0.1 },
+  { key: 'stepover', label: 'Stepover', unit: '%', step: 1 },
+  { key: 'spindleSpeed', label: 'Spindle Speed', unit: 'RPM', step: 500 },
+  { key: 'depthOffset', label: 'Depth Offset', unit: 'mm', step: 0.1 },
+];
+
 const DRILL_FIELDS: FieldDef[] = [
   { key: 'toolDiameter', label: 'Tool Diameter', unit: 'mm', step: 0.1 },
   { key: 'plungeRate', label: 'Plunge Rate', unit: 'mm/min', step: 25 },
@@ -147,7 +161,13 @@ function fieldHint(operation: Operation, key: NumericSettingKey): string | undef
     return 'Every N pecks, retract all the way to safe height. 0 disables periodic full retracts.';
   }
   if (key === 'finishPassCount') {
-    return 'More than one finish pass steps the remaining stock down; the last pass is the final wall cut.';
+    return 'Number of final outline passes at the same wall offset (spring passes).';
+  }
+  if (key === 'feedRate' && isOutlineOperation(operation)) {
+    return 'Standard cutting feed for full-engagement outline / roughing contour loops.';
+  }
+  if (key === 'adjustedFeedRate') {
+    return 'Used for adaptive trochoidal clearing, the chip-clear pass, and final outline pass(es).';
   }
   if (key === 'rampAngleDeg' && isOutlineOperation(operation)) {
     if (operation.settings.adaptiveMode) {
@@ -172,9 +192,6 @@ function fieldHint(operation: Operation, key: NumericSettingKey): string | undef
   }
   if (key === 'zStartOffset' && operation.type === 'helix') {
     return 'Helix ramp begins at the lower of this offset above stock top or the global safe height.';
-  }
-  if (key === 'feedRate' && isOutlineOperation(operation)) {
-    return 'Base cutting feed for full-engagement contour. Adaptive clearing and finish passes use a chip-thinned (higher) feed automatically.';
   }
   return undefined;
 }
@@ -358,14 +375,14 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
               <label className="checkbox-row">
                 <input
                   type="checkbox"
-                  checked={operation.settings.chipClearBeforeFinal !== false}
+                  checked={operation.settings.chipClearBeforeFinal === true}
                   onChange={(e) =>
                     updateOperationSettings(operation.id, {
                       chipClearBeforeFinal: e.target.checked,
                     })
                   }
                 />
-                Chip clear before final pass
+                Chip clear pass before final (repeat at rough offset)
               </label>
             </SettingsGroup>
           )}
@@ -373,7 +390,10 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
       ) : isOutlineOperation(operation) ? (
         <>
           <div className="settings-grid">
-            <SettingFields operation={operation} fields={[...BASE_FIELDS, ...OUTLINE_COMMON_FIELDS]} />
+            <SettingFields
+              operation={operation}
+              fields={[...OUTLINE_FEED_FIELDS, ...OUTLINE_BASE_FIELDS, ...OUTLINE_COMMON_FIELDS]}
+            />
           </div>
 
           <div className="settings-checkboxes">
@@ -463,14 +483,14 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
               <label className="checkbox-row">
                 <input
                   type="checkbox"
-                  checked={operation.settings.chipClearBeforeFinal !== false}
+                  checked={operation.settings.chipClearBeforeFinal === true}
                   onChange={(e) =>
                     updateOperationSettings(operation.id, {
                       chipClearBeforeFinal: e.target.checked,
                     })
                   }
                 />
-                Chip clear before final pass
+                Chip clear pass before final (repeat at rough offset)
               </label>
             </SettingsGroup>
           )}
@@ -493,7 +513,7 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
         <div className="operation-settings-footer">
           <HintTooltip
             placement="top"
-            text="Click holes to add/remove. Depth follows the hole floor when known. Pecks retract to chip-clear height between plunges."
+            text="Click holes to add/remove. Depth follows the hole floor when known. Cutting and approach moves use plunge feed; only retracts are rapid."
           />
         </div>
       )}
@@ -517,7 +537,7 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
         <div className="operation-settings-footer">
           <HintTooltip
             placement="top"
-            text="Select a vertical side surface. Waterline passes follow the wall at each step-down depth."
+            text="Select an upward-facing surface. The path scans in XY while Z follows surface texture and slopes."
           />
         </div>
       )}

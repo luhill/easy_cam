@@ -1011,6 +1011,37 @@ export class MeshIndex {
     return [...loops].sort((a, b) => loopArea2D(b) - loopArea2D(a))[0];
   }
 
+  /**
+   * Sparse XYZ samples from selected faces for contour Z-following.
+   * Caps count so toolpath regen stays cheap on dense meshes.
+   */
+  sampleSurfacePoints(faceIndices: number[], maxSamples = 800): LoopPoint[] {
+    if (faceIndices.length === 0) return [];
+    const seen = new Set<string>();
+    const points: LoopPoint[] = [];
+    const stride = Math.max(1, Math.ceil(faceIndices.length / Math.max(maxSamples / 4, 1)));
+
+    for (let fi = 0; fi < faceIndices.length; fi += stride) {
+      const faceIndex = faceIndices[fi];
+      const centroid = this.faceCentroid(faceIndex);
+      const key = `${centroid.x.toFixed(2)},${centroid.y.toFixed(2)},${centroid.z.toFixed(2)}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        points.push({ x: centroid.x, y: centroid.y, z: centroid.z });
+      }
+      for (let c = 0; c < 3; c++) {
+        const v = getFaceVertex(this.geometry, this.positions, faceIndex, c, new THREE.Vector3());
+        const vk = `${v.x.toFixed(2)},${v.y.toFixed(2)},${v.z.toFixed(2)}`;
+        if (seen.has(vk)) continue;
+        seen.add(vk);
+        points.push({ x: v.x, y: v.y, z: v.z });
+        if (points.length >= maxSamples) return points;
+      }
+      if (points.length >= maxSamples) return points;
+    }
+    return points;
+  }
+
   resolveSelection(
     faceIndex: number,
     operationType: OperationType,
