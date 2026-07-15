@@ -1721,6 +1721,7 @@ function generateDrillPathForHole(
   const plungeFeed = Math.max(1, settings.plungeRate);
   const chipClearH = Math.max(0, settings.chipClearHeight ?? 2);
   const chipClearZ = topZ + chipClearH;
+  const peckClearance = Math.max(0, settings.peckClearance ?? 0.5);
   const fullEvery = Math.max(0, Math.round(settings.peckFullRetractEvery ?? 0));
   const points: ToolpathPoint[] = [];
 
@@ -1739,7 +1740,20 @@ function generateDrillPathForHole(
 
   for (let i = 0; i < layers.length; i++) {
     const layerZ = layers[i];
-    // Each peck: plunge at most one peck-depth increment from the previous plane.
+    const prevLayerZ = i > 0 ? layers[i - 1] : topZ;
+
+    // After a retract, rapid down to previous depth + clearance, then feed the new peck only.
+    if (i > 0) {
+      const reentryZ = Math.min(
+        Math.max(prevLayerZ + peckClearance, layerZ),
+        Math.max(chipClearZ, topZ)
+      );
+      const last = points[points.length - 1];
+      if (!last || Math.abs(last.z - reentryZ) > 1e-4) {
+        points.push({ x: cx, y: cy, z: reentryZ, rapid: true });
+      }
+    }
+
     points.push({ x: cx, y: cy, z: layerZ, feedRate: plungeFeed });
 
     const isLast = i === layers.length - 1;

@@ -60,6 +60,7 @@ const DRILL_FIELDS: FieldDef[] = [
   { key: 'spindleSpeed', label: 'Spindle Speed', unit: 'RPM', step: 500 },
   { key: 'depthOffset', label: 'Depth Offset', unit: 'mm', step: 0.1 },
   { key: 'chipClearHeight', label: 'Chip Clear Height', unit: 'mm above hole', step: 0.5 },
+  { key: 'peckClearance', label: 'Peck Clearance', unit: 'mm', step: 0.1 },
   { key: 'peckFullRetractEvery', label: 'Full Retract Every', unit: 'pecks (0=off)', step: 1 },
 ];
 
@@ -156,6 +157,9 @@ function fieldHint(operation: Operation, key: NumericSettingKey): string | undef
   }
   if (key === 'chipClearHeight') {
     return 'Retract this far above the hole opening between pecks to clear chips. Set 0 to retract fully to safe height each peck.';
+  }
+  if (key === 'peckClearance') {
+    return 'After retracting, rapid back down to the previous peck depth plus this clearance, then feed only the next peck.';
   }
   if (key === 'peckFullRetractEvery') {
     return 'Every N pecks, retract all the way to safe height. 0 disables periodic full retracts.';

@@ -55,6 +55,11 @@ export interface OperationDefaults {
   climbMilling: boolean;
   /** Drill: retract height above hole top between pecks (mm); 0 = retract to safe Z each peck */
   chipClearHeight: number;
+  /**
+   * Drill: after retract, rapid back down to previous peck depth + this clearance (mm)
+   * before feed-plunging the next peck.
+   */
+  peckClearance: number;
   /** Drill: full safe-Z retract every N pecks (0 = never; always use chip-clear height) */
   peckFullRetractEvery: number;
 }
@@ -218,6 +223,7 @@ export const DEFAULT_SETTINGS: OperationDefaults = {
   chipClearBeforeFinal: true,
   climbMilling: true,
   chipClearHeight: 2,
+  peckClearance: 0.5,
   peckFullRetractEvery: 0,
 };
 

@@ -36,6 +36,7 @@ export const SETTING_LIMITS: Record<ClampedSettingKey, NumericLimit> = {
   finishingStockPercent: { min: 0.5, max: 50 },
   finishPassCount: { min: 1, max: 5 },
   chipClearHeight: { min: 0, max: 50 },
+  peckClearance: { min: 0, max: 10 },
   peckFullRetractEvery: { min: 0, max: 20 },
 };
 
