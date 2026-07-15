@@ -118,6 +118,7 @@ interface SettingsState {
   setGcodeOutputFormat: (format: GcodeOutputFormat) => void;
   resetGcodeTemplates: () => void;
   setToolOrigin: (origin: Partial<ToolOrigin>) => void;
+  resetToolOrigin: () => void;
   setSafeHeight: (mm: number) => void;
   setToolpathResolution: (factor: number) => void;
   setTravelFeedRate: (mmPerMin: number) => void;
@@ -154,6 +155,8 @@ export const useSettingsStore = create<SettingsState>()(
         set((state) => ({
           toolOrigin: { ...state.toolOrigin, ...origin },
         })),
+      resetToolOrigin: () =>
+        set({ toolOrigin: { x: 0, y: 0, z: DEFAULT_WCS_Z_ABOVE_STOCK } }),
       setSafeHeight: (mm) =>
         set({ safeHeight: Math.max(0, Number.isFinite(mm) ? mm : DEFAULT_SAFE_HEIGHT) }),
       setToolpathResolution: (factor) =>

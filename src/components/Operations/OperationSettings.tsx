@@ -15,7 +15,11 @@ interface OperationSettingsProps {
 
 type NumericSettingKey = Exclude<
   keyof Operation['settings'],
-  'finishingPass' | 'climbMilling' | 'adaptiveMode' | 'outlineEntryType'
+  | 'finishingPass'
+  | 'climbMilling'
+  | 'adaptiveMode'
+  | 'outlineEntryType'
+  | 'chipClearBeforeFinal'
 >;
 
 type FieldDef = {
@@ -33,6 +37,35 @@ const BASE_FIELDS: FieldDef[] = [
   { key: 'stepover', label: 'Stepover', unit: '%', step: 1 },
   { key: 'spindleSpeed', label: 'Spindle Speed', unit: 'RPM', step: 500 },
   { key: 'depthOffset', label: 'Depth Offset', unit: 'mm', step: 0.1 },
+];
+
+const OUTLINE_FEED_FIELDS: FieldDef[] = [
+  { key: 'feedRate', label: 'Feed Rate', unit: 'mm/min', step: 50 },
+  { key: 'adjustedFeedRate', label: 'Adjusted Feed', unit: 'mm/min', step: 50 },
+];
+
+const OUTLINE_BASE_FIELDS: FieldDef[] = [
+  { key: 'toolDiameter', label: 'Tool Diameter', unit: 'mm', step: 0.1 },
+  { key: 'plungeRate', label: 'Plunge Rate', unit: 'mm/min', step: 25 },
+  { key: 'stepDown', label: 'Step Down', unit: 'mm', step: 0.1 },
+  { key: 'stepover', label: 'Stepover', unit: '%', step: 1 },
+  { key: 'spindleSpeed', label: 'Spindle Speed', unit: 'RPM', step: 500 },
+  { key: 'depthOffset', label: 'Depth Offset', unit: 'mm', step: 0.1 },
+];
+
+const DRILL_FIELDS: FieldDef[] = [
+  { key: 'toolDiameter', label: 'Tool Diameter', unit: 'mm', step: 0.1 },
+  { key: 'plungeRate', label: 'Plunge Rate', unit: 'mm/min', step: 25 },
+  { key: 'stepDown', label: 'Peck Depth', unit: 'mm', step: 0.1 },
+  { key: 'spindleSpeed', label: 'Spindle Speed', unit: 'RPM', step: 500 },
+  { key: 'depthOffset', label: 'Depth Offset', unit: 'mm', step: 0.1 },
+  { key: 'chipClearHeight', label: 'Chip Clear Height', unit: 'mm above hole', step: 0.5 },
+  { key: 'peckClearance', label: 'Peck Clearance', unit: 'mm', step: 0.1 },
+  { key: 'peckFullRetractEvery', label: 'Full Retract Every', unit: 'pecks (0=off)', step: 1 },
+];
+
+const POCKET_FIELDS: FieldDef[] = [
+  { key: 'radialOffset', label: 'Additional Offset', unit: 'mm', step: 0.1 },
 ];
 
 const HELIX_BASE_FIELDS: FieldDef[] = [
@@ -76,6 +109,12 @@ const FINISHING_FIELDS: FieldDef[] = [
     unit: '% of tool ⌀',
     step: 0.5,
   },
+  {
+    key: 'finishPassCount',
+    label: 'Finish Passes',
+    unit: 'count',
+    step: 1,
+  },
 ];
 
 const HELIX_OP_FIELDS: FieldDef[] = [
@@ -95,6 +134,9 @@ function fieldLabel(operation: Operation, key: NumericSettingKey, fallback: stri
   if (operation.type === 'helix' && key === 'stepover') {
     return 'Bottom Widen Stepover';
   }
+  if (operation.type === 'pocket' && key === 'stepover') {
+    return operation.settings.adaptiveMode ? 'Concentric Stepover' : fallback;
+  }
   return fallback;
 }
 
@@ -106,6 +148,30 @@ function fieldHint(operation: Operation, key: NumericSettingKey): string | undef
     if (operation.type === 'helix') {
       return DEPTH_HINT;
     }
+    if (operation.type === 'drill') {
+      if (key === 'depthOffset') {
+        return 'Depth offset from the hole floor (+ stops short of the floor). Hole depth comes from the selected feature when available.';
+      }
+      return 'Maximum depth per peck before retracting to clear chips. Defaults to ~1× tool diameter.';
+    }
+  }
+  if (key === 'chipClearHeight') {
+    return 'Retract this far above the hole opening between pecks to clear chips. Set 0 to retract fully to safe height each peck.';
+  }
+  if (key === 'peckClearance') {
+    return 'After retracting, rapid back down to the previous peck depth plus this clearance, then feed only the next peck.';
+  }
+  if (key === 'peckFullRetractEvery') {
+    return 'Every N pecks, retract all the way to safe height. 0 disables periodic full retracts.';
+  }
+  if (key === 'finishPassCount') {
+    return 'Number of final outline passes at the same wall offset (spring passes).';
+  }
+  if (key === 'feedRate' && isOutlineOperation(operation)) {
+    return 'Standard cutting feed for full-engagement outline / roughing contour loops.';
+  }
+  if (key === 'adjustedFeedRate') {
+    return 'Used for adaptive trochoidal clearing, the chip-clear pass, and final outline pass(es).';
   }
   if (key === 'rampAngleDeg' && isOutlineOperation(operation)) {
     if (operation.settings.adaptiveMode) {
@@ -266,10 +332,72 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
             <SettingFields operation={operation} fields={[...HELIX_BASE_FIELDS, ...HELIX_OP_FIELDS]} />
           </div>
         </>
+      ) : operation.type === 'drill' ? (
+        <div className="settings-grid">
+          <SettingFields operation={operation} fields={DRILL_FIELDS} />
+        </div>
+      ) : operation.type === 'pocket' ? (
+        <>
+          <div className="settings-grid">
+            <SettingFields operation={operation} fields={[...BASE_FIELDS, ...POCKET_FIELDS]} />
+          </div>
+          <div className="settings-checkboxes">
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={operation.settings.adaptiveMode}
+                onChange={(e) =>
+                  updateOperationSettings(operation.id, { adaptiveMode: e.target.checked })
+                }
+              />
+              Adaptive pocket (concentric)
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={operation.settings.climbMilling}
+                onChange={(e) =>
+                  updateOperationSettings(operation.id, { climbMilling: e.target.checked })
+                }
+              />
+              Climb milling
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={operation.settings.finishingPass}
+                onChange={(e) =>
+                  updateOperationSettings(operation.id, { finishingPass: e.target.checked })
+                }
+              />
+              Final wall finishing pass
+            </label>
+          </div>
+          {operation.settings.finishingPass && (
+            <SettingsGroup title="Finishing pass">
+              <SettingFields operation={operation} fields={FINISHING_FIELDS} />
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={operation.settings.chipClearBeforeFinal === true}
+                  onChange={(e) =>
+                    updateOperationSettings(operation.id, {
+                      chipClearBeforeFinal: e.target.checked,
+                    })
+                  }
+                />
+                Chip clear pass before final (repeat at rough offset)
+              </label>
+            </SettingsGroup>
+          )}
+        </>
       ) : isOutlineOperation(operation) ? (
         <>
           <div className="settings-grid">
-            <SettingFields operation={operation} fields={[...BASE_FIELDS, ...OUTLINE_COMMON_FIELDS]} />
+            <SettingFields
+              operation={operation}
+              fields={[...OUTLINE_FEED_FIELDS, ...OUTLINE_BASE_FIELDS, ...OUTLINE_COMMON_FIELDS]}
+            />
           </div>
 
           <div className="settings-checkboxes">
@@ -356,6 +484,18 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
           {operation.settings.finishingPass && (
             <SettingsGroup title="Finishing pass">
               <SettingFields operation={operation} fields={FINISHING_FIELDS} />
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={operation.settings.chipClearBeforeFinal === true}
+                  onChange={(e) =>
+                    updateOperationSettings(operation.id, {
+                      chipClearBeforeFinal: e.target.checked,
+                    })
+                  }
+                />
+                Chip clear pass before final (repeat at rough offset)
+              </label>
             </SettingsGroup>
           )}
         </>
@@ -377,7 +517,7 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
         <div className="operation-settings-footer">
           <HintTooltip
             placement="top"
-            text="Click holes to add/remove. Multiple holes are drilled in selection order with rapid moves between them."
+            text="Click holes to add/remove. Depth follows the hole floor when known. Cutting and approach moves use plunge feed; only retracts are rapid."
           />
         </div>
       )}
@@ -386,6 +526,22 @@ export function OperationSettings({ operation }: OperationSettingsProps) {
           <HintTooltip
             placement="top"
             text="Click holes to add/remove. Invalid holes (red) are skipped: hole diameter must exceed tool diameter, and taper must not collapse the helix radius before final depth."
+          />
+        </div>
+      )}
+      {operation.type === 'pocket' && (
+        <div className="operation-settings-footer">
+          <HintTooltip
+            placement="top"
+            text="Select a top face. Standard mode uses zigzag clearing; adaptive uses concentric offsets. Enable finishing for a final wall pass."
+          />
+        </div>
+      )}
+      {operation.type === 'contour' && (
+        <div className="operation-settings-footer">
+          <HintTooltip
+            placement="top"
+            text="Select an upward-facing surface. The path scans in XY while Z follows surface texture and slopes."
           />
         </div>
       )}

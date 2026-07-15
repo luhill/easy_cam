@@ -127,6 +127,26 @@ body {
   z-index: 1;
 }
 
+.viewer-panel-dragover {
+  outline: 2px dashed var(--accent);
+  outline-offset: -8px;
+}
+
+.viewer-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+  color: var(--text-primary);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
 .sidebar {
   width: 360px;
   min-width: 300px;
@@ -408,6 +428,29 @@ body {
 }
 
 /* File upload */
+.file-upload {
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed transparent;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.file-upload-dragover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.file-drop-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+  opacity: 0.8;
+}
+
+.btn-sm {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
 .file-upload .file-info {
   display: flex;
   align-items: center;

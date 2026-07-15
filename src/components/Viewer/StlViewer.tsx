@@ -559,11 +559,18 @@ function StlMesh({
         }
         if (!center || !radius) return;
 
+        const loopTopZ =
+          loop && loop.length > 0
+            ? loop.reduce((s, p) => s + p.z, 0) / loop.length
+            : undefined;
+
         const candidate = {
           center,
           radius,
           loop,
           holeId: hole?.id,
+          topZ: hole?.topZ ?? loopTopZ,
+          bottomZ: hole?.bottomZ,
         };
         const existingHoles = getSelectedHoles(existing);
 
@@ -652,6 +659,10 @@ function StlMesh({
           group.loops
         );
         const vertexIndices = collectVertexIndices(meshIndexRef.current, faceIndices);
+        const surfaceSamples =
+          op?.type === 'contour' && faceIndices.length > 0
+            ? meshIndexRef.current.sampleSurfacePoints(faceIndices)
+            : undefined;
         setOperationGeometry(
           activeOperationId,
           faceIndices.length > 0
@@ -659,6 +670,7 @@ function StlMesh({
                 faceIndices,
                 vertexIndices,
                 loops,
+                surfaceSamples,
                 entryPoint: existing.entryPoint,
                 toolStartPoint: existing.toolStartPoint,
                 slotJoinPoint: existing.slotJoinPoint,
@@ -677,11 +689,16 @@ function StlMesh({
           ? mergeLoops(existing?.loops, group.loops)
           : existing?.loops;
       const vertexIndices = collectVertexIndices(meshIndexRef.current, faceIndices);
+      const surfaceSamples =
+        op?.type === 'contour'
+          ? meshIndexRef.current.sampleSurfacePoints(faceIndices)
+          : existing?.surfaceSamples;
 
       setOperationGeometry(activeOperationId, {
         faceIndices,
         vertexIndices,
         loops: loops && loops.length > 0 ? loops : group.loops,
+        surfaceSamples,
         entryPoint: existing?.entryPoint,
         toolStartPoint: existing?.toolStartPoint,
         slotJoinPoint: existing?.slotJoinPoint,

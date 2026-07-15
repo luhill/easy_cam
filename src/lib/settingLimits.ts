@@ -8,12 +8,17 @@ export interface NumericLimit {
 
 type ClampedSettingKey = Exclude<
   keyof OperationDefaults,
-  'finishingPass' | 'climbMilling' | 'adaptiveMode' | 'outlineEntryType'
+  | 'finishingPass'
+  | 'climbMilling'
+  | 'adaptiveMode'
+  | 'outlineEntryType'
+  | 'chipClearBeforeFinal'
 >;
 
 export const SETTING_LIMITS: Record<ClampedSettingKey, NumericLimit> = {
   toolDiameter: { min: 0.1, max: 25 },
   feedRate: { min: 1, max: 10000 },
+  adjustedFeedRate: { min: 1, max: 10000 },
   plungeRate: { min: 1, max: 5000 },
   stepDown: { min: 0.05, max: 50 },
   stepover: { min: 1, max: 100 },
@@ -29,6 +34,10 @@ export const SETTING_LIMITS: Record<ClampedSettingKey, NumericLimit> = {
   boreTaperAngleDeg: { min: 0, max: 15 },
   helixFeedRate: { min: 1, max: 5000 },
   finishingStockPercent: { min: 0.5, max: 50 },
+  finishPassCount: { min: 1, max: 5 },
+  chipClearHeight: { min: 0, max: 50 },
+  peckClearance: { min: 0, max: 10 },
+  peckFullRetractEvery: { min: 0, max: 20 },
 };
 
 export function clampSettingValue(key: ClampedSettingKey, value: number): number {
@@ -65,8 +74,28 @@ export function clampOperationSettings(
   for (const key of Object.keys(SETTING_LIMITS) as (keyof typeof SETTING_LIMITS)[]) {
     merged[key] = clampSettingValue(key, merged[key]);
   }
+  // Legacy ops without adjustedFeedRate: derive a mild chip-thinning boost from base feed.
+  if (
+    settings.adjustedFeedRate === undefined &&
+    Number.isFinite(merged.feedRate) &&
+    merged.feedRate > 0
+  ) {
+    const stepoverMm = merged.toolDiameter * (merged.stepover / 100);
+    const D = Math.max(merged.toolDiameter, 0.01);
+    const ae = Math.min(Math.max(stepoverMm, 0.001), D * 0.999);
+    let factor = 1;
+    if (ae < D * 0.95) {
+      const denom = 2 * Math.sqrt(ae * (D - ae));
+      if (denom > 1e-9) factor = Math.min(1.45, D / denom);
+    }
+    merged.adjustedFeedRate = clampSettingValue(
+      'adjustedFeedRate',
+      Math.round(merged.feedRate * factor)
+    );
+  }
   merged.adaptiveMode = !!merged.adaptiveMode;
   merged.finishingPass = !!merged.finishingPass;
+  merged.chipClearBeforeFinal = merged.chipClearBeforeFinal !== false;
   merged.climbMilling = merged.climbMilling !== false;
   const entryType = merged.outlineEntryType;
   merged.outlineEntryType =

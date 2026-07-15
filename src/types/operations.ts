@@ -11,7 +11,10 @@ export type OperationType =
 
 export interface OperationDefaults {
   toolDiameter: number;
+  /** Full-engagement cutting feed (standard outline / pocket contour). */
   feedRate: number;
+  /** Chip-thinned feed for adaptive clearing, chip-clear, and final outline passes. */
+  adjustedFeedRate: number;
   plungeRate: number;
   stepDown: number;
   stepover: number;
@@ -44,8 +47,21 @@ export interface OperationDefaults {
   finishingPass: boolean;
   /** Finishing stock left on walls as % of tool diameter */
   finishingStockPercent: number;
+  /** Number of final-outline passes at the same wall offset (spring passes). */
+  finishPassCount: number;
+  /** Extra full perimeter at roughing offset (bottom Z) at adjusted feed before the final outline. */
+  chipClearBeforeFinal: boolean;
   /** External cuts: climb (clockwise) vs conventional (counter-clockwise) */
   climbMilling: boolean;
+  /** Drill: retract height above hole top between pecks (mm); 0 = retract to safe Z each peck */
+  chipClearHeight: number;
+  /**
+   * Drill: after retract, rapid back down to previous peck depth + this clearance (mm)
+   * before feed-plunging the next peck.
+   */
+  peckClearance: number;
+  /** Drill: full safe-Z retract every N pecks (0 = never; always use chip-clear height) */
+  peckFullRetractEvery: number;
 }
 
 export interface LoopPoint {
@@ -59,6 +75,10 @@ export interface HoleSelection {
   radius: number;
   loop?: LoopPoint[];
   holeId?: number;
+  /** Opening Z (world) — used for drill chip-clear retract */
+  topZ?: number;
+  /** Hole floor Z (world) — used for drill depth; falls back to stock bottom */
+  bottomZ?: number;
 }
 
 /** Closed vertical wall loop for outline — top rim defines offset path and Z extent. */
@@ -82,6 +102,11 @@ export interface SelectedGeometry {
   edgeLoops?: EdgeLoopSelection[];
   /** Drill/helix — one or more holes */
   holes?: HoleSelection[];
+  /**
+   * Contour — sparse surface samples (x,y,z) from selected upward faces for Z-following.
+   * Kept coarse so toolpath regen stays cheap.
+   */
+  surfaceSamples?: LoopPoint[];
   /** @deprecated use holes[] */
   holeCenter?: LoopPoint;
   /** @deprecated use holes[] */
@@ -155,13 +180,13 @@ export const OPERATION_TEMPLATES: OperationTemplate[] = [
   {
     type: 'pocket',
     label: 'Pocket',
-    description: '2D pocket clearing',
+    description: '2D pocket clearing with optional adaptive concentric passes',
     icon: '▣',
   },
   {
     type: 'contour',
     label: 'Contour',
-    description: '3D contour following surface',
+    description: '3D contour on upward faces — XY path with Z following surface texture/slopes',
     icon: '〜',
   },
   {
@@ -175,6 +200,7 @@ export const OPERATION_TEMPLATES: OperationTemplate[] = [
 export const DEFAULT_SETTINGS: OperationDefaults = {
   toolDiameter: 4,
   feedRate: 700,
+  adjustedFeedRate: 1000,
   plungeRate: 300,
   stepDown: 2,
   stepover: 7,
@@ -193,7 +219,12 @@ export const DEFAULT_SETTINGS: OperationDefaults = {
   helixFeedRate: 350,
   finishingPass: false,
   finishingStockPercent: 7,
+  finishPassCount: 1,
+  chipClearBeforeFinal: true,
   climbMilling: true,
+  chipClearHeight: 2,
+  peckClearance: 0.5,
+  peckFullRetractEvery: 0,
 };
 
 const HELIX_DEFAULT_OVERRIDES: Partial<OperationDefaults> = {
@@ -205,11 +236,20 @@ export function defaultSettingsForOperation(type: OperationType): OperationDefau
   if (type === 'helix') {
     return { ...DEFAULT_SETTINGS, ...HELIX_DEFAULT_OVERRIDES };
   }
+  if (type === 'drill') {
+    return {
+      ...DEFAULT_SETTINGS,
+      // Conservative peck: 1× tool diameter (DEFAULT tool is 4 mm).
+      stepDown: DEFAULT_SETTINGS.toolDiameter,
+      chipClearHeight: 2,
+    };
+  }
   if (type === 'adaptive-outline') {
     return {
       ...DEFAULT_SETTINGS,
       adaptiveMode: true,
       feedRate: 500,
+      adjustedFeedRate: 750,
       stepDown: 6,
       stepover: 5,
       plungeRate: 120,

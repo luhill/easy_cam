@@ -59,6 +59,8 @@ export interface HoleFeature {
   wallFaceIndices: number[];
   /** Mean Z of the hole opening (boss/pocket floor). */
   topZ: number;
+  /** Lowest Z of surrounding walls / floor — used for drill depth. */
+  bottomZ?: number;
 }
 
 export interface SelectionRegion {
@@ -746,6 +748,7 @@ export class MeshIndex {
     const clusters = this.findRadialWallClusters(hole.center, hole.topZ);
     if (clusters.length === 0) {
       hole.wallFaceIndices = this.findWallFacesForCylinder(hole.center, hole.radius);
+      this.applyHoleZExtentFromWalls(hole);
       return;
     }
 
@@ -753,6 +756,7 @@ export class MeshIndex {
     if (innerCluster.radius < hole.radius * 0.95) {
       hole.radius = innerCluster.radius;
       hole.wallFaceIndices = innerCluster.faceIndices;
+      this.applyHoleZExtentFromWalls(hole);
       hole.loop = generateCircleLoop(hole.center.x, hole.center.y, innerCluster.radius, hole.topZ);
       return;
     }
@@ -760,6 +764,31 @@ export class MeshIndex {
     hole.wallFaceIndices = innerCluster.faceIndices.length
       ? innerCluster.faceIndices
       : this.findWallFacesForCylinder(hole.center, hole.radius);
+    this.applyHoleZExtentFromWalls(hole);
+  }
+
+  /**
+   * Set hole top/bottom from bore wall extent.
+   * Pocket-floor inner loops can detect a through-boss hole at mid-height; the real
+   * opening is the highest rim of the cylindrical walls (boss / stock top).
+   */
+  private applyHoleZExtentFromWalls(hole: HoleFeature): void {
+    if (hole.wallFaceIndices.length > 0) {
+      const { topZ, bottomZ } = this.zExtentForFaces(hole.wallFaceIndices);
+      if (Number.isFinite(bottomZ)) {
+        hole.bottomZ = bottomZ;
+      } else {
+        hole.bottomZ = this.bounds.minZ;
+      }
+      if (Number.isFinite(topZ) && topZ > hole.topZ + this.epsilon) {
+        hole.topZ = topZ;
+        if (hole.loop.length > 0) {
+          hole.loop = hole.loop.map((p) => ({ ...p, z: topZ }));
+        }
+      }
+      return;
+    }
+    hole.bottomZ = this.bounds.minZ;
   }
 
   /**
@@ -767,8 +796,9 @@ export class MeshIndex {
    */
   private findRadialWallClusters(center: LoopPoint, topZ: number): RadialWallCluster[] {
     const bucketFaces = new Map<number, number[]>();
+    // Include full stock height — pocket-floor detections still need boss walls above topZ.
     const zMin = this.bounds.minZ - this.epsilon;
-    const zMax = topZ + (this.bounds.maxZ - topZ) * 0.5 + this.epsilon;
+    const zMax = Math.max(topZ, this.bounds.maxZ) + this.epsilon;
 
     for (let faceIndex = 0; faceIndex < this.faceCount; faceIndex++) {
       const normal = this.faceNormals[faceIndex];
@@ -993,6 +1023,37 @@ export class MeshIndex {
     const loops = this.computeBoundaryLoops(region.faceIndices);
     if (loops.length === 0) return null;
     return [...loops].sort((a, b) => loopArea2D(b) - loopArea2D(a))[0];
+  }
+
+  /**
+   * Sparse XYZ samples from selected faces for contour Z-following.
+   * Caps count so toolpath regen stays cheap on dense meshes.
+   */
+  sampleSurfacePoints(faceIndices: number[], maxSamples = 800): LoopPoint[] {
+    if (faceIndices.length === 0) return [];
+    const seen = new Set<string>();
+    const points: LoopPoint[] = [];
+    const stride = Math.max(1, Math.ceil(faceIndices.length / Math.max(maxSamples / 4, 1)));
+
+    for (let fi = 0; fi < faceIndices.length; fi += stride) {
+      const faceIndex = faceIndices[fi];
+      const centroid = this.faceCentroid(faceIndex);
+      const key = `${centroid.x.toFixed(2)},${centroid.y.toFixed(2)},${centroid.z.toFixed(2)}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        points.push({ x: centroid.x, y: centroid.y, z: centroid.z });
+      }
+      for (let c = 0; c < 3; c++) {
+        const v = getFaceVertex(this.geometry, this.positions, faceIndex, c, new THREE.Vector3());
+        const vk = `${v.x.toFixed(2)},${v.y.toFixed(2)},${v.z.toFixed(2)}`;
+        if (seen.has(vk)) continue;
+        seen.add(vk);
+        points.push({ x: v.x, y: v.y, z: v.z });
+        if (points.length >= maxSamples) return points;
+      }
+      if (points.length >= maxSamples) return points;
+    }
+    return points;
   }
 
   resolveSelection(

@@ -287,9 +287,9 @@ export function FeedsCalculatorSidebar({ open, onToggle }: FeedsCalculatorSideba
               </div>
             ) : null}
             <p className="feeds-calculator-footnote">
-              Adjusted feed applies chip thinning for {stepoverPct.toFixed(0)}% radial
-              engagement ({results.stepoverMm.toFixed(2)} mm). Use adjusted value when stepover is
-              below ~50% tool Ø.
+              New operations get both base cutting feed and adjusted (chip-thinned) feed. Outline
+              ops expose both as editable fields — adjusted feed is used for adaptive clearing,
+              chip-clear, and final outline passes.
             </p>
           </section>
         </div>

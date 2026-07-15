@@ -29,17 +29,18 @@ export const MATERIAL_DEFAULTS: Record<MaterialId, MaterialDefaults> = {
   },
   'solid-aluminium': {
     name: 'Aluminum (6061)',
-    chipLoad: 0.03,
+    // Conservative chip load for small router bits — aggressive loads snap cutters.
+    chipLoad: 0.02,
     stepoverPercentage: 10,
     rampAngle: 1.5,
-    plungeRatio: 0.3,
+    plungeRatio: 0.25,
   },
   'aluminium-composite': {
     name: 'Aluminum Composite Panel (ACP)',
-    chipLoad: 0.06,
-    stepoverPercentage: 40,
+    chipLoad: 0.05,
+    stepoverPercentage: 35,
     rampAngle: 2.5,
-    plungeRatio: 0.4,
+    plungeRatio: 0.35,
   },
   hardwood: {
     name: 'Hardwood',
@@ -92,15 +93,16 @@ const MATERIAL_DOC_AND_MILLING: Record<
     millingNote: 'Keeps constant engagement in adaptive/trochoidal paths.',
   },
   'solid-aluminium': {
-    adaptiveDocMaxRatio: 1.5,
-    pocketDocMaxRatio: 0.8,
+    // Cap DOC at ~0.75×D for hobby spindles / small carbide bits.
+    adaptiveDocMaxRatio: 0.75,
+    pocketDocMaxRatio: 0.5,
     finishAllowancePercent: 6.2,
     recommendedMilling: 'climb',
     millingNote: 'Improves chip evacuation and reduces rubbing/work hardening.',
   },
   'aluminium-composite': {
-    adaptiveDocMaxRatio: 0.9,
-    pocketDocMaxRatio: 0.55,
+    adaptiveDocMaxRatio: 0.7,
+    pocketDocMaxRatio: 0.45,
     finishAllowancePercent: 10.0,
     recommendedMilling: 'climb',
     millingNote: 'Cleaner skin finish; use sharp tooling and support sheet well.',
@@ -160,9 +162,13 @@ export function cuttingFeedrateMmMin(
   return rpm * fluteCount * chipLoadMm;
 }
 
+/** Max chip-thinning boost — uncapped values break small bits in aluminium. */
+export const CHIP_THINNING_FEED_CAP = 1.45;
+
 /**
  * Feed multiplier to maintain chip thickness at partial radial engagement (chip thinning).
  * M = D / (2 × √(ae × (D − ae))); 1.0 at 50% engagement, >1 when stepover is smaller.
+ * Capped at {@link CHIP_THINNING_FEED_CAP} so aggressive aluminium profiles stay safe.
  */
 export function chipThinningFeedMultiplier(toolDiameterMm: number, stepoverMm: number): number {
   const D = Math.max(toolDiameterMm, 0.01);
@@ -170,7 +176,7 @@ export function chipThinningFeedMultiplier(toolDiameterMm: number, stepoverMm: n
   if (ae >= D * 0.95) return 1;
   const denom = 2 * Math.sqrt(ae * (D - ae));
   if (denom <= 1e-9) return 1;
-  return D / denom;
+  return Math.min(CHIP_THINNING_FEED_CAP, D / denom);
 }
 
 export function stepoverMmFromPercent(toolDiameterMm: number, stepoverPct: number): number {
@@ -271,10 +277,12 @@ export function operationSettingsFromFeedsCalculator(
   const toolD = Math.max(inputs.toolDiameterMm, 0.01);
   const { profile } = results;
 
+  // Store both base and chip-thinned feeds — outline UI exposes both.
   const partial: Partial<OperationDefaults> = {
     toolDiameter: toolD,
     spindleSpeed: Math.max(100, Math.round(inputs.rpm)),
-    feedRate: Math.max(1, Math.round(results.adjustedFeedMmMin)),
+    feedRate: Math.max(1, Math.round(results.cuttingFeedMmMin)),
+    adjustedFeedRate: Math.max(1, Math.round(results.adjustedFeedMmMin)),
     stepover: inputs.stepoverPct,
     rampAngleDeg: results.rampAngleDeg,
     plungeRate: Math.max(1, Math.round(results.plungeFeedMmMin)),
@@ -284,6 +292,10 @@ export function operationSettingsFromFeedsCalculator(
 
   if (type === 'pocket') {
     partial.stepDown = profile.pocketDocMaxRatio * toolD;
+    partial.adaptiveMode = false;
+  } else if (type === 'drill') {
+    // Peck depth ≈ 1× tool Ø — not adaptive milling DOC (that over-plunges).
+    partial.stepDown = toolD;
   } else if (type !== 'custom-gcode') {
     partial.stepDown = profile.adaptiveDocMaxRatio * toolD;
   }
@@ -293,4 +305,14 @@ export function operationSettingsFromFeedsCalculator(
   }
 
   return partial;
+}
+
+/** Chip-thinned feed for partial radial engagement (adaptive clearing / finish allowance). */
+export function adjustedCuttingFeedMmMin(
+  baseFeedMmMin: number,
+  toolDiameterMm: number,
+  engagementMm: number
+): number {
+  const factor = chipThinningFeedMultiplier(toolDiameterMm, engagementMm);
+  return Math.max(1, baseFeedMmMin * factor);
 }
